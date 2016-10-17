@@ -546,10 +546,20 @@ func (d *DockerDriver) createContainer(ctx *ExecContext, task *structs.Task,
 	containerName := fmt.Sprintf("%s-%s", task.Name, ctx.AllocID)
 	d.logger.Printf("[DEBUG] driver.docker: setting container name to: %s", containerName)
 
+	endpointsConfig := make(map[string]*docker.EndpointConfig)
+	endpointsConfig[hostConfig.NetworkMode] = &docker.EndpointConfig{
+		Aliases: []string{task.Name},
+	}
+
+	networkingConfig := &docker.NetworkingConfig{
+		EndpointsConfig: endpointsConfig,
+	}
+
 	return docker.CreateContainerOptions{
-		Name:       containerName,
-		Config:     config,
-		HostConfig: hostConfig,
+		Name:             containerName,
+		Config:           config,
+		HostConfig:       hostConfig,
+		NetworkingConfig: networkingConfig,
 	}, nil
 }
 
