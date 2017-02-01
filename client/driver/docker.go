@@ -692,7 +692,7 @@ func (d *DockerDriver) containerBinds(driverConfig *DockerDriverConfig, taskDir 
 
 		// Relative paths are always allowed as they mount within a container
 		// Expand path relative to alloc dir
-		parts[0] = filepath.Join(taskDir.Dir, parts[0])
+		//parts[0] = filepath.Join(taskDir.Dir, parts[0])
 		binds = append(binds, strings.Join(parts, ":"))
 	}
 
@@ -908,6 +908,10 @@ func (d *DockerDriver) createContainerConfig(ctx *ExecContext, task *structs.Tas
 					Aliases: driverConfig.NetworkAliases,
 				},
 			},
+		}
+
+		if hostConfig.NetworkMode != defaultNetworkMode {
+			driverConfig.NetworkAliases = append(driverConfig.NetworkAliases, task.Name)
 		}
 
 		d.logger.Printf("[DEBUG] driver.docker: using network_mode %q with network aliases: %v",
