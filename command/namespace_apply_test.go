@@ -1,5 +1,3 @@
-// +build pro ent
-
 package command
 
 import (
