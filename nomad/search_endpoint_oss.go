@@ -20,8 +20,6 @@ var (
 // contextToIndex returns the index name to lookup in the state store.
 func contextToIndex(ctx structs.Context) string {
 	switch ctx {
-	case structs.Namespaces:
-		return state.TableNamespace
 	default:
 		return string(ctx)
 	}

@@ -14,7 +14,7 @@ var (
 )
 
 const (
-	TableNamespace = "namespace"
+	TableNamespace = "namespaces"
 )
 
 // SchemaFactory is the factory method for returning a TableSchema
