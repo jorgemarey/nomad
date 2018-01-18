@@ -6295,3 +6295,10 @@ type NamespaceUpsertRequest struct {
 	Namespaces []*Namespace
 	WriteRequest
 }
+
+// NamespaceUpsertRequestv0 is used to upsert a set of namespaces
+// Here only for backcompat
+type NamespaceUpsertRequestv0 struct {
+	Namespace *Namespace
+	WriteRequest
+}

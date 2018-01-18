@@ -1620,7 +1620,12 @@ func (n *nomadFSM) applyNamespaceUpsert(buf []byte, index uint64) interface{} {
 	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_namespace_upsert"}, time.Now())
 	var req structs.NamespaceUpsertRequest
 	if err := structs.Decode(buf, &req); err != nil {
-		panic(fmt.Errorf("failed to decode request: %v", err))
+		n.logger.Printf("[ERR] nomad.fsm: failed to decode request: %v", err)
+		var oldReq structs.NamespaceUpsertRequestv0
+		if err := structs.Decode(buf, &oldReq); err != nil {
+			panic(fmt.Errorf("failed to decode request: %v", err))
+		}
+		req.Namespaces = []*structs.Namespace{oldReq.Namespace}
 	}
 
 	var trigger []string
