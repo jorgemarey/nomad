@@ -709,6 +709,8 @@ func parseTasks(jobName string, taskGroupName string, result *[]*api.Task, list 
 			valid := []string{
 				"max_files",
 				"max_file_size",
+				"driver",
+				"config",
 			}
 			if err := helper.CheckHCLKeys(logsBlock.Val, valid); err != nil {
 				return multierror.Prefix(err, fmt.Sprintf("'%s', logs ->", n))
@@ -718,11 +720,35 @@ func parseTasks(jobName string, taskGroupName string, result *[]*api.Task, list 
 				return err
 			}
 
+			delete(m, "config")
+
 			var log api.LogConfig
 			if err := mapstructure.WeakDecode(m, &log); err != nil {
 				return err
 			}
+			var configList *ast.ObjectList
+			if ot, ok := logsBlock.Val.(*ast.ObjectType); ok {
+				configList = ot.List
+			} else {
+				return fmt.Errorf("config should be an object")
+			}
 
+			// If we have config, then parse that
+			if oc := configList.Filter("config"); len(oc.Items) > 0 {
+				if len(oc.Items) > 1 {
+					return fmt.Errorf("only one 'config' block is allowed in log. Number of config block found: %d", len(oc.Items))
+				}
+				configBlock := oc.Items[0]
+
+				var m map[string]interface{}
+				if err := hcl.DecodeObject(&m, configBlock.Val); err != nil {
+					return err
+				}
+
+				if err := mapstructure.WeakDecode(m, &log.Config); err != nil {
+					return err
+				}
+			}
 			t.LogConfig = &log
 		}
 

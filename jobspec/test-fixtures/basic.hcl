@@ -78,6 +78,10 @@ job "binstore-storagelocker" {
       logs {
         max_files     = 14
         max_file_size = 101
+        driver        = "test-driver"
+        config {
+          namespace   = "test"
+        }
       }
 
       env {
