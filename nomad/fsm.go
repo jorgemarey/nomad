@@ -44,6 +44,7 @@ const (
 	DeploymentSnapshot
 	ACLPolicySnapshot
 	ACLTokenSnapshot
+	NamespaceSnapshot
 )
 
 // LogApplier is the definition of a function that can apply a Raft log
@@ -1613,3 +1614,69 @@ func (s *nomadSnapshot) persistACLTokens(sink raft.SnapshotSink,
 // to the state store snapshot. There is nothing to explicitly
 // cleanup.
 func (s *nomadSnapshot) Release() {}
+
+// applyNamespaceUpsert is used to upsert a set of namespaces
+func (n *nomadFSM) applyNamespaceUpsert(buf []byte, index uint64) interface{} {
+	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_namespace_upsert"}, time.Now())
+	var req structs.NamespaceUpsertRequest
+	if err := structs.Decode(buf, &req); err != nil {
+		n.logger.Printf("[ERR] nomad.fsm: failed to decode request: %v", err)
+		// Try to decode with previous configuration
+		var oldReq structs.NamespaceUpsertRequestv0
+		if err := structs.Decode(buf, &oldReq); err != nil {
+			panic(fmt.Errorf("failed to decode request: %v", err))
+		}
+		req.Namespaces = []*structs.Namespace{oldReq.Namespace}
+	}
+
+	var trigger []string
+	for _, ns := range req.Namespaces {
+		old, err := n.state.NamespaceByName(nil, ns.Name)
+		if err != nil {
+			n.logger.Printf("[ERR] nomad.fsm: namespace lookup failed: %v", err)
+			return err
+		}
+
+		// If we are changing the quota on a namespace trigger evals for the
+		// older quota.
+		if old != nil && old.Quota != "" && old.Quota != ns.Quota {
+			trigger = append(trigger, old.Quota)
+		}
+	}
+
+	if err := n.state.UpsertNamespaces(index, req.Namespaces); err != nil {
+		n.logger.Printf("[ERR] nomad.fsm: UpsertNamespaces failed: %v", err)
+		return err
+	}
+
+	// Send the unblocks
+	for _, quota := range trigger {
+		n.blockedEvals.UnblockQuota(quota, index)
+	}
+
+	return nil
+}
+
+// applyNamespaceDelete is used to delete a set of namespaces
+func (n *nomadFSM) applyNamespaceDelete(buf []byte, index uint64) interface{} {
+	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_namespace_delete"}, time.Now())
+	var req structs.NamespaceDeleteRequest
+	if err := structs.Decode(buf, &req); err != nil {
+		panic(fmt.Errorf("failed to decode request: %v", err))
+	}
+
+	if err := n.state.DeleteNamespaces(index, req.Namespaces); err != nil {
+		n.logger.Printf("[ERR] nomad.fsm: DeleteNamespaces failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+// restoreNamespace is used to restore a namespace snapshot
+func restoreNamespace(restore *state.StateRestore, dec *codec.Decoder) error {
+	namespace := new(structs.Namespace)
+	if err := dec.Decode(namespace); err != nil {
+		return err
+	}
+	return restore.NamespaceRestore(namespace)
+}

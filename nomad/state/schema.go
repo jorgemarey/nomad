@@ -13,6 +13,10 @@ var (
 	factoriesLock   sync.Mutex
 )
 
+const (
+	TableNamespace = "namespaces"
+)
+
 // SchemaFactory is the factory method for returning a TableSchema
 type SchemaFactory func() *memdb.TableSchema
 type SchemaFactories []SchemaFactory
@@ -43,6 +47,7 @@ func init() {
 		vaultAccessorTableSchema,
 		aclPolicyTableSchema,
 		aclTokenTableSchema,
+		namespaceTableSchema,
 	}...)
 }
 
@@ -593,6 +598,30 @@ func aclTokenTableSchema() *memdb.TableSchema {
 				Unique:       false,
 				Indexer: &memdb.FieldSetIndex{
 					Field: "Global",
+				},
+			},
+		},
+	}
+}
+
+func namespaceTableSchema() *memdb.TableSchema {
+	return &memdb.TableSchema{
+		Name: TableNamespace,
+		Indexes: map[string]*memdb.IndexSchema{
+			"id": {
+				Name:         "id",
+				AllowMissing: false,
+				Unique:       true,
+				Indexer: &memdb.StringFieldIndex{
+					Field: "Name",
+				},
+			},
+			"quota": {
+				Name:         "quota",
+				AllowMissing: true,
+				Unique:       false,
+				Indexer: &memdb.StringFieldIndex{
+					Field: "Quota",
 				},
 			},
 		},

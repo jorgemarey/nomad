@@ -14,25 +14,51 @@ import (
 var (
 	// allContexts are the available contexts which are searched to find matches
 	// for a given prefix
-	allContexts = ossContexts
+	allContexts = append(ossContexts, structs.Namespaces)
 )
 
 // contextToIndex returns the index name to lookup in the state store.
 func contextToIndex(ctx structs.Context) string {
-	return string(ctx)
+	switch ctx {
+	default:
+		return string(ctx)
+	}
 }
 
 // getEnterpriseMatch is a no-op in oss since there are no enterprise objects.
 func getEnterpriseMatch(match interface{}) (id string, ok bool) {
-	return "", false
+	switch match.(type) {
+	case *structs.Namespace:
+		return match.(*structs.Namespace).Name, true
+	default:
+		return "", false
+	}
 }
 
 // getEnterpriseResourceIter is used to retrieve an iterator over an enterprise
 // only table.
-func getEnterpriseResourceIter(context structs.Context, _ *acl.ACL, namespace, prefix string, ws memdb.WatchSet, state *state.StateStore) (memdb.ResultIterator, error) {
-	// If we have made it here then it is an error since we have exhausted all
-	// open source contexts.
-	return nil, fmt.Errorf("context must be one of %v or 'all' for all contexts; got %q", allContexts, context)
+func getEnterpriseResourceIter(context structs.Context, aclObj *acl.ACL, namespace, prefix string, ws memdb.WatchSet, state *state.StateStore) (memdb.ResultIterator, error) {
+	switch context {
+	case structs.Namespaces:
+		iter, err := state.NamespacesByNamePrefix(ws, prefix)
+		if err != nil {
+			return nil, err
+		}
+		if aclObj == nil {
+			return iter, nil
+		}
+		return memdb.NewFilterIterator(iter, namespaceFilter(aclObj)), nil
+	default:
+		return nil, fmt.Errorf("context must be one of %v or 'all' for all contexts; got %q", allContexts, context)
+	}
+}
+
+// namespaceFilter wraps a namespace iterator with a filter for removing
+// namespaces the ACL can't access.
+func namespaceFilter(aclObj *acl.ACL) memdb.FilterFunc {
+	return func(v interface{}) bool {
+		return !aclObj.AllowNamespace(v.(*structs.Namespace).Name)
+	}
 }
 
 // anySearchPerms returns true if the provided ACL has access to any
@@ -43,8 +69,9 @@ func anySearchPerms(aclObj *acl.ACL, namespace string, context structs.Context) 
 	}
 
 	nodeRead := aclObj.AllowNodeRead()
+	allowNS := aclObj.AllowNamespace(namespace)
 	jobRead := aclObj.AllowNsOp(namespace, acl.NamespaceCapabilityReadJob)
-	if !nodeRead && !jobRead {
+	if !nodeRead && !allowNS && !jobRead {
 		return false
 	}
 
@@ -52,6 +79,9 @@ func anySearchPerms(aclObj *acl.ACL, namespace string, context structs.Context) 
 	// should give the user better feedback then simply filtering out all
 	// results and returning an empty list.
 	if !nodeRead && context == structs.Nodes {
+		return false
+	}
+	if !allowNS && context == structs.Namespaces {
 		return false
 	}
 	if !jobRead {
@@ -90,6 +120,10 @@ func searchContexts(aclObj *acl.ACL, namespace string, context structs.Context) 
 		switch c {
 		case structs.Allocs, structs.Jobs, structs.Evals, structs.Deployments:
 			if jobRead {
+				available = append(available, c)
+			}
+		case structs.Namespaces:
+			if aclObj.AllowNamespace(namespace) {
 				available = append(available, c)
 			}
 		case structs.Nodes:
