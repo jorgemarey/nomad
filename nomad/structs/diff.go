@@ -394,6 +394,19 @@ func (t *Task) Diff(other *Task, contextual bool) (*TaskDiff, error) {
 	// LogConfig diff
 	lDiff := primitiveObjectDiff(t.LogConfig, other.LogConfig, nil, "LogConfig", contextual)
 	if lDiff != nil {
+		oldConfig := &LogConfig{}
+		if t.LogConfig != nil {
+			oldConfig = t.LogConfig
+		}
+		newConfig := &LogConfig{}
+		if other.LogConfig != nil {
+			newConfig = other.LogConfig
+		}
+
+		logConfigDiff := configDiff(oldConfig.Config, newConfig.Config, contextual)
+		if logConfigDiff != nil {
+			lDiff.Objects = append(lDiff.Objects, logConfigDiff)
+		}
 		diff.Objects = append(diff.Objects, lDiff)
 	}
 

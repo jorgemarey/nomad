@@ -266,3 +266,19 @@ func TestTaskGroup_Canonicalize_Update(t *testing.T) {
 	tg.Canonicalize(job)
 	assert.Nil(t, tg.Update)
 }
+
+func TestTask_LogConfig(t *testing.T) {
+	t.Parallel()
+	l := LogConfig{
+		Driver: helper.StringToPtr("test"),
+		Config: map[string]interface{}{"namespace": "test"},
+	}
+	l.Canonicalize()
+	if *l.Driver != "test" {
+		t.Errorf("expected semaas but found %q", *l.Driver)
+	}
+	namespace := l.Config["namespace"].(string)
+	if namespace != "test" {
+		t.Errorf("expected test but found %q", namespace)
+	}
+}

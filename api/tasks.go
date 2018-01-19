@@ -329,12 +329,16 @@ func (g *TaskGroup) RequireDisk(disk *EphemeralDisk) *TaskGroup {
 type LogConfig struct {
 	MaxFiles      *int `mapstructure:"max_files"`
 	MaxFileSizeMB *int `mapstructure:"max_file_size"`
+	Driver        *string
+	Config        map[string]interface{}
 }
 
 func DefaultLogConfig() *LogConfig {
 	return &LogConfig{
 		MaxFiles:      helper.IntToPtr(10),
 		MaxFileSizeMB: helper.IntToPtr(10),
+		Driver:        helper.StringToPtr(""),
+		Config:        make(map[string]interface{}),
 	}
 }
 
@@ -344,6 +348,12 @@ func (l *LogConfig) Canonicalize() {
 	}
 	if l.MaxFileSizeMB == nil {
 		l.MaxFileSizeMB = helper.IntToPtr(10)
+	}
+	if l.Driver == nil {
+		l.Driver = helper.StringToPtr("")
+	}
+	if l.Config == nil {
+		l.Config = make(map[string]interface{})
 	}
 }
 

@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -163,6 +164,10 @@ type UniversalExecutor struct {
 	lro         *logging.FileRotator
 	rotatorLock sync.Mutex
 
+	// These are used for user custom log drivers
+	lde io.WriteCloser
+	ldo io.WriteCloser
+
 	syslogServer *logging.SyslogServer
 	syslogChan   chan *logging.SyslogMessage
 
@@ -245,7 +250,13 @@ func (e *UniversalExecutor) LaunchCmd(command *ExecCommand) (*ProcessState, erro
 		return nil, err
 	}
 	e.cmd.Stdout = e.lro
+	if e.ldo != nil {
+		e.cmd.Stdout = io.MultiWriter(e.lro, e.ldo)
+	}
 	e.cmd.Stderr = e.lre
+	if e.lde != nil {
+		e.cmd.Stderr = io.MultiWriter(e.lre, e.lde)
+	}
 
 	// Look up the binary path and make it executable
 	absPath, err := e.lookupBin(e.ctx.TaskEnv.ReplaceEnv(command.Cmd))
@@ -351,6 +362,8 @@ func (e *UniversalExecutor) configureLoggers() error {
 		}
 		e.lre = lre
 	}
+
+	e.configureLogDrivers()
 	return nil
 }
 
@@ -390,6 +403,16 @@ func (e *UniversalExecutor) UpdateTask(task *structs.Task) error {
 		e.lre.MaxFiles = task.LogConfig.MaxFiles
 		e.lre.FileSize = fileSize
 	}
+
+	// Updating custom log config (Only if differs from previous?)
+	if e.ldo != nil {
+		e.ldo.Close()
+	}
+	if e.lde != nil {
+		e.lde.Close()
+	}
+	e.configureLogDrivers()
+
 	e.rotatorLock.Unlock()
 	return nil
 }
@@ -405,6 +428,13 @@ func (e *UniversalExecutor) wait() {
 
 	e.lre.Close()
 	e.lro.Close()
+
+	if e.lde != nil {
+		e.lde.Close()
+	}
+	if e.ldo != nil {
+		e.ldo.Close()
+	}
 
 	exitCode := 1
 	var signal int
@@ -454,9 +484,15 @@ func (e *UniversalExecutor) Exit() error {
 	if e.lre != nil {
 		e.lre.Close()
 	}
+	if e.lde != nil {
+		e.lde.Close()
+	}
 
 	if e.lro != nil {
 		e.lro.Close()
+	}
+	if e.ldo != nil {
+		e.ldo.Close()
 	}
 
 	// If the executor did not launch a process, return.
@@ -787,4 +823,20 @@ func (e *UniversalExecutor) Signal(s os.Signal) error {
 	}
 
 	return nil
+}
+
+func (e *UniversalExecutor) configureLogDrivers() {
+	dname := e.ctx.Task.LogConfig.Driver
+	d, err := logging.NewDriver(dname, e.ctx.Task, e.ctx.TaskEnv, e.logger)
+	if err == nil {
+		if ldo, err := d.StdOut(); err == nil {
+			e.ldo = ldo
+		}
+		if lde, err := d.StdErr(); err == nil {
+			e.lde = lde
+		}
+		e.logger.Printf("[DEBUG] executor: configured %s log driver", dname)
+	} else {
+		e.logger.Printf("[ERR] executor: cant configure %s log driver: %s", dname, err)
+	}
 }

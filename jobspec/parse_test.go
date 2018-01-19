@@ -159,6 +159,8 @@ func TestParse(t *testing.T) {
 								LogConfig: &api.LogConfig{
 									MaxFiles:      helper.IntToPtr(14),
 									MaxFileSizeMB: helper.IntToPtr(101),
+									Driver:        helper.StringToPtr("test-driver"),
+									Config:        map[string]interface{}{"namespace": "test"},
 								},
 								Artifacts: []*api.TaskArtifact{
 									{

@@ -1265,6 +1265,8 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						LogConfig: &api.LogConfig{
 							MaxFiles:      helper.IntToPtr(10),
 							MaxFileSizeMB: helper.IntToPtr(100),
+							Driver:        helper.StringToPtr("test-driver"),
+							Config:        map[string]interface{}{"namespace": "test"},
 						},
 						Artifacts: []*api.TaskArtifact{
 							{
@@ -1462,6 +1464,8 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						LogConfig: &structs.LogConfig{
 							MaxFiles:      10,
 							MaxFileSizeMB: 100,
+							Driver:        "test-driver",
+							Config:        map[string]interface{}{"namespace": "test"},
 						},
 						Artifacts: []*structs.TaskArtifact{
 							{

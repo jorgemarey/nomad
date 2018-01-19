@@ -41,9 +41,17 @@ func (e *UniversalExecutor) collectLogs(we io.Writer, wo io.Writer) {
 		if logParts.Severity == syslog.LOG_ERR {
 			e.lre.Write(logParts.Message)
 			e.lre.Write([]byte{'\n'})
+			if e.lde != nil {
+				e.lde.Write(logParts.Message)
+				e.lde.Write([]byte{'\n'})
+			}
 		} else {
 			e.lro.Write(logParts.Message)
 			e.lro.Write([]byte{'\n'})
+			if e.ldo != nil {
+				e.ldo.Write(logParts.Message)
+				e.ldo.Write([]byte{'\n'})
+			}
 		}
 	}
 }

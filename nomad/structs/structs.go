@@ -3190,6 +3190,8 @@ const (
 type LogConfig struct {
 	MaxFiles      int
 	MaxFileSizeMB int
+	Driver        string
+	Config        map[string]interface{}
 }
 
 // DefaultLogConfig returns the default LogConfig values.
