@@ -1621,6 +1621,7 @@ func (n *nomadFSM) applyNamespaceUpsert(buf []byte, index uint64) interface{} {
 	var req structs.NamespaceUpsertRequest
 	if err := structs.Decode(buf, &req); err != nil {
 		n.logger.Printf("[ERR] nomad.fsm: failed to decode request: %v", err)
+		// Try to decode with previous configuration
 		var oldReq structs.NamespaceUpsertRequestv0
 		if err := structs.Decode(buf, &oldReq); err != nil {
 			panic(fmt.Errorf("failed to decode request: %v", err))
