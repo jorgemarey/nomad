@@ -143,9 +143,10 @@ func (l *bulkLoader) load() error {
 		case <-l.stopCh:
 			return err // we return the last error value
 		case <-l.sendCh:
+			err = l.bulkLoad(false)
 		case <-time.After(l.opts.timeout):
+			err = l.bulkLoad(true)
 		}
-		err = l.bulkLoad(false)
 	}
 }
 
