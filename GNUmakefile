@@ -21,27 +21,15 @@ ifeq (Linux,$(THIS_OS))
 ifeq (0,$(shell pkg-config --exists lxc; echo $$?))
 HAS_LXC="true"
 endif
+endif
 
-ALL_TARGETS += linux_386 \
-	linux_amd64 \
-	linux_arm \
+ALL_TARGETS += linux_amd64 \
 	linux_arm64 \
-	windows_386 \
-	windows_amd64
+	windows_amd64 \
+	darwin_amd64
 
 ifeq ("true",$(HAS_LXC))
 ALL_TARGETS += linux_amd64-lxc
-endif
-endif
-
-# On MacOS, we only build for MacOS
-ifeq (Darwin,$(THIS_OS))
-ALL_TARGETS += darwin_amd64
-endif
-
-# On FreeBSD, we only build for FreeBSD
-ifeq (FreeBSD,$(THIS_OS))
-ALL_TARGETS += freebsd_amd64
 endif
 
 pkg/darwin_amd64/nomad: $(SOURCE_FILES) ## Build Nomad for darwin/amd64
