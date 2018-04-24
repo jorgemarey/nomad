@@ -752,8 +752,10 @@ func (n *nomadFSM) applyUpsertNodeEvent(buf []byte, index uint64) interface{} {
 	defer metrics.MeasureSince([]string{"nomad", "fsm", "upsert_node_events"}, time.Now())
 	var req structs.EmitNodeEventsRequest
 	if err := structs.Decode(buf, &req); err != nil {
-		n.logger.Printf("[ERR] nomad.fsm: failed to decode EmitNodeEventsRequest: %v", err)
-		return err
+		// if decode fails this is an old request that must be forwarded to applyNamespace
+		return n.applyNamespaceDelete(buf, index)
+		// n.logger.Printf("[ERR] nomad.fsm: failed to decode EmitNodeEventsRequest: %v", err)
+		// return err
 	}
 
 	if err := n.state.UpsertNodeEvents(index, req.NodeEvents); err != nil {
@@ -985,7 +987,9 @@ func (n *nomadFSM) applyACLTokenBootstrap(buf []byte, index uint64) interface{} 
 func (n *nomadFSM) applyAutopilotUpdate(buf []byte, index uint64) interface{} {
 	var req structs.AutopilotSetConfigRequest
 	if err := structs.Decode(buf, &req); err != nil {
-		panic(fmt.Errorf("failed to decode request: %v", err))
+		// if decode fails this is an old request that must be forwarded to applyNamespace
+		return n.applyNamespaceUpsert(buf, index)
+		//panic(fmt.Errorf("failed to decode request: %v", err))
 	}
 	defer metrics.MeasureSince([]string{"nomad", "fsm", "autopilot"}, time.Now())
 
