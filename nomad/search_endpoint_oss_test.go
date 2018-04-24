@@ -15,7 +15,7 @@ import (
 func TestSearch_PrefixSearch_Namespace(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s := testServer(t, func(c *Config) {
+	s := TestServer(t, func(c *Config) {
 		c.NumSchedulers = 0
 	})
 
@@ -51,7 +51,7 @@ func TestSearch_PrefixSearch_Namespace(t *testing.T) {
 func TestSearch_PrefixSearch_Namespace_ACL(t *testing.T) {
 	t.Parallel()
 	assert := assert.New(t)
-	s, root := testACLServer(t, func(c *Config) {
+	s, root := TestACLServer(t, func(c *Config) {
 		c.NumSchedulers = 0
 	})
 	defer s.Shutdown()

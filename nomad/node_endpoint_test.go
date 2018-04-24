@@ -2935,7 +2935,7 @@ func TestClientEndpoint_EmitEvents(t *testing.T) {
 
 func TestClientEndpoint_GetAllocs_ACL_Pro(t *testing.T) {
 	t.Parallel()
-	s1, root := testACLServer(t, nil)
+	s1, root := TestACLServer(t, nil)
 	defer s1.Shutdown()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
