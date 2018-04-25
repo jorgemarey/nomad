@@ -749,15 +749,20 @@ func (n *nomadFSM) applyReconcileSummaries(buf []byte, index uint64) interface{}
 
 // applyUpsertNodeEvent tracks the given node events.
 func (n *nomadFSM) applyUpsertNodeEvent(buf []byte, index uint64) interface{} {
+	// We do this here because previously we had the MessageType ID for this on the request
+	// corresponding to applyNamespaceDelete. So here we use a struct that has a field that fails if this
+	// is corresponding to a previous request. In that case it gets forwarded.
+	var caseReq struct{ Namespaces bool }
+	if err := structs.Decode(buf, &caseReq); err != nil {
+		// if decode fails this is an old request that must be forwarded to applyNamespace
+		return n.applyNamespaceDelete(buf, index)
+	}
 	defer metrics.MeasureSince([]string{"nomad", "fsm", "upsert_node_events"}, time.Now())
 	var req structs.EmitNodeEventsRequest
 	if err := structs.Decode(buf, &req); err != nil {
-		// if decode fails this is an old request that must be forwarded to applyNamespace
-		return n.applyNamespaceDelete(buf, index)
-		// n.logger.Printf("[ERR] nomad.fsm: failed to decode EmitNodeEventsRequest: %v", err)
-		// return err
+		n.logger.Printf("[ERR] nomad.fsm: failed to decode EmitNodeEventsRequest: %v", err)
+		return err
 	}
-
 	if err := n.state.UpsertNodeEvents(index, req.NodeEvents); err != nil {
 		n.logger.Printf("[ERR] nomad.fsm: failed to add node events: %v", err)
 		return err
@@ -985,12 +990,18 @@ func (n *nomadFSM) applyACLTokenBootstrap(buf []byte, index uint64) interface{} 
 }
 
 func (n *nomadFSM) applyAutopilotUpdate(buf []byte, index uint64) interface{} {
+	fmt.Println("Were going to apply an autopilot update")
+	var caseReq struct{ Namespaces bool }
+	if err := structs.Decode(buf, &caseReq); err != nil {
+		// if decode fails this is an old request that must be forwarded to applyNamespace
+		fmt.Println("And it failed")
+		return n.applyNamespaceUpsert(buf, index)
+	}
 	var req structs.AutopilotSetConfigRequest
 	if err := structs.Decode(buf, &req); err != nil {
-		// if decode fails this is an old request that must be forwarded to applyNamespace
-		return n.applyNamespaceUpsert(buf, index)
-		//panic(fmt.Errorf("failed to decode request: %v", err))
+		panic(fmt.Errorf("failed to decode request: %v", err))
 	}
+	fmt.Println("And it worked")
 	defer metrics.MeasureSince([]string{"nomad", "fsm", "autopilot"}, time.Now())
 
 	if req.CAS {
