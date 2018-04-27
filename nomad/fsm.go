@@ -990,18 +990,18 @@ func (n *nomadFSM) applyACLTokenBootstrap(buf []byte, index uint64) interface{} 
 }
 
 func (n *nomadFSM) applyAutopilotUpdate(buf []byte, index uint64) interface{} {
-	fmt.Println("Were going to apply an autopilot update")
+	// We do this here because previously we had the MessageType ID for this on the request
+	// corresponding to applyNamespaceDelete. So here we use a struct that has a field that fails if this
+	// is corresponding to a previous request. In that case it gets forwarded.
 	var caseReq struct{ Namespaces bool }
 	if err := structs.Decode(buf, &caseReq); err != nil {
 		// if decode fails this is an old request that must be forwarded to applyNamespace
-		fmt.Println("And it failed")
 		return n.applyNamespaceUpsert(buf, index)
 	}
 	var req structs.AutopilotSetConfigRequest
 	if err := structs.Decode(buf, &req); err != nil {
 		panic(fmt.Errorf("failed to decode request: %v", err))
 	}
-	fmt.Println("And it worked")
 	defer metrics.MeasureSince([]string{"nomad", "fsm", "autopilot"}, time.Now())
 
 	if req.CAS {
