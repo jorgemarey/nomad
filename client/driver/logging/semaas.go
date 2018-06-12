@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -12,8 +13,9 @@ import (
 	"github.com/mitchellh/mapstructure"
 	"globaldevtools.bbva.com/entsec/semaas/delta/writer"
 	omega "globaldevtools.bbva.com/entsec/semaas/omega/api"
-	"globaldevtools.bbva.com/entsec/semaas/omega/loader"
+	omegaLoader "globaldevtools.bbva.com/entsec/semaas/omega/loader"
 	rho "globaldevtools.bbva.com/entsec/semaas/rho/api"
+	rhoLoader "globaldevtools.bbva.com/entsec/semaas/rho/loader"
 )
 
 // SemaasDriver is a driver that can send logs to semaas
@@ -57,11 +59,13 @@ func newSemaasDriverConfig(task *structs.Task, env *env.TaskEnv) (*semaasDriverC
 	sconf.Properties = mapMergeStrStr(sconf.PropertiesRAW...)
 
 	properties := map[string]string{
-		"allocation": env.EnvMap["NOMAD_ALLOC_ID"],
-		"task":       env.EnvMap["NOMAD_TASK_NAME"],
-		"group":      env.EnvMap["NOMAD_GROUP_NAME"],
-		"job":        env.EnvMap["NOMAD_JOB_NAME"],
-		"dc":         env.EnvMap["NOMAD_DC"],
+		"allocation":  env.EnvMap["NOMAD_ALLOC_ID"],
+		"alloc_index": env.EnvMap["NOMAD_ALLOC_INDEX"],
+		"task":        env.EnvMap["NOMAD_TASK_NAME"],
+		"group":       env.EnvMap["NOMAD_GROUP_NAME"],
+		"job":         env.EnvMap["NOMAD_JOB_NAME"],
+		"dc":          env.EnvMap["NOMAD_DC"],
+		"region":      env.EnvMap["NOMAD_REGION"],
 	}
 	for k, v := range properties {
 		sconf.Properties[k] = v
@@ -70,20 +74,42 @@ func newSemaasDriverConfig(task *structs.Task, env *env.TaskEnv) (*semaasDriverC
 	return &sconf, nil
 }
 
-func newSemaasLoader(conf *semaasDriverConfig) (loader.Loader, error) {
-	c, _ := omega.NewClient(
-		omega.WithAPIKey(conf.APIKey),
+func newSemaasLoader(conf *semaasDriverConfig) (*omegaLoader.Loader, *rhoLoader.Loader, error) {
+	cert, err := tls.LoadX509KeyPair("/etc/certs/semaas.crt", "/etc/certs/semaas.key")
+	if err != nil {
+		return nil, nil, fmt.Errorf("Can't load certificate: %s", err)
+	}
+	oc, err := omega.NewClient(
+		omega.WithClientCert(cert),
 		omega.WithNamespace(conf.Namespace),
 		omega.WithURL(os.Getenv("OMEGA_URL")),
 		omega.WithSkipVerify(),
 	)
-	logLoader, _ := loader.Bulk(
-		c,
-		loader.WithTimeout(5*time.Second),
-		loader.WithBulkSize(2, 20),
-		loader.WithSafeThreshold(1024),
+	if err != nil {
+		return nil, nil, fmt.Errorf("Error creating omega client: %s", err)
+	}
+	logLoader, _ := omegaLoader.Bulk(
+		oc,
+		omegaLoader.WithTimeout(5*time.Second),
+		omegaLoader.WithBulkSize(512, 500),
+		omegaLoader.WithSafeThreshold(1024),
 	)
-	return logLoader, nil
+	rc, err := rho.NewClient(
+		rho.WithClientCert(cert),
+		rho.WithNamespace(conf.Namespace),
+		rho.WithURL(os.Getenv("RHO_URL")),
+		rho.WithSkipVerify(),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Error creating rho client: %s", err)
+	}
+	traceLoader, _ := rhoLoader.Bulk(
+		rc,
+		rhoLoader.WithTimeout(5*time.Second),
+		rhoLoader.WithBulkSize(512, 500),
+		rhoLoader.WithSafeThreshold(1024),
+	)
+	return logLoader, traceLoader, nil
 }
 
 func mapMergeStrStr(maps ...map[string]string) map[string]string {
@@ -97,23 +123,13 @@ func mapMergeStrStr(maps ...map[string]string) map[string]string {
 }
 
 func (d *SemaasDriver) stdStream(kind string) (io.WriteCloser, error) {
-	l, _ := newSemaasLoader(d.cfg)
+	ll, tl, _ := newSemaasLoader(d.cfg)
 	p := make(map[string]interface{}, len(d.cfg.Properties))
 	for k, v := range d.cfg.Properties {
 		p[k] = v
 	}
 	p["stream"] = kind
-
-	rc, err := rho.NewClient(
-		rho.WithAPIKey(d.cfg.APIKey),
-		rho.WithNamespace(d.cfg.Namespace),
-		rho.WithURL(os.Getenv("RHO_URL")),
-		rho.WithSkipVerify(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("Error creating rho client: %s", err)
-	}
-	return writer.New(l, rc, omega.LogLevelInfo, p, d.cfg.MrID), nil
+	return writer.New(ll, tl, omega.LogLevelInfo, p, d.cfg.MrID), nil
 }
 
 // StdErr returns the WriteCloser for the standart error stream
