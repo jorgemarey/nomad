@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"globaldevtools.bbva.com/entsec/semaas/omega/api"
+	"globaldevtools.bbva.com/entsec/semaas/rho/api"
 )
 
-// OmegaClient defines the methods that the omega client needs to have
-type OmegaClient interface {
-	Load(entries []*api.LogEntry) error
+// RhoClient defines the methods that the rho client needs to have
+type RhoClient interface {
+	Create(entries []*api.Span) error
 }
 
 // Loader defines a type of logger that is able to send messages to omega
@@ -25,8 +25,8 @@ type Loader struct {
 	stopCh  chan struct{}
 	closed  bool
 	sending bool
-	buffer  *LogEntryBuffer
-	client  OmegaClient
+	buffer  *SpanBuffer
+	client  RhoClient
 
 	lock     sync.RWMutex
 	sendLock sync.RWMutex
@@ -79,12 +79,6 @@ func WithFallback(size int, storer FallbackStorer) BulkLoadOption {
 	}
 }
 
-func WithSystemLogger(l *log.Logger) BulkLoadOption {
-	return func(o *bulkLoadOptions) {
-		o.sysLogger = l
-	}
-}
-
 // WithSafeThreshold adds a threshold value to empty memory when,
 // due to several failures, logs can't be send. The size is
 // specifed in KB
@@ -94,15 +88,21 @@ func WithSafeThreshold(size int) BulkLoadOption {
 	}
 }
 
-// Bulk returns a Loader that sends messages in bulk to omega
-func Bulk(c OmegaClient, opts ...BulkLoadOption) (*Loader, error) {
+func WithSystemLogger(l *log.Logger) BulkLoadOption {
+	return func(o *bulkLoadOptions) {
+		o.sysLogger = l
+	}
+}
+
+// Bulk returns a Loader that sends messages in bulk to rho
+func Bulk(c RhoClient, opts ...BulkLoadOption) (*Loader, error) {
 	if c == nil {
 		return nil, fmt.Errorf("Client can't be nil. A client must be provided")
 	}
 	l := &Loader{
 		sendCh: make(chan struct{}),
 		stopCh: make(chan struct{}),
-		buffer: NewLogEntryBuffer(40),
+		buffer: NewSpanBuffer(40),
 		client: c,
 	}
 	l.setDefaultOpts()
@@ -115,7 +115,7 @@ func Bulk(c OmegaClient, opts ...BulkLoadOption) (*Loader, error) {
 }
 
 // Load adds an entry to be send to omega by the bulk loader
-func (l *Loader) Load(entry *api.LogEntry) error {
+func (l *Loader) Load(entry *api.Span) error {
 	if l.isClosed() {
 		return fmt.Errorf("Error: Can't load messages into a closed Loader")
 	}
@@ -166,7 +166,7 @@ func (l *Loader) bulkLoad() (err error) {
 	}
 
 	entries := l.buffer.Entries()
-	if err = l.client.Load(entries); err != nil {
+	if err = l.client.Create(entries); err != nil {
 		l.opts.sysLogger.Printf("[ERR] Unable to load entries: %s", err)
 		size := l.buffer.Size()
 		// Increase some counter of failures and if a lot fail then we save the logs on disk and try to process them later
@@ -175,7 +175,7 @@ func (l *Loader) bulkLoad() (err error) {
 			return nil
 		}
 		if l.opts.fallbackStorer != nil && size > l.opts.fallbackSize {
-			var s LogEntryStorer
+			var s SpanStorer
 			if s, err = l.opts.fallbackStorer.Open("test"); err == nil {
 				err = s.Save(entries)
 			}
@@ -186,7 +186,7 @@ func (l *Loader) bulkLoad() (err error) {
 			}
 		}
 	}
-	l.opts.sysLogger.Printf("[DEBUG] Sent %d entries to omega", len(entries))
+	l.opts.sysLogger.Printf("[DEBUG] Sent %d entries to rho", len(entries))
 	l.failed = 0
 	l.buffer.Clean()
 	return err

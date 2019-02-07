@@ -5,13 +5,13 @@ import (
 	"encoding/gob"
 	"sync"
 
-	"globaldevtools.bbva.com/entsec/semaas/omega/api"
+	"globaldevtools.bbva.com/entsec/semaas/rho/api"
 )
 
-// LogEntryBuffer returns a buffer that if able to store omega logs
+// SpanBuffer returns a buffer that if able to store omega logs
 // and be cleaned after they are send.
-type LogEntryBuffer struct {
-	entries    []*api.LogEntry
+type SpanBuffer struct {
+	entries    []*api.Span
 	size       int
 	off        int
 	cleanedOff int
@@ -22,16 +22,17 @@ type LogEntryBuffer struct {
 	lock         sync.Mutex
 }
 
-func NewLogEntryBuffer(resizeLength int) *LogEntryBuffer {
-	return &LogEntryBuffer{
-		entries:      make([]*api.LogEntry, 0),
+// NewSpanBuffer returns a buffer with the provided resize length
+func NewSpanBuffer(resizeLength int) *SpanBuffer {
+	return &SpanBuffer{
+		entries:      make([]*api.Span, 0),
 		encBuffer:    &bytes.Buffer{},
 		resizeLength: resizeLength,
 	}
 }
 
 // Add inserts a new entry to the buffer for later
-func (b *LogEntryBuffer) Add(entry *api.LogEntry) error {
+func (b *SpanBuffer) Add(entry *api.Span) error {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	b.entries = append(b.entries, entry)
@@ -42,32 +43,32 @@ func (b *LogEntryBuffer) Add(entry *api.LogEntry) error {
 }
 
 // Len returns the number of elements in the buffer
-func (b *LogEntryBuffer) Len() int {
+func (b *SpanBuffer) Len() int {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	return len(b.entries) - b.cleanedOff
 }
 
 // Size returns an aproximate size in bytes for the buffer
-func (b *LogEntryBuffer) Size() int {
+func (b *SpanBuffer) Size() int {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	return b.size
 }
 
 // Cap returns the current capacity of the buffer
-func (b *LogEntryBuffer) Cap() int {
+func (b *SpanBuffer) Cap() int {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	return cap(b.entries)
 }
 
 // Entries returns the current saved items on the buffer that weren't cleaned
-func (b *LogEntryBuffer) Entries() []*api.LogEntry {
+func (b *SpanBuffer) Entries() []*api.Span {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	l := len(b.entries) - b.cleanedOff
-	r := make([]*api.LogEntry, l, l)
+	r := make([]*api.Span, l, l)
 	copy(r, b.entries[b.cleanedOff:])
 	b.off = len(b.entries)
 	b.offSize = b.size
@@ -76,12 +77,12 @@ func (b *LogEntryBuffer) Entries() []*api.LogEntry {
 
 // Clean removes the read elements of the buffer (those previously retourned by
 // calling Entries())
-func (b *LogEntryBuffer) Clean() {
+func (b *SpanBuffer) Clean() {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	entries := b.entries
 	if cap(b.entries) > b.resizeLength {
-		b.entries = make([]*api.LogEntry, len(b.entries)-b.off, len(b.entries)-b.off)
+		b.entries = make([]*api.Span, len(b.entries)-b.off, len(b.entries)-b.off)
 		copy(b.entries, entries[b.off:])
 		b.off = 0
 	}
@@ -91,12 +92,12 @@ func (b *LogEntryBuffer) Clean() {
 }
 
 // Reset empty the buffer completely
-func (b *LogEntryBuffer) Reset() {
+func (b *SpanBuffer) Reset() {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	b.entries = b.entries[:0]
 	if cap(b.entries) > b.resizeLength {
-		b.entries = make([]*api.LogEntry, 0)
+		b.entries = make([]*api.Span, 0)
 		b.off = 0
 	}
 	b.cleanedOff = b.off

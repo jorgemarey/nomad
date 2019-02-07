@@ -267,13 +267,13 @@ func (e *UniversalExecutor) LaunchCmd(command *ExecCommand) (*ProcessState, erro
 		return nil, err
 	}
 	e.cmd.Stdout = e.lro.processOutWriter
-	if e.ldo != nil {
-		e.cmd.Stdout = io.MultiWriter(e.lro.processOutWriter, e.ldo)
-	}
+	// if e.ldo != nil {
+	// 	e.cmd.Stdout = io.MultiWriter(e.lro.processOutWriter, e.ldo)
+	// }
 	e.cmd.Stderr = e.lre.processOutWriter
-	if e.lde != nil {
-		e.cmd.Stderr = io.MultiWriter(e.lre.processOutWriter, e.lde)
-	}
+	// if e.lde != nil {
+	// 	e.cmd.Stderr = io.MultiWriter(e.lre.processOutWriter, e.lde)
+	// }
 
 	// Look up the binary path and make it executable
 	absPath, err := e.lookupBin(e.ctx.TaskEnv.ReplaceEnv(command.Cmd))
@@ -366,6 +366,7 @@ func (e *UniversalExecutor) configureLoggers() error {
 	e.rotatorLock.Lock()
 	defer e.rotatorLock.Unlock()
 
+	e.configureLogDrivers()
 	logFileSize := int64(e.ctx.Task.LogConfig.MaxFileSizeMB * 1024 * 1024)
 	if e.lro == nil {
 		lro, err := logging.NewFileRotator(e.ctx.LogDir, fmt.Sprintf("%v.stdout", e.ctx.Task.Name),
@@ -374,7 +375,7 @@ func (e *UniversalExecutor) configureLoggers() error {
 			return fmt.Errorf("error creating new stdout log file for %q: %v", e.ctx.Task.Name, err)
 		}
 
-		r, err := newLogRotatorWrapper(e.logger, lro)
+		r, err := newLogRotatorWrapper(e.logger, lro, e.ldo)
 		if err != nil {
 			return err
 		}
@@ -388,14 +389,13 @@ func (e *UniversalExecutor) configureLoggers() error {
 			return fmt.Errorf("error creating new stderr log file for %q: %v", e.ctx.Task.Name, err)
 		}
 
-		r, err := newLogRotatorWrapper(e.logger, lre)
+		r, err := newLogRotatorWrapper(e.logger, lre, e.lde)
 		if err != nil {
 			return err
 		}
 		e.lre = r
 	}
 
-	e.configureLogDrivers()
 	return nil
 }
 
@@ -909,13 +909,14 @@ type logRotatorWrapper struct {
 	processOutWriter  *os.File
 	processOutReader  *os.File
 	rotatorWriter     *logging.FileRotator
+	driverWriter      io.Writer
 	hasFinishedCopied chan struct{}
 	logger            *log.Logger
 }
 
 // newLogRotatorWrapper takes a rotator and returns a wrapper that has the
 // processOutWriter to attach to the processes stdout or stderr.
-func newLogRotatorWrapper(logger *log.Logger, rotator *logging.FileRotator) (*logRotatorWrapper, error) {
+func newLogRotatorWrapper(logger *log.Logger, rotator *logging.FileRotator, driverWriter io.WriteCloser) (*logRotatorWrapper, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create os.Pipe for extracting logs: %v", err)
@@ -927,6 +928,7 @@ func newLogRotatorWrapper(logger *log.Logger, rotator *logging.FileRotator) (*lo
 		rotatorWriter:     rotator,
 		hasFinishedCopied: make(chan struct{}),
 		logger:            logger,
+		driverWriter:      driverWriter,
 	}
 	wrap.start()
 	return wrap, nil
@@ -937,7 +939,14 @@ func newLogRotatorWrapper(logger *log.Logger, rotator *logging.FileRotator) (*lo
 func (l *logRotatorWrapper) start() {
 	go func() {
 		defer close(l.hasFinishedCopied)
-		_, err := io.Copy(l.rotatorWriter, l.processOutReader)
+		var w io.Writer = l.rotatorWriter
+		if l.driverWriter != nil {
+			w = io.MultiWriter(l.rotatorWriter, l.driverWriter)
+			l.logger.Printf("[INFO] executor: adding driver output to send logs")
+		} else {
+			l.logger.Printf("[INFO] executor: not logging to driver")
+		}
+		_, err := io.Copy(w, l.processOutReader)
 		if err != nil {
 			// Close reader to propagate io error across pipe.
 			// Note that this may block until the process exits on

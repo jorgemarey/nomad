@@ -3,16 +3,17 @@ package writer
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"strings"
 	"sync"
 	"time"
 
 	omega "globaldevtools.bbva.com/entsec/semaas/omega/api"
-	"globaldevtools.bbva.com/entsec/semaas/omega/loader"
+	omegaLoader "globaldevtools.bbva.com/entsec/semaas/omega/loader"
 	rho "globaldevtools.bbva.com/entsec/semaas/rho/api"
+	rhoLoader "globaldevtools.bbva.com/entsec/semaas/rho/loader"
 )
 
 const (
@@ -25,8 +26,8 @@ type Writer interface {
 }
 
 type writer struct {
-	rhoClient   *rho.Client
-	omegaLoader loader.Loader
+	rhoLoader   *rhoLoader.Loader
+	omegaLoader *omegaLoader.Loader
 	level       omega.LogLevel
 	properties  map[string]interface{}
 	mrid        string
@@ -34,6 +35,7 @@ type writer struct {
 	writer      *io.PipeWriter
 	scanner     *bufio.Scanner
 	wg          sync.WaitGroup
+	sysLogger   *log.Logger
 }
 
 func (w *writer) Write(p []byte) (n int, err error) {
@@ -47,16 +49,20 @@ func (w *writer) Close() error {
 }
 
 // New returns a configured writer that sends logs using the provided logader
-func New(loader loader.Loader, rhoClient *rho.Client, level omega.LogLevel, properties map[string]interface{}, mrid string) Writer {
+func New(ol *omegaLoader.Loader, rl *rhoLoader.Loader, level omega.LogLevel, properties map[string]interface{}, mrid string, sysLogger *log.Logger) Writer {
 	pr, pw := io.Pipe()
 	w := &writer{
-		rhoClient:   rhoClient,
-		omegaLoader: loader,
+		rhoLoader:   rl,
+		omegaLoader: ol,
 		level:       level,
 		properties:  properties,
 		mrid:        mrid,
 		reader:      pr,
 		writer:      pw,
+		sysLogger:   sysLogger,
+	}
+	if w.sysLogger == nil {
+		w.sysLogger = log.New(ioutil.Discard, "", log.LstdFlags)
 	}
 	w.scanner = bufio.NewScanner(pr)
 	w.scanner.Split(sizeSpliter(maxLineSize, bufio.ScanLines))
@@ -78,7 +84,7 @@ func (w *writer) scan() {
 				Level:        w.level,
 			}
 			if err := w.omegaLoader.Load(le); err != nil {
-				fmt.Println(err)
+				w.sysLogger.Printf("[ERR] Unable to load message: %s", err)
 			}
 		}
 	}
@@ -142,7 +148,7 @@ func (w *writer) processLine(text string) bool {
 			entry.Properties[k] = v
 		}
 		if err := w.omegaLoader.Load(&entry); err != nil {
-			fmt.Println(err)
+			w.sysLogger.Printf("[ERR] Unable to load message: %s", err)
 		}
 	case strings.HasPrefix(kind, "SPAN"): // it is a span
 		var span rho.Span
@@ -156,8 +162,8 @@ func (w *writer) processLine(text string) bool {
 		for k, v := range w.properties {
 			span.Properties[k] = v
 		}
-		if err := w.rhoClient.Create([]*rho.Span{&span}); err != nil {
-			fmt.Println(err)
+		if err := w.rhoLoader.Load(&span); err != nil {
+			w.sysLogger.Printf("[ERR] Unable to load span: %s", err)
 		}
 	default:
 		return false

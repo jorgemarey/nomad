@@ -31,8 +31,9 @@ type clientOptions struct {
 	url       string
 	namespace string
 	apiKey    string
-	insecure  bool
 	debug     bool
+	tlsConfig tls.Config
+	sysLogger *log.Logger
 }
 
 // ClientOption sets options over the client
@@ -69,7 +70,21 @@ func WithAPIKey(APIKey string) ClientOption {
 // WithSkipVerify skips TLS verification when comunicating with the server
 func WithSkipVerify() ClientOption {
 	return func(o *clientOptions) {
-		o.insecure = true
+		o.tlsConfig.InsecureSkipVerify = true
+	}
+}
+
+// WithClientCert set a client certificate to perform authentication.
+// Can be read of a file using tls.LoadX509KeyPair()
+func WithClientCert(cert tls.Certificate) ClientOption {
+	return func(o *clientOptions) {
+		o.tlsConfig.Certificates = []tls.Certificate{cert}
+	}
+}
+
+func WithSystemLogger(l *log.Logger) ClientOption {
+	return func(o *clientOptions) {
+		o.sysLogger = l
 	}
 }
 
@@ -86,26 +101,21 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	for _, opt := range opts {
 		opt(&c.options)
 	}
-	if c.options.url == "" {
-		return nil, fmt.Errorf("URL value must be provided")
-	}
 	if c.options.namespace == "" {
 		return nil, fmt.Errorf("Namespace value must be provided")
 	}
-	if c.options.insecure {
-		c.httpClient.Transport = &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-				DualStack: true,
-			}).DialContext,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
-		}
+	c.httpClient.Transport = &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+			DualStack: true,
+		}).DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig:       &c.options.tlsConfig,
 	}
 	return c, nil
 }
@@ -151,7 +161,7 @@ func (c *Client) do(requester requester, data interface{}) error {
 	}
 	if c.options.debug {
 		breq, _ := httputil.DumpRequest(req, true)
-		log.Print(string(breq))
+		c.options.sysLogger.Print(string(breq))
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -159,7 +169,7 @@ func (c *Client) do(requester requester, data interface{}) error {
 	}
 	if c.options.debug {
 		bresp, _ := httputil.DumpResponse(resp, true)
-		log.Print(string(bresp))
+		c.options.sysLogger.Print(string(bresp))
 	}
 	bb, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -188,6 +198,7 @@ func (c *Client) setDefaultOptions() {
 		WithAPIKey(os.Getenv(envAPIKey)),
 		WithNamespace(os.Getenv(envNamespace)),
 		WithURL(os.Getenv(envURL)),
+		WithSystemLogger(log.New(ioutil.Discard, "", log.LstdFlags)),
 	}
 	for _, opt := range defaultOpts {
 		opt(&c.options)

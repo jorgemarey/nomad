@@ -74,7 +74,7 @@ func newSemaasDriverConfig(task *structs.Task, env *env.TaskEnv) (*semaasDriverC
 	return &sconf, nil
 }
 
-func newSemaasLoader(conf *semaasDriverConfig) (*omegaLoader.Loader, *rhoLoader.Loader, error) {
+func newSemaasLoader(conf *semaasDriverConfig, logger *log.Logger) (*omegaLoader.Loader, *rhoLoader.Loader, error) {
 	cert, err := tls.LoadX509KeyPair("/etc/certs/semaas.crt", "/etc/certs/semaas.key")
 	if err != nil {
 		return nil, nil, fmt.Errorf("Can't load certificate: %s", err)
@@ -84,6 +84,7 @@ func newSemaasLoader(conf *semaasDriverConfig) (*omegaLoader.Loader, *rhoLoader.
 		omega.WithNamespace(conf.Namespace),
 		omega.WithURL(os.Getenv("OMEGA_URL")),
 		omega.WithSkipVerify(),
+		omega.WithSystemLogger(logger),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Error creating omega client: %s", err)
@@ -93,12 +94,14 @@ func newSemaasLoader(conf *semaasDriverConfig) (*omegaLoader.Loader, *rhoLoader.
 		omegaLoader.WithTimeout(5*time.Second),
 		omegaLoader.WithBulkSize(512, 500),
 		omegaLoader.WithSafeThreshold(1024),
+		omegaLoader.WithSystemLogger(logger),
 	)
 	rc, err := rho.NewClient(
 		rho.WithClientCert(cert),
 		rho.WithNamespace(conf.Namespace),
 		rho.WithURL(os.Getenv("RHO_URL")),
 		rho.WithSkipVerify(),
+		rho.WithSystemLogger(logger),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Error creating rho client: %s", err)
@@ -108,6 +111,7 @@ func newSemaasLoader(conf *semaasDriverConfig) (*omegaLoader.Loader, *rhoLoader.
 		rhoLoader.WithTimeout(5*time.Second),
 		rhoLoader.WithBulkSize(512, 500),
 		rhoLoader.WithSafeThreshold(1024),
+		rhoLoader.WithSystemLogger(logger),
 	)
 	return logLoader, traceLoader, nil
 }
@@ -123,13 +127,14 @@ func mapMergeStrStr(maps ...map[string]string) map[string]string {
 }
 
 func (d *SemaasDriver) stdStream(kind string) (io.WriteCloser, error) {
-	ll, tl, _ := newSemaasLoader(d.cfg)
+	ll, tl, _ := newSemaasLoader(d.cfg, d.logger)
 	p := make(map[string]interface{}, len(d.cfg.Properties))
 	for k, v := range d.cfg.Properties {
 		p[k] = v
 	}
 	p["stream"] = kind
-	return writer.New(ll, tl, omega.LogLevelInfo, p, d.cfg.MrID), nil
+	d.logger.Printf("[INFO] logging: creating new %s logger with namespace:%s mrID:%s", kind, d.cfg.Namespace, d.cfg.MrID)
+	return writer.New(ll, tl, omega.LogLevelInfo, p, d.cfg.MrID, d.logger), nil
 }
 
 // StdErr returns the WriteCloser for the standart error stream

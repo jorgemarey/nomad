@@ -33,7 +33,6 @@ type clientOptions struct {
 	apiKey    string
 	debug     bool
 	tlsConfig tls.Config
-	sysLogger *log.Logger
 }
 
 // ClientOption sets options over the client
@@ -79,12 +78,6 @@ func WithSkipVerify() ClientOption {
 func WithClientCert(cert tls.Certificate) ClientOption {
 	return func(o *clientOptions) {
 		o.tlsConfig.Certificates = []tls.Certificate{cert}
-	}
-}
-
-func WithSystemLogger(l *log.Logger) ClientOption {
-	return func(o *clientOptions) {
-		o.sysLogger = l
 	}
 }
 
@@ -198,7 +191,6 @@ func (c *Client) setDefaultOptions() {
 		WithAPIKey(os.Getenv(envAPIKey)),
 		WithNamespace(os.Getenv(envNamespace)),
 		WithURL(os.Getenv(envURL)),
-		WithSystemLogger(log.New(ioutil.Discard, "", log.LstdFlags)),
 	}
 	for _, opt := range defaultOpts {
 		opt(&c.options)
