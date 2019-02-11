@@ -10,9 +10,9 @@ import (
 
 	"context"
 
-	"github.com/armon/go-metrics"
+	metrics "github.com/armon/go-metrics"
 	"github.com/hashicorp/nomad/helper/uuid"
-	"github.com/hashicorp/nomad/lib"
+	"github.com/hashicorp/nomad/lib/delayheap"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
@@ -86,7 +86,7 @@ type EvalBroker struct {
 
 	// delayHeap is a heap used to track incoming evaluations that are
 	// not eligible to enqueue until their WaitTime
-	delayHeap *lib.DelayHeap
+	delayHeap *delayheap.DelayHeap
 
 	// delayedEvalsUpdateCh is used to trigger notifications for updates
 	// to the delayHeap
@@ -142,7 +142,7 @@ func NewEvalBroker(timeout, initialNackDelay, subsequentNackDelay time.Duration,
 		timeWait:             make(map[string]*time.Timer),
 		initialNackDelay:     initialNackDelay,
 		subsequentNackDelay:  subsequentNackDelay,
-		delayHeap:            lib.NewDelayHeap(),
+		delayHeap:            delayheap.NewDelayHeap(),
 		delayedEvalsUpdateCh: make(chan struct{}, 1),
 	}
 	b.stats.ByScheduler = make(map[string]*SchedulerStats)
@@ -167,7 +167,7 @@ func (b *EvalBroker) SetEnabled(enabled bool) {
 		// start the go routine for delayed evals
 		ctx, cancel := context.WithCancel(context.Background())
 		b.delayedEvalCancelFunc = cancel
-		go b.runDelayedEvalsWatcher(ctx)
+		go b.runDelayedEvalsWatcher(ctx, b.delayedEvalsUpdateCh)
 	}
 	b.l.Unlock()
 	if !enabled {
@@ -719,7 +719,7 @@ func (b *EvalBroker) flush() {
 	b.ready = make(map[string]PendingEvaluations)
 	b.unack = make(map[string]*unackEval)
 	b.timeWait = make(map[string]*time.Timer)
-	b.delayHeap = lib.NewDelayHeap()
+	b.delayHeap = delayheap.NewDelayHeap()
 }
 
 // evalWrapper satisfies the HeapNode interface
@@ -741,7 +741,7 @@ func (d *evalWrapper) Namespace() string {
 
 // runDelayedEvalsWatcher is a long-lived function that waits till a time deadline is met for
 // pending evaluations before enqueuing them
-func (b *EvalBroker) runDelayedEvalsWatcher(ctx context.Context) {
+func (b *EvalBroker) runDelayedEvalsWatcher(ctx context.Context, updateCh <-chan struct{}) {
 	var timerChannel <-chan time.Time
 	var delayTimer *time.Timer
 	for {
@@ -768,7 +768,7 @@ func (b *EvalBroker) runDelayedEvalsWatcher(ctx context.Context) {
 			b.stats.TotalWaiting -= 1
 			b.enqueueLocked(eval, eval.Type)
 			b.l.Unlock()
-		case <-b.delayedEvalsUpdateCh:
+		case <-updateCh:
 			continue
 		}
 	}
