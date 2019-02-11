@@ -40,6 +40,10 @@ type LogConfig struct {
 
 	// MaxFileSizeMB is the max log file size in MB allowed before rotation occures
 	MaxFileSizeMB int
+
+	DriverName string
+	Config     map[string]interface{}
+	Data       map[string]string
 }
 
 type LogMon interface {
@@ -113,7 +117,9 @@ func NewTaskLogger(cfg *LogConfig, logger hclog.Logger) (*TaskLogger, error) {
 		return nil, fmt.Errorf("failed to create stdout logfile for %q: %v", cfg.StdoutLogFile, err)
 	}
 
-	wrapperOut, err := newLogRotatorWrapper(cfg.StdoutFifo, logger, lro)
+	do, de := getIO(cfg, logger)
+
+	wrapperOut, err := newLogRotatorWrapper(cfg.StdoutFifo, logger, lro, do)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +132,7 @@ func NewTaskLogger(cfg *LogConfig, logger hclog.Logger) (*TaskLogger, error) {
 		return nil, fmt.Errorf("failed to create stderr logfile for %q: %v", cfg.StderrLogFile, err)
 	}
 
-	wrapperErr, err := newLogRotatorWrapper(cfg.StderrFifo, logger, lre)
+	wrapperErr, err := newLogRotatorWrapper(cfg.StderrFifo, logger, lre, de)
 	if err != nil {
 		return nil, err
 	}
@@ -135,6 +141,19 @@ func NewTaskLogger(cfg *LogConfig, logger hclog.Logger) (*TaskLogger, error) {
 
 	return tl, nil
 
+}
+
+func getIO(cfg *LogConfig, logger hclog.Logger) (ldo io.WriteCloser, lde io.WriteCloser) {
+	dname := cfg.DriverName
+	d, err := logging.NewDriver(dname, cfg.Config, cfg.Data, logger.StandardLogger(&hclog.StandardLoggerOptions{InferLevels: true}))
+	if err == nil {
+		ldo, err = d.StdOut()
+		lde, err = d.StdErr()
+		logger.Debug("executor: configured log", "driver", dname)
+	} else {
+		logger.Error("executor: cant configure log", "driver", dname, "error", err)
+	}
+	return
 }
 
 // logRotatorWrapper wraps our log rotator and exposes a pipe that can feed the
@@ -146,11 +165,12 @@ type logRotatorWrapper struct {
 	rotatorWriter     *logging.FileRotator
 	hasFinishedCopied chan struct{}
 	logger            hclog.Logger
+	driverWriter      io.WriteCloser
 }
 
 // newLogRotatorWrapper takes a rotator and returns a wrapper that has the
 // processOutWriter to attach to the stdout or stderr of a process.
-func newLogRotatorWrapper(path string, logger hclog.Logger, rotator *logging.FileRotator) (*logRotatorWrapper, error) {
+func newLogRotatorWrapper(path string, logger hclog.Logger, rotator *logging.FileRotator, driverWriter io.WriteCloser) (*logRotatorWrapper, error) {
 	logger.Info("opening fifo", "path", path)
 	f, err := fifo.New(path)
 	if err != nil {
@@ -163,6 +183,7 @@ func newLogRotatorWrapper(path string, logger hclog.Logger, rotator *logging.Fil
 		rotatorWriter:     rotator,
 		hasFinishedCopied: make(chan struct{}),
 		logger:            logger,
+		driverWriter:      driverWriter,
 	}
 	wrap.start()
 	return wrap, nil
@@ -173,7 +194,14 @@ func newLogRotatorWrapper(path string, logger hclog.Logger, rotator *logging.Fil
 func (l *logRotatorWrapper) start() {
 	go func() {
 		defer close(l.hasFinishedCopied)
-		_, err := io.Copy(l.rotatorWriter, l.processOutReader)
+		var w io.Writer = l.rotatorWriter
+		if l.driverWriter != nil {
+			w = io.MultiWriter(l.rotatorWriter, l.driverWriter)
+			l.logger.Info("executor: adding driver output to send logs")
+		} else {
+			l.logger.Info("executor: not logging to driver")
+		}
+		_, err := io.Copy(w, l.processOutReader)
 		if err != nil {
 			// Close reader to propagate io error across pipe.
 			// Note that this may block until the process exits on
@@ -217,6 +245,9 @@ func (l *logRotatorWrapper) Close() {
 		l.logger.Warn("timed out waiting for read-side of process output pipe to close")
 	}
 
+	if l.driverWriter != nil {
+		l.driverWriter.Close()
+	}
 	l.rotatorWriter.Close()
 	return
 }

@@ -15,6 +15,9 @@ message StartRequest {
     uint32 max_file_size_mb = 5;
     string stdout_fifo = 6;
     string stderr_fifo = 7;
+    string driver = 8;
+    bytes config = 9;
+    bytes data = 10;
 }
 
 message StartResponse {

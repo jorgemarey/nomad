@@ -110,6 +110,9 @@ func (h *logmonHook) Prestart(ctx context.Context,
 			StderrFifo:    h.config.stderrFifo,
 			MaxFiles:      req.Task.LogConfig.MaxFiles,
 			MaxFileSizeMB: req.Task.LogConfig.MaxFileSizeMB,
+			DriverName:    req.Task.LogConfig.Driver,
+			Config:        req.Task.LogConfig.Config,
+			Data:          req.TaskEnv.Map(),
 		})
 		if err != nil {
 			h.logger.Error("failed to start logmon", "error", err)
