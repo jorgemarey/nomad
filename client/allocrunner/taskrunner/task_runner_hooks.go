@@ -113,11 +113,7 @@ func (tr *TaskRunner) emitHookError(err error, hookName string) {
 		taskEvent = structs.NewTaskEvent(structs.TaskHookFailed).SetMessage(message)
 	}
 
-	// The TaskEvent returned by a HookError may be nil if the hook chooses to opt
-	// out of sending a task event.
-	if taskEvent != nil {
-		tr.EmitEvent(taskEvent)
-	}
+	tr.EmitEvent(taskEvent)
 }
 
 // prestart is used to run the runners prestart hooks.
@@ -155,13 +151,7 @@ func (tr *TaskRunner) prestart() error {
 			TaskResources: tr.taskResources,
 		}
 
-		var origHookState *state.HookState
-		tr.stateLock.RLock()
-		if tr.localState.Hooks != nil {
-			origHookState = tr.localState.Hooks[name]
-		}
-		tr.stateLock.RUnlock()
-
+		origHookState := tr.hookState(name)
 		if origHookState != nil {
 			if origHookState.PrestartDone {
 				tr.logger.Trace("skipping done prestart hook", "name", pre.Name())
@@ -177,7 +167,7 @@ func (tr *TaskRunner) prestart() error {
 			}
 
 			// Give the hook it's old data
-			req.HookData = origHookState.Data
+			req.PreviousState = origHookState.Data
 		}
 
 		req.VaultToken = tr.getVaultToken()
@@ -199,7 +189,7 @@ func (tr *TaskRunner) prestart() error {
 		// Store the hook state
 		{
 			hookState := &state.HookState{
-				Data:         resp.HookData,
+				Data:         resp.State,
 				PrestartDone: resp.Done,
 				Env:          resp.Env,
 			}
@@ -365,13 +355,21 @@ func (tr *TaskRunner) stop() error {
 		}
 
 		req := interfaces.TaskStopRequest{}
+
+		origHookState := tr.hookState(name)
+		if origHookState != nil {
+			// Give the hook data provided by prestart
+			req.ExistingState = origHookState.Data
+		}
+
 		var resp interfaces.TaskStopResponse
 		if err := post.Stop(tr.killCtx, &req, &resp); err != nil {
 			tr.emitHookError(err, name)
 			merr.Errors = append(merr.Errors, fmt.Errorf("stop hook %q failed: %v", name, err))
 		}
 
-		// No need to persist as TaskStopResponse is currently empty
+		// Stop hooks cannot alter state and must be idempotent, so
+		// unlike prestart there's no state to persist here.
 
 		if tr.logger.IsTrace() {
 			end := time.Now()
@@ -462,7 +460,7 @@ func (tr *TaskRunner) preKill() {
 		var start time.Time
 		if tr.logger.IsTrace() {
 			start = time.Now()
-			tr.logger.Trace("running kill hook", "name", name, "start", start)
+			tr.logger.Trace("running prekill hook", "name", name, "start", start)
 		}
 
 		// Run the pre kill hook
@@ -470,14 +468,14 @@ func (tr *TaskRunner) preKill() {
 		var resp interfaces.TaskPreKillResponse
 		if err := killHook.PreKilling(context.Background(), &req, &resp); err != nil {
 			tr.emitHookError(err, name)
-			tr.logger.Error("kill hook failed", "name", name, "error", err)
+			tr.logger.Error("prekill hook failed", "name", name, "error", err)
 		}
 
 		// No need to persist as TaskKillResponse is currently empty
 
 		if tr.logger.IsTrace() {
 			end := time.Now()
-			tr.logger.Trace("finished kill hook", "name", name, "end", end, "duration", end.Sub(start))
+			tr.logger.Trace("finished prekill hook", "name", name, "end", end, "duration", end.Sub(start))
 		}
 	}
 }

@@ -8,9 +8,12 @@ __BACKWARDS INCOMPATIBILITIES:__
    updating.
  * core: IOPS as a resource is now deprecated
    [[GH-4970](https://github.com/hashicorp/nomad/issues/4970)]. Nomad continues
-   to parse IOPS in job's to allow job authors time to remove iops from their
+   to parse IOPS in jobs to allow job authors time to remove iops from their
    jobs.
  * core: Allow the != constraint to match against keys that do not exist [[GH-4875](https://github.com/hashicorp/nomad/pull/4875)]
+ * client: Task config validation is more strict in 0.9. For example unknown
+   parameters in stanzas under the task config were ignored in previous
+   versions but in 0.9 this will cause a task failure.
  * client: Task config interpolation requires names to be valid identifiers
    (`node.region` or `NOMAD_DC`). Interpolating other variables requires a new
    indexing syntax: `env[".invalid.identifier."]`. [[GH-4843](https://github.com/hashicorp/nomad/issues/4843)]
@@ -71,12 +74,17 @@ IMPROVEMENTS:
  * client: Extend timeout to 60 seconds for Windows CPU fingerprinting [[GH-4441](https://github.com/hashicorp/nomad/pull/4441)]
  * client: Refactor client to support plugins and improve state handling [[GH-4792](https://github.com/hashicorp/nomad/pull/4792)]
  * client: Updated consul-template library to pick up recent fixes and improvements[[GH-4885](https://github.com/hashicorp/nomad/pull/4885)]
+ * client: When retrying a failed artifact, do not download any successfully downloaded artifacts again [[GH-5322](https://github.com/hashicorp/nomad/issues/5322)]
  * client: Added service metadata tag that enables the Consul UI to show a Nomad icon for services registered by Nomad [[GH-4889](https://github.com/hashicorp/nomad/issues/4889)]
+ * cli: Added support for coloured output on Windows [[GH-5342](https://github.com/hashicorp/nomad/pull/5342)]
+ * driver/docker: Rename Logging `type` to `driver` [[GH-5372](https://github.com/hashicorp/nomad/pull/5372)]
  * driver/docker: Support logs when using Docker for Mac [[GH-4758](https://github.com/hashicorp/nomad/issues/4758)]
  * driver/docker: Added support for specifying `storage_opt` in the Docker driver [[GH-4908](https://github.com/hashicorp/nomad/pull/4908)]
  * driver/docker: Added support for specifying `cpu_cfs_period` in the Docker driver [[GH-4462](https://github.com/hashicorp/nomad/pull/4462)]
  * driver/docker: Added support for setting bind and tmpfs mounts in the Docker driver [[GH-4924](https://github.com/hashicorp/nomad/pull/4924)]
  * driver/docker: Report container images with user friendly name rather than underlying image ID [[GH-4926](https://github.com/hashicorp/nomad/pull/4926)]
+ * driver/docker: Add support for collecting stats on Windows [[GH-5355](https://github.com/hashicorp/nomad/pull/5355)]
+   drivers/docker: Report docker driver as undetected before first connecting to the docker daemon [[GH-5362](https://github.com/hashicorp/nomad/pull/5362)]
  * drivers: Added total memory usage to task resource metrics [[GH-5190](https://github.com/hashicorp/nomad/pull/5190)]
  * server/rpc: Reduce logging when undergoing temporary network errors such as hitting file descriptor limits [[GH-4974](https://github.com/hashicorp/nomad/issues/4974)]
  * server/vault: Tweaked logs to better identify vault connection errors [[GH-5228](https://github.com/hashicorp/nomad/pull/5228)]
@@ -89,6 +97,7 @@ IMPROVEMENTS:
  * ui: Support switching regions [[GH-4572](https://github.com/hashicorp/nomad/issues/4572)]
  * ui: Canaries can now be promoted from the UI [[GH-4616](https://github.com/hashicorp/nomad/issues/4616)]
  * ui: Stopped jobs can be restarted from the UI [[GH-4615](https://github.com/hashicorp/nomad/issues/4615)]
+ * ui: Support widescreen format in alloc logs view [[GH-5400](https://github.com/hashicorp/nomad/pull/5400)]
  * ui: Gracefully handle errors from the stats end points [[GH-4833](https://github.com/hashicorp/nomad/issues/4833)]
  * ui: Added links to Jobs and Clients from the error page template [[GH-4850](https://github.com/hashicorp/nomad/issues/4850)]
  * ui: Jobs can be authored, planned, submitted, and edited from the UI [[GH-4600](https://github.com/hashicorp/nomad/issues/4600)]
@@ -107,7 +116,9 @@ BUG FIXES:
  * client: Fix an issue where driver attributes are not updated in node API responses if they change after after startup [[GH-4984](https://github.com/hashicorp/nomad/pull/4984)]
  * driver/docker: Fix a path traversal issue where mounting paths outside alloc dir might be possible despite `docker.volumes.enabled` set to false [[GH-4983](https://github.com/hashicorp/nomad/pull/4983)]
  * driver/raw_exec: Fix an issue where tasks that used an interpolated command in driver configuration would not start [[GH-4813](https://github.com/hashicorp/nomad/pull/4813)]
+ * drivers: Fix a bug where exec and java drivers get reported as detected and healthy when nomad is not running as root and without cgroup support
  * quota: Fixed a bug in Nomad enterprise where quota specifications were not being replicated to non authoritative regions correctly.
+ * scheduler: When dequeueing evals ensure workers wait to the proper Raft index [[GH-5381](https://github.com/hashicorp/nomad/issues/5381)]
  * scheduler: Allow schedulers to handle evaluations that are created due to previous evaluation failures [[GH-4712](https://github.com/hashicorp/nomad/issues/4712)]
  * server/api: Fixed bug when trying to route to a down node [[GH-5261](https://github.com/hashicorp/nomad/pull/5261)]
  * server/vault: Fixed bug in Vault token renewal that could panic on a malformed Vault response [[GH-4904](https://github.com/hashicorp/nomad/issues/4904)], [[GH-4937](https://github.com/hashicorp/nomad/pull/4937)]

@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +16,20 @@ func (d *Driver) Fingerprint(ctx context.Context) (<-chan *drivers.Fingerprint, 
 	ch := make(chan *drivers.Fingerprint)
 	go d.handleFingerprint(ctx, ch)
 	return ch, nil
+}
+
+func (d *Driver) previouslyDetected() bool {
+	d.detectedLock.RLock()
+	defer d.detectedLock.RUnlock()
+
+	return d.detected
+}
+
+func (d *Driver) setDetected(detected bool) {
+	d.detectedLock.Lock()
+	defer d.detectedLock.Unlock()
+
+	d.detected = detected
 }
 
 // setFingerprintSuccess marks the driver as having fingerprinted successfully
@@ -79,12 +94,19 @@ func (d *Driver) buildFingerprint() *drivers.Fingerprint {
 			d.logger.Debug("could not connect to docker daemon", "endpoint", client.Endpoint(), "error", err)
 		}
 		d.setFingerprintFailure()
+
+		result := drivers.HealthStateUndetected
+		if d.previouslyDetected() {
+			result = drivers.HealthStateUnhealthy
+		}
+
 		return &drivers.Fingerprint{
-			Health:            drivers.HealthStateUnhealthy,
+			Health:            result,
 			HealthDescription: "Failed to connect to docker daemon",
 		}
 	}
 
+	d.setDetected(true)
 	fp.Attributes["driver.docker"] = pstructs.NewBoolAttribute(true)
 	fp.Attributes["driver.docker.version"] = pstructs.NewStringAttribute(env.Get("Version"))
 	if d.config.AllowPrivileged {
@@ -137,6 +159,19 @@ func (d *Driver) buildFingerprint() *drivers.Fingerprint {
 
 		fp.Attributes["driver.docker.runtimes"] = pstructs.NewStringAttribute(
 			strings.Join(runtimeNames, ","))
+		fp.Attributes["driver.docker.os_type"] = pstructs.NewStringAttribute(dockerInfo.OSType)
+
+		if runtime.GOOS == "windows" && dockerInfo.OSType == "linux" {
+			if d.fingerprintSuccessful() {
+				d.logger.Warn("detected Linux docker containers on Windows; only Windows containers are supported")
+			}
+
+			d.setFingerprintFailure()
+			return &drivers.Fingerprint{
+				Health:            drivers.HealthStateUnhealthy,
+				HealthDescription: "Docker is configured with Linux containers; only Windows containers are supported",
+			}
+		}
 	}
 
 	d.setFingerprintSuccess()

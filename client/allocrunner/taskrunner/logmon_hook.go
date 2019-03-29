@@ -12,7 +12,14 @@ import (
 	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
 	"github.com/hashicorp/nomad/client/logmon"
 	"github.com/hashicorp/nomad/helper/uuid"
+	"github.com/hashicorp/nomad/nomad/structs"
 	pstructs "github.com/hashicorp/nomad/plugins/shared/structs"
+)
+
+const (
+	// logmonReattachKey is the HookData key where logmon's reattach config
+	// is stored.
+	logmonReattachKey = "reattach_config"
 )
 
 // logmonHook launches logmon and manages task logging
@@ -72,52 +79,57 @@ func (h *logmonHook) launchLogMon(reattachConfig *plugin.ReattachConfig) error {
 }
 
 func reattachConfigFromHookData(data map[string]string) (*plugin.ReattachConfig, error) {
-	if data == nil || data["reattach_config"] == "" {
+	if data == nil || data[logmonReattachKey] == "" {
 		return nil, nil
 	}
 
-	var cfg *pstructs.ReattachConfig
-	err := json.Unmarshal([]byte(data["reattach_config"]), cfg)
+	var cfg pstructs.ReattachConfig
+	err := json.Unmarshal([]byte(data[logmonReattachKey]), &cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	return pstructs.ReattachConfigToGoPlugin(cfg)
+	return pstructs.ReattachConfigToGoPlugin(&cfg)
 }
 
 func (h *logmonHook) Prestart(ctx context.Context,
 	req *interfaces.TaskPrestartRequest, resp *interfaces.TaskPrestartResponse) error {
 
-	reattachConfig, err := reattachConfigFromHookData(req.HookData)
-	if err != nil {
-		h.logger.Error("failed to load reattach config", "error", err)
-		return err
-	}
-
-	// Launch or reattach logmon instance for the task.
-	if err := h.launchLogMon(reattachConfig); err != nil {
-		h.logger.Error("failed to launch logmon process", "error", err)
-		return err
-	}
-
-	// Only tell logmon to start when we are not reattaching to a running instance
-	if reattachConfig == nil {
-		err := h.logmon.Start(&logmon.LogConfig{
-			LogDir:        h.config.logDir,
-			StdoutLogFile: fmt.Sprintf("%s.stdout", req.Task.Name),
-			StderrLogFile: fmt.Sprintf("%s.stderr", req.Task.Name),
-			StdoutFifo:    h.config.stdoutFifo,
-			StderrFifo:    h.config.stderrFifo,
-			MaxFiles:      req.Task.LogConfig.MaxFiles,
-			MaxFileSizeMB: req.Task.LogConfig.MaxFileSizeMB,
-			DriverName:    req.Task.LogConfig.Driver,
-			Config:        req.Task.LogConfig.Config,
-			Data:          req.TaskEnv.Map(),
-		})
+	// Create a logmon client by reattaching or launching a new instance
+	if h.logmonPluginClient == nil || h.logmonPluginClient.Exited() {
+		reattachConfig, err := reattachConfigFromHookData(req.PreviousState)
 		if err != nil {
-			h.logger.Error("failed to start logmon", "error", err)
+			h.logger.Error("failed to load reattach config", "error", err)
 			return err
 		}
+
+		// Launch or reattach logmon instance for the task.
+		if err := h.launchLogMon(reattachConfig); err != nil {
+			// Retry errors launching logmon as logmon may have crashed and
+			// subsequent attempts will start a new one.
+			h.logger.Error("failed to launch logmon process", "error", err)
+			return structs.NewRecoverableError(err, true)
+		}
+
+	}
+
+	err := h.logmon.Start(&logmon.LogConfig{
+		LogDir:        h.config.logDir,
+		StdoutLogFile: fmt.Sprintf("%s.stdout", req.Task.Name),
+		StderrLogFile: fmt.Sprintf("%s.stderr", req.Task.Name),
+		StdoutFifo:    h.config.stdoutFifo,
+		StderrFifo:    h.config.stderrFifo,
+		MaxFiles:      req.Task.LogConfig.MaxFiles,
+		MaxFileSizeMB: req.Task.LogConfig.MaxFileSizeMB,
+		MaxFiles:      req.Task.LogConfig.MaxFiles,
+		MaxFileSizeMB: req.Task.LogConfig.MaxFileSizeMB,
+		DriverName:    req.Task.LogConfig.Driver,
+		Config:        req.Task.LogConfig.Config,
+		Data:          req.TaskEnv.Map(),
+	})
+	if err != nil {
+		h.logger.Error("failed to start logmon", "error", err)
+		return err
 	}
 
 	rCfg := pstructs.ReattachConfigFromGoPlugin(h.logmonPluginClient.ReattachConfig())
@@ -125,13 +137,19 @@ func (h *logmonHook) Prestart(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	req.HookData = map[string]string{"reattach_config": string(jsonCfg)}
-
-	resp.Done = true
+	resp.State = map[string]string{logmonReattachKey: string(jsonCfg)}
 	return nil
 }
 
-func (h *logmonHook) Stop(context.Context, *interfaces.TaskStopRequest, *interfaces.TaskStopResponse) error {
+func (h *logmonHook) Stop(_ context.Context, req *interfaces.TaskStopRequest, _ *interfaces.TaskStopResponse) error {
+
+	// It's possible that Stop was called without calling Prestart on agent
+	// restarts. Attempt to reattach to an existing logmon.
+	if h.logmon == nil || h.logmonPluginClient == nil {
+		if err := h.reattach(req); err != nil {
+			h.logger.Trace("error reattaching to logmon when stopping", "error", err)
+		}
+	}
 
 	if h.logmon != nil {
 		h.logmon.Stop()
@@ -141,4 +159,19 @@ func (h *logmonHook) Stop(context.Context, *interfaces.TaskStopRequest, *interfa
 	}
 
 	return nil
+}
+
+// reattach to a running logmon if possible. Will not start a new logmon.
+func (h *logmonHook) reattach(req *interfaces.TaskStopRequest) error {
+	reattachConfig, err := reattachConfigFromHookData(req.ExistingState)
+	if err != nil {
+		return err
+	}
+
+	// Give up if there's no reattach config
+	if reattachConfig == nil {
+		return nil
+	}
+
+	return h.launchLogMon(reattachConfig)
 }

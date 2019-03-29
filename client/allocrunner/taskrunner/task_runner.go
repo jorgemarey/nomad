@@ -11,7 +11,6 @@ import (
 	metrics "github.com/armon/go-metrics"
 	log "github.com/hashicorp/go-hclog"
 	multierror "github.com/hashicorp/go-multierror"
-	"github.com/hashicorp/hcl2/hcl"
 	"github.com/hashicorp/hcl2/hcldec"
 	"github.com/hashicorp/nomad/client/allocdir"
 	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
@@ -392,10 +391,9 @@ func (tr *TaskRunner) Run() {
 	go tr.handleUpdates()
 
 MAIN:
-	for {
+	for !tr.Alloc().TerminalStatus() {
 		select {
 		case <-tr.killCtx.Done():
-			tr.handleKill()
 			break MAIN
 		case <-tr.shutdownCtx.Done():
 			// TaskRunner was told to exit immediately
@@ -412,7 +410,6 @@ MAIN:
 
 		select {
 		case <-tr.killCtx.Done():
-			tr.handleKill()
 			break MAIN
 		case <-tr.shutdownCtx.Done():
 			// TaskRunner was told to exit immediately
@@ -484,11 +481,26 @@ MAIN:
 		case <-time.After(restartDelay):
 		case <-tr.killCtx.Done():
 			tr.logger.Trace("task killed between restarts", "delay", restartDelay)
-			tr.handleKill()
 			break MAIN
 		case <-tr.shutdownCtx.Done():
 			// TaskRunner was told to exit immediately
+			tr.logger.Trace("gracefully shutting down during restart delay")
 			return
+		}
+	}
+
+	// Ensure handle is cleaned up. Restore could have recovered a task
+	// that should be terminal, so if the handle still exists we should
+	// kill it here.
+	if tr.getDriverHandle() != nil {
+		if result = tr.handleKill(); result != nil {
+			tr.emitExitResultEvent(result)
+		}
+
+		tr.clearDriverHandle()
+
+		if err := tr.exited(); err != nil {
+			tr.logger.Error("exited hooks failed while cleaning up terminal task", "error", err)
 		}
 	}
 
@@ -536,6 +548,14 @@ func (tr *TaskRunner) handleTaskExitResult(result *drivers.ExitResult) (retryWai
 		return true
 	}
 
+	// Emit Terminated event
+	tr.emitExitResultEvent(result)
+
+	return false
+}
+
+// emitExitResultEvent emits a TaskTerminated event for an ExitResult.
+func (tr *TaskRunner) emitExitResultEvent(result *drivers.ExitResult) {
 	event := structs.NewTaskEvent(structs.TaskTerminated).
 		SetExitCode(result.ExitCode).
 		SetSignal(result.Signal).
@@ -547,8 +567,6 @@ func (tr *TaskRunner) handleTaskExitResult(result *drivers.ExitResult) (retryWai
 	if result.OOMKilled && !tr.clientConfig.DisableTaggedMetrics {
 		metrics.IncrCounterWithLabels([]string{"client", "allocs", "oom_killed"}, 1, tr.baseLabels)
 	}
-
-	return false
 }
 
 // handleUpdates runs update hooks when triggerUpdateCh is ticked and exits
@@ -620,12 +638,7 @@ func (tr *TaskRunner) runDriver() error {
 		tr.logger.Warn("some environment variables not available for rendering", "keys", strings.Join(keys, ", "))
 	}
 
-	evalCtx := &hcl.EvalContext{
-		Variables: vars,
-		Functions: hclutils.GetStdlibFuncs(),
-	}
-
-	val, diag := hclutils.ParseHclInterface(tr.task.Config, tr.taskSchema, evalCtx)
+	val, diag := hclutils.ParseHclInterface(tr.task.Config, tr.taskSchema, vars)
 	if diag.HasErrors() {
 		return multierror.Append(errors.New("failed to parse config"), diag.Errs()...)
 	}
@@ -662,7 +675,9 @@ func (tr *TaskRunner) runDriver() error {
 				return fmt.Errorf("failed to start task after driver exited unexpectedly: %v", err)
 			}
 		} else {
-			return fmt.Errorf("driver start failed: %v", err)
+			// Do *NOT* wrap the error here without maintaining
+			// whether or not is Recoverable.
+			return err
 		}
 	}
 
@@ -713,8 +728,8 @@ func (tr *TaskRunner) initDriver() error {
 }
 
 // handleKill is used to handle the a request to kill a task. It will return
-//// the handle exit result if one is available and store any error in the task
-//// runner killErr value.
+// the handle exit result if one is available and store any error in the task
+// runner killErr value.
 func (tr *TaskRunner) handleKill() *drivers.ExitResult {
 	// Run the pre killing hooks
 	tr.preKill()
@@ -1043,9 +1058,9 @@ func (tr *TaskRunner) WaitCh() <-chan struct{} {
 }
 
 // Update the running allocation with a new version received from the server.
-// Calls Update hooks asynchronously with Run().
+// Calls Update hooks asynchronously with Run.
 //
-// This method is safe for calling concurrently with Run() and does not modify
+// This method is safe for calling concurrently with Run and does not modify
 // the passed in allocation.
 func (tr *TaskRunner) Update(update *structs.Allocation) {
 	task := update.LookupTask(tr.taskName)

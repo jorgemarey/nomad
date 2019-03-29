@@ -87,7 +87,7 @@ func NewExecutorWithIsolation(logger hclog.Logger) Executor {
 		logger.Error("unable to initialize stats", "error", err)
 	}
 	return &LibcontainerExecutor{
-		id:             strings.Replace(uuid.Generate(), "-", "_", 0),
+		id:             strings.Replace(uuid.Generate(), "-", "_", -1),
 		logger:         logger,
 		totalCpuStats:  stats.NewCpuStats(),
 		userCpuStats:   stats.NewCpuStats(),
@@ -339,10 +339,21 @@ func (l *LibcontainerExecutor) Shutdown(signal string, grace time.Duration) erro
 		case <-time.After(grace):
 			// Force kill all container processes after grace period,
 			// hence `true` argument.
-			return l.container.Signal(os.Kill, true)
+			if err := l.container.Signal(os.Kill, true); err != nil {
+				return err
+			}
 		}
 	} else {
-		return l.container.Signal(os.Kill, true)
+		if err := l.container.Signal(os.Kill, true); err != nil {
+			return err
+		}
+	}
+
+	select {
+	case <-l.userProcExited:
+		return nil
+	case <-time.After(time.Second * 15):
+		return fmt.Errorf("process failed to exit after 15 seconds")
 	}
 }
 
@@ -649,7 +660,7 @@ func configureBasicCgroups(cfg *lconfigs.Config) error {
 
 	freezer := cgroupFs.FreezerGroup{}
 	subsystem := freezer.Name()
-	path, err := cgroups.FindCgroupMountpoint(subsystem)
+	path, err := cgroups.FindCgroupMountpoint("", subsystem)
 	if err != nil {
 		return fmt.Errorf("failed to find %s cgroup mountpoint: %v", subsystem, err)
 	}
@@ -693,7 +704,7 @@ func JoinRootCgroup(subsystems []string) error {
 	mErrs := new(multierror.Error)
 	paths := map[string]string{}
 	for _, s := range subsystems {
-		mnt, _, err := cgroups.FindCgroupMountpointAndRoot(s)
+		mnt, _, err := cgroups.FindCgroupMountpointAndRoot("", s)
 		if err != nil {
 			multierror.Append(mErrs, fmt.Errorf("error getting cgroup path for subsystem: %s", s))
 			continue
