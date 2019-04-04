@@ -180,6 +180,9 @@ func NewTaskLogger(cfg *LogConfig, logger hclog.Logger) (*TaskLogger, error) {
 
 func getIO(cfg *LogConfig, logger hclog.Logger) (ldo io.WriteCloser, lde io.WriteCloser) {
 	dname := cfg.DriverName
+	if dname == "" {
+		return
+	}
 	d, err := logging.NewDriver(dname, cfg.Config, cfg.Data, logger.StandardLogger(&hclog.StandardLoggerOptions{InferLevels: true}))
 	if err == nil {
 		ldo, err = d.StdOut()
