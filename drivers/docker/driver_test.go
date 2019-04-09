@@ -79,6 +79,7 @@ func dockerTask(t *testing.T) (*drivers.TaskConfig, *TaskConfig, []int) {
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
 		Name:      "redis-demo",
+		AllocID:   uuid.Generate(),
 		DeviceEnv: make(map[string]string),
 		Resources: &drivers.Resources{
 			NomadResources: &structs.AllocatedTaskResources{
@@ -326,6 +327,7 @@ func TestDockerDriver_Start_Wait(t *testing.T) {
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
 		Name:      "nc-demo",
+		AllocID:   uuid.Generate(),
 		Resources: basicResources,
 	}
 	require.NoError(t, task.EncodeConcreteDriverConfig(&taskCfg))
@@ -361,6 +363,7 @@ func TestDockerDriver_Start_WaitFinish(t *testing.T) {
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
 		Name:      "nc-demo",
+		AllocID:   uuid.Generate(),
 		Resources: basicResources,
 	}
 	require.NoError(t, task.EncodeConcreteDriverConfig(&taskCfg))
@@ -403,6 +406,7 @@ func TestDockerDriver_Start_StoppedContainer(t *testing.T) {
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
 		Name:      "nc-demo",
+		AllocID:   uuid.Generate(),
 		Resources: basicResources,
 	}
 	require.NoError(t, task.EncodeConcreteDriverConfig(&taskCfg))
@@ -462,6 +466,7 @@ func TestDockerDriver_Start_LoadImage(t *testing.T) {
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
 		Name:      "busybox-demo",
+		AllocID:   uuid.Generate(),
 		Resources: basicResources,
 	}
 	require.NoError(t, task.EncodeConcreteDriverConfig(&taskCfg))
@@ -501,6 +506,64 @@ func TestDockerDriver_Start_LoadImage(t *testing.T) {
 
 }
 
+// Tests that images prefixed with "https://" are supported
+func TestDockerDriver_Start_Image_HTTPS(t *testing.T) {
+	if !tu.IsCI() {
+		t.Parallel()
+	}
+	testutil.DockerCompatible(t)
+
+	taskCfg := TaskConfig{
+		Image: "https://gcr.io/google_containers/pause:0.8.0",
+	}
+	task := &drivers.TaskConfig{
+		ID:        uuid.Generate(),
+		Name:      "pause",
+		AllocID:   uuid.Generate(),
+		Resources: basicResources,
+	}
+	require.NoError(t, task.EncodeConcreteDriverConfig(&taskCfg))
+
+	d := dockerDriverHarness(t, nil)
+	cleanup := d.MkAllocDir(task, true)
+	defer cleanup()
+
+	_, _, err := d.StartTask(task)
+	require.NoError(t, err)
+
+	d.DestroyTask(task.ID, true)
+}
+
+// Tests that starting a task without an image fails
+func TestDockerDriver_Start_NoImage(t *testing.T) {
+	if !tu.IsCI() {
+		t.Parallel()
+	}
+	testutil.DockerCompatible(t)
+
+	taskCfg := TaskConfig{
+		Command: "echo",
+		Args:    []string{"foo"},
+	}
+	task := &drivers.TaskConfig{
+		ID:        uuid.Generate(),
+		Name:      "echo",
+		AllocID:   uuid.Generate(),
+		Resources: basicResources,
+	}
+	require.NoError(t, task.EncodeConcreteDriverConfig(&taskCfg))
+
+	d := dockerDriverHarness(t, nil)
+	cleanup := d.MkAllocDir(task, false)
+	defer cleanup()
+
+	_, _, err := d.StartTask(task)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "image name required")
+
+	d.DestroyTask(task.ID, true)
+}
+
 func TestDockerDriver_Start_BadPull_Recoverable(t *testing.T) {
 	if !tu.IsCI() {
 		t.Parallel()
@@ -517,6 +580,7 @@ func TestDockerDriver_Start_BadPull_Recoverable(t *testing.T) {
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
 		Name:      "busybox-demo",
+		AllocID:   uuid.Generate(),
 		Resources: basicResources,
 	}
 	require.NoError(t, task.EncodeConcreteDriverConfig(&taskCfg))
@@ -560,6 +624,7 @@ func TestDockerDriver_Start_Wait_AllocDir(t *testing.T) {
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
 		Name:      "busybox-demo",
+		AllocID:   uuid.Generate(),
 		Resources: basicResources,
 	}
 	require.NoError(t, task.EncodeConcreteDriverConfig(&taskCfg))
@@ -609,6 +674,7 @@ func TestDockerDriver_Start_Kill_Wait(t *testing.T) {
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
 		Name:      "busybox-demo",
+		AllocID:   uuid.Generate(),
 		Resources: basicResources,
 	}
 	require.NoError(t, task.EncodeConcreteDriverConfig(&taskCfg))
@@ -661,6 +727,7 @@ func TestDockerDriver_Start_KillTimeout(t *testing.T) {
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
 		Name:      "busybox-demo",
+		AllocID:   uuid.Generate(),
 		Resources: basicResources,
 	}
 	require.NoError(t, task.EncodeConcreteDriverConfig(&taskCfg))
@@ -928,6 +995,10 @@ func TestDockerDriver_CreateContainerConfig(t *testing.T) {
 
 	require.Equal(t, "org/repo:0.1", c.Config.Image)
 	require.EqualValues(t, opt, c.HostConfig.StorageOpt)
+
+	// Container name should be /<task_name>-<alloc_id> for backward compat
+	containerName := fmt.Sprintf("%s-%s", strings.Replace(task.Name, "/", "_", -1), task.AllocID)
+	require.Equal(t, containerName, c.Name)
 }
 
 func TestDockerDriver_CreateContainerConfig_Logging(t *testing.T) {
@@ -1422,6 +1493,7 @@ func setupDockerVolumes(t *testing.T, cfg map[string]interface{}, hostpath strin
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
 		Name:      "ls",
+		AllocID:   uuid.Generate(),
 		Env:       map[string]string{"VOL_PATH": containerPath},
 		Resources: basicResources,
 	}
@@ -1732,6 +1804,7 @@ func TestDockerDriver_OOMKilled(t *testing.T) {
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
 		Name:      "oom-killed",
+		AllocID:   uuid.Generate(),
 		Resources: basicResources,
 	}
 	task.Resources.LinuxResources.MemoryLimitBytes = 10 * 1024 * 1024

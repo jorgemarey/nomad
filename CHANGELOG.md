@@ -1,7 +1,8 @@
-## 0.9.0 (Unreleased)
+## 0.9.0 (April 9, 2019)
 
 __BACKWARDS INCOMPATIBILITIES:__
 
+ * core: Drop support for CentOS/RHEL 6. glibc >= 2.14 is required.
  * core: Switch to structured logging using
    [go-hclog](https://github.com/hashicorp/go-hclog). If you have tooling that
    parses Nomad's logs, the format of logs has changed and your tools may need
