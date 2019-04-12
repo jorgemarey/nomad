@@ -226,12 +226,16 @@ type OmegaLoadError struct {
 type InvalidEntity struct {
 	Position int
 	Errors   []string
+	Error    []string
 }
 
 func (e *OmegaLoadError) Error() string {
 	ie := make([]string, 0)
 	for _, v := range e.InvalidEntities {
-		errors := strings.Join(v.Errors, " and ")
+		errors := strings.Join(v.Error, " and ")
+		if v.Errors != nil && len(v.Errors) > 0 {
+			errors = strings.Join(v.Errors, " and ")
+		}
 		ie = append(ie, fmt.Sprintf("<Item in position %d had the following errors: %s>", v.Position, errors))
 	}
 

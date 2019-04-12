@@ -113,7 +113,7 @@ func (h *logmonHook) Prestart(ctx context.Context,
 
 	}
 
-	err := h.logmon.Start(&logmon.LogConfig{
+	config := &logmon.LogConfig{
 		LogDir:        h.config.logDir,
 		StdoutLogFile: fmt.Sprintf("%s.stdout", req.Task.Name),
 		StderrLogFile: fmt.Sprintf("%s.stderr", req.Task.Name),
@@ -123,8 +123,12 @@ func (h *logmonHook) Prestart(ctx context.Context,
 		MaxFileSizeMB: req.Task.LogConfig.MaxFileSizeMB,
 		DriverName:    req.Task.LogConfig.Driver,
 		Config:        req.Task.LogConfig.Config,
-		Data:          req.TaskEnv.Map(),
-	})
+	}
+	if req.TaskEnv != nil {
+		config.Data = req.TaskEnv.Map()
+	}
+	err := h.logmon.Start(config)
+
 	if err != nil {
 		h.logger.Error("failed to start logmon", "error", err)
 		return err

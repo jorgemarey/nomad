@@ -80,6 +80,7 @@ func NewStateStore(config *StateStoreConfig) (*StateStore, error) {
 		abandonCh: make(chan struct{}),
 	}
 
+	// TODO-MEIGAS: maybe we should move this to nomad/server_setup_oss.go
 	// Initialize the state store with required enterprise objects
 	if err := s.enterpriseInit(); err != nil {
 		return nil, fmt.Errorf("enterprise state store initialization failed: %v", err)
