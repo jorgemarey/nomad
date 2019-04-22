@@ -1281,14 +1281,18 @@ func (n *nomadFSM) Restore(old io.ReadCloser) error {
 			var buf bytes.Buffer
 			tee := io.TeeReader(old, &buf)
 			dec.Reset(tee)
-			var caseReq struct{ Namespaces bool }
+			var caseReq struct{ Name bool }
 			if err := dec.Decode(&caseReq); err != nil {
-				dec.Reset(&buf)
 				// if decode fails this is an old request that must be forwarded to restoreNamespace
-				return restoreNamespace(restore, dec)
+				n.logger.Error("New SchedulerConfigSnapshot: Using namespaceRestore")
+				dec.Reset(io.MultiReader(&buf, old))
+				if err := restoreNamespace(restore, dec); err != nil {
+					return err
+				}
+				continue
 			}
 			// If the previous does not fail, we reset the buffer.
-			dec.Reset(&buf)
+			dec.Reset(io.MultiReader(&buf, old))
 			schedConfig := new(structs.SchedulerConfiguration)
 			if err := dec.Decode(schedConfig); err != nil {
 				return err
