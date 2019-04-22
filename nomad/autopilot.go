@@ -88,8 +88,25 @@ func (d *AutopilotDelegate) PromoteNonVoters(conf *autopilot.Config, health auto
 	if err := future.Error(); err != nil {
 		return nil, fmt.Errorf("failed to get raft configuration: %v", err)
 	}
+	servers := future.Configuration().Servers
 
-	return autopilot.PromoteStableServers(conf, health, future.Configuration().Servers), nil
+	// Find any non-voters eligible for promotion.
+	stable := autopilot.PromoteStableServers(conf, health, servers)
+
+	// Remove non voting servers
+	promoted := d.filterNonVoting(stable)
+
+	// if no servers to add just return now
+	if len(promoted) == 0 {
+		return promoted, nil
+	}
+
+	// Filter by zone
+	if conf.RedundancyZoneTag != "" {
+		promoted = d.filterZoneServers(promoted, servers)
+	}
+
+	return promoted, nil
 }
 
 func (d *AutopilotDelegate) Raft() *raft.Raft {
@@ -98,4 +115,56 @@ func (d *AutopilotDelegate) Raft() *raft.Raft {
 
 func (d *AutopilotDelegate) Serf() *serf.Serf {
 	return d.server.serf
+}
+
+func (d *AutopilotDelegate) filterNonVoting(stable []raft.Server) []raft.Server {
+	var promoted []raft.Server
+	for _, server := range stable {
+		part, ok := d.server.localPeers[server.Address]
+		if !ok || !part.NonVoter {
+			promoted = append(promoted, server)
+		}
+	}
+	return promoted
+}
+
+// zone returns the zone of a server and if it's ok
+func (d *AutopilotDelegate) zone(server raft.Server) (string, bool) {
+	var zone string
+	for _, member := range d.Serf().Members() {
+		if server.ID == raft.ServerID(member.Tags["id"]) {
+			return member.Tags[AutopilotRZTag], member.Status != serf.StatusFailed
+		}
+	}
+	return zone, true
+}
+
+func (d *AutopilotDelegate) filterZoneServers(initial []raft.Server, servers []raft.Server) []raft.Server {
+	zoneVoter := make(map[string]bool)
+	for _, server := range servers { // we set if there're a voter en every zone we know
+		if zone, ok := d.zone(server); zone != "" {
+			zoneVoter[zone] = zoneVoter[zone] || (autopilot.IsPotentialVoter(server.Suffrage) && ok)
+		}
+	}
+	promoted := make([]raft.Server, 0)
+	zones := make(map[string][]raft.Server)
+	for _, server := range initial {
+		zone, _ := d.zone(server)
+		if zone == "" { // If server has no zone we add it
+			promoted = append(promoted, server)
+		} else {
+			if zoneVoter[zone] {
+				continue
+			}
+			if _, ok := zones[zone]; !ok {
+				zones[zone] = make([]raft.Server, 0)
+			}
+			zones[zone] = append(zones[zone], server)
+		}
+	}
+	// We iterate over the zones that don't have any voter
+	for _, zs := range zones {
+		promoted = append(promoted, zs[0]) // we pick one, in this case the first
+	}
+	return promoted
 }
