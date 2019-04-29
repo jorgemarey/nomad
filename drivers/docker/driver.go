@@ -142,6 +142,7 @@ func (d *Driver) setupNewDockerLogger(container *docker.Container, cfg *drivers.
 	if err := dlogger.Start(&docklog.StartOpts{
 		Endpoint:    d.config.Endpoint,
 		ContainerID: container.ID,
+		TTY:         container.Config.Tty,
 		Stdout:      cfg.StdoutPath,
 		Stderr:      cfg.StderrPath,
 		TLSCert:     d.config.TLS.Cert,
@@ -601,9 +602,9 @@ func (d *Driver) containerBinds(task *drivers.TaskConfig, driverConfig *TaskConf
 	secretDirBind := fmt.Sprintf("%s:%s", task.TaskDir().SecretsDir, task.Env[taskenv.SecretsDir])
 	binds := []string{allocDirBind, taskLocalBind, secretDirBind}
 
-	localBindVolume := driverConfig.VolumeDriver == "" || driverConfig.VolumeDriver == "local"
+	taskLocalBindVolume := driverConfig.VolumeDriver == ""
 
-	if !d.config.Volumes.Enabled && !localBindVolume {
+	if !d.config.Volumes.Enabled && !taskLocalBindVolume {
 		return nil, fmt.Errorf("volumes are not enabled; cannot use volume driver %q", driverConfig.VolumeDriver)
 	}
 
@@ -613,15 +614,21 @@ func (d *Driver) containerBinds(task *drivers.TaskConfig, driverConfig *TaskConf
 			return nil, fmt.Errorf("invalid docker volume: %q", userbind)
 		}
 
-		// Paths inside task dir are always allowed, Relative paths are always allowed as they mount within a container
-		// When a VolumeDriver is set, we assume we receive a binding in the format volume-name:container-dest
-		// Otherwise, we assume we receive a relative path binding in the format relative/to/task:/also/in/container
-		if localBindVolume {
+		// Paths inside task dir are always allowed when using the default driver,
+		// Relative paths are always allowed as they mount within a container
+		// When a VolumeDriver is set, we assume we receive a binding in the format
+		// volume-name:container-dest
+		// Otherwise, we assume we receive a relative path binding in the format
+		// relative/to/task:/also/in/container
+		if taskLocalBindVolume {
 			parts[0] = expandPath(task.TaskDir().Dir, parts[0])
+		} else {
+			// Resolve dotted path segments
+			parts[0] = filepath.Clean(parts[0])
+		}
 
-			if !d.config.Volumes.Enabled && !isParentPath(task.AllocDir, parts[0]) {
-				return nil, fmt.Errorf("volumes are not enabled; cannot mount host paths: %+q", userbind)
-			}
+		if !d.config.Volumes.Enabled && !isParentPath(task.AllocDir, parts[0]) {
+			return nil, fmt.Errorf("volumes are not enabled; cannot mount host paths: %+q", userbind)
 		}
 
 		binds = append(binds, strings.Join(parts, ":"))
