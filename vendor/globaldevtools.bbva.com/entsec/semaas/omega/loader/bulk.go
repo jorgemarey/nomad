@@ -116,6 +116,9 @@ func Bulk(c OmegaClient, opts ...BulkLoadOption) (*Loader, error) {
 
 // Load adds an entry to be send to omega by the bulk loader
 func (l *Loader) Load(entry *api.LogEntry) error {
+	if entry.Message == "" {
+		return nil
+	}
 	if l.isClosed() {
 		return fmt.Errorf("Error: Can't load messages into a closed Loader")
 	}
