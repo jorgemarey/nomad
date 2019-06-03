@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/kr/pretty"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHTTP_JobsList(t *testing.T) {
@@ -796,6 +797,8 @@ func TestHTTP_JobDeployments(t *testing.T) {
 		state := s.Agent.server.State()
 		d := mock.Deployment()
 		d.JobID = j.ID
+		d.JobCreateIndex = resp.JobModifyIndex
+
 		assert.Nil(state.UpsertDeployment(1000, d), "UpsertDeployment")
 
 		// Make the HTTP request
@@ -838,6 +841,7 @@ func TestHTTP_JobDeployment(t *testing.T) {
 		state := s.Agent.server.State()
 		d := mock.Deployment()
 		d.JobID = j.ID
+		d.JobCreateIndex = resp.JobModifyIndex
 		assert.Nil(state.UpsertDeployment(1000, d), "UpsertDeployment")
 
 		// Make the HTTP request
@@ -1622,6 +1626,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 					HealthyDeadline:  5 * time.Minute,
 					ProgressDeadline: 5 * time.Minute,
 					AutoRevert:       true,
+					AutoPromote:      false,
 					Canary:           1,
 				},
 				Meta: map[string]string{
@@ -2037,4 +2042,120 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 	if diff := pretty.Diff(expectedSystemJob, systemStructsJob); len(diff) > 0 {
 		t.Fatalf("bad:\n%s", strings.Join(diff, "\n"))
 	}
+}
+
+func TestJobs_ApiJobToStructsJobUpdate(t *testing.T) {
+	apiJob := &api.Job{
+		Update: &api.UpdateStrategy{
+			Stagger:          helper.TimeToPtr(1 * time.Second),
+			MaxParallel:      helper.IntToPtr(5),
+			HealthCheck:      helper.StringToPtr(structs.UpdateStrategyHealthCheck_Manual),
+			MinHealthyTime:   helper.TimeToPtr(1 * time.Minute),
+			HealthyDeadline:  helper.TimeToPtr(3 * time.Minute),
+			ProgressDeadline: helper.TimeToPtr(3 * time.Minute),
+			AutoRevert:       helper.BoolToPtr(false),
+			AutoPromote:      nil,
+			Canary:           helper.IntToPtr(1),
+		},
+		TaskGroups: []*api.TaskGroup{
+			{
+				Update: &api.UpdateStrategy{
+					Canary:     helper.IntToPtr(2),
+					AutoRevert: helper.BoolToPtr(true),
+				},
+			}, {
+				Update: &api.UpdateStrategy{
+					Canary:      helper.IntToPtr(3),
+					AutoPromote: helper.BoolToPtr(true),
+				},
+			},
+		},
+	}
+
+	structsJob := ApiJobToStructJob(apiJob)
+
+	// Update has been moved from job down to the groups
+	jobUpdate := structs.UpdateStrategy{
+		Stagger:          1000000000,
+		MaxParallel:      5,
+		HealthCheck:      "",
+		MinHealthyTime:   0,
+		HealthyDeadline:  0,
+		ProgressDeadline: 0,
+		AutoRevert:       false,
+		AutoPromote:      false,
+		Canary:           0,
+	}
+
+	// But the groups inherit settings from the job update
+	group1 := structs.UpdateStrategy{
+		Stagger:          1000000000,
+		MaxParallel:      5,
+		HealthCheck:      "manual",
+		MinHealthyTime:   60000000000,
+		HealthyDeadline:  180000000000,
+		ProgressDeadline: 180000000000,
+		AutoRevert:       true,
+		AutoPromote:      false,
+		Canary:           2,
+	}
+
+	group2 := structs.UpdateStrategy{
+		Stagger:          1000000000,
+		MaxParallel:      5,
+		HealthCheck:      "manual",
+		MinHealthyTime:   60000000000,
+		HealthyDeadline:  180000000000,
+		ProgressDeadline: 180000000000,
+		AutoRevert:       false,
+		AutoPromote:      true,
+		Canary:           3,
+	}
+
+	require.Equal(t, jobUpdate, structsJob.Update)
+	require.Equal(t, group1, *structsJob.TaskGroups[0].Update)
+	require.Equal(t, group2, *structsJob.TaskGroups[1].Update)
+}
+
+// TestHTTP_JobValidate_SystemMigrate asserts that a system job with a migrate
+// stanza fails to validate but does not panic (see #5477).
+func TestHTTP_JobValidate_SystemMigrate(t *testing.T) {
+	t.Parallel()
+	httpTest(t, nil, func(s *TestAgent) {
+		// Create the job
+		job := &api.Job{
+			Region:      helper.StringToPtr("global"),
+			Datacenters: []string{"dc1"},
+			ID:          helper.StringToPtr("systemmigrate"),
+			Name:        helper.StringToPtr("systemmigrate"),
+			TaskGroups: []*api.TaskGroup{
+				{Name: helper.StringToPtr("web")},
+			},
+
+			// System job...
+			Type: helper.StringToPtr("system"),
+
+			// ...with an empty migrate stanza
+			Migrate: &api.MigrateStrategy{},
+		}
+
+		args := api.JobValidateRequest{
+			Job:          job,
+			WriteRequest: api.WriteRequest{Region: "global"},
+		}
+		buf := encodeReq(args)
+
+		// Make the HTTP request
+		req, err := http.NewRequest("PUT", "/v1/validate/job", buf)
+		require.NoError(t, err)
+		respW := httptest.NewRecorder()
+
+		// Make the request
+		obj, err := s.Server.ValidateJobRequest(respW, req)
+		require.NoError(t, err)
+
+		// Check the response
+		resp := obj.(structs.JobValidateResponse)
+		require.Contains(t, resp.Error, `Job type "system" does not allow migrate block`)
+	})
 }

@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	metrics "github.com/armon/go-metrics"
+	"github.com/armon/go-metrics"
 	consulapi "github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/lib"
-	hclog "github.com/hashicorp/go-hclog"
-	multierror "github.com/hashicorp/go-multierror"
+	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/nomad/client/allocdir"
 	"github.com/hashicorp/nomad/client/allocrunner"
 	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
@@ -44,6 +44,7 @@ import (
 	"github.com/hashicorp/nomad/nomad/structs"
 	nconfig "github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/nomad/plugins/device"
+	"github.com/hashicorp/nomad/plugins/drivers"
 	vaultapi "github.com/hashicorp/vault/api"
 	"github.com/shirou/gopsutil/host"
 )
@@ -128,7 +129,14 @@ type AllocRunner interface {
 	WaitCh() <-chan struct{}
 	DestroyCh() <-chan struct{}
 	ShutdownCh() <-chan struct{}
+	Signal(taskName, signal string) error
 	GetTaskEventHandler(taskName string) drivermanager.EventHandler
+
+	RestartTask(taskName string, taskEvent *structs.TaskEvent) error
+	RestartAll(taskEvent *structs.TaskEvent) error
+
+	GetTaskExecHandler(taskName string) drivermanager.TaskExecHandler
+	GetTaskDriverCapabilities(taskName string) (*drivers.Capabilities, error)
 }
 
 // Client is used to implement the client interaction with Nomad. Clients
@@ -189,7 +197,8 @@ type Client struct {
 	// invalidAllocs is a map that tracks allocations that failed because
 	// the client couldn't initialize alloc or task runners for it. This can
 	// happen due to driver errors
-	invalidAllocs map[string]struct{}
+	invalidAllocs     map[string]struct{}
+	invalidAllocsLock sync.Mutex
 
 	// allocUpdates stores allocations that need to be synced to the server.
 	allocUpdates chan *structs.Allocation
@@ -251,6 +260,11 @@ type Client struct {
 	// fpInitialized chan is closed when the first batch of fingerprints are
 	// applied to the node and the server is updated
 	fpInitialized chan struct{}
+
+	// serversContactedCh is closed when GetClientAllocs and runAllocs have
+	// successfully run once.
+	serversContactedCh   chan struct{}
+	serversContactedOnce sync.Once
 }
 
 var (
@@ -301,6 +315,8 @@ func NewClient(cfg *config.Config, consulCatalog consul.CatalogAPI, consulServic
 		triggerEmitNodeEvent: make(chan *structs.NodeEvent, 8),
 		fpInitialized:        make(chan struct{}),
 		invalidAllocs:        make(map[string]struct{}),
+		serversContactedCh:   make(chan struct{}),
+		serversContactedOnce: sync.Once{},
 	}
 
 	c.batchNodeUpdates = newBatchNodeUpdates(
@@ -310,6 +326,9 @@ func NewClient(cfg *config.Config, consulCatalog consul.CatalogAPI, consulServic
 
 	// Initialize the server manager
 	c.servers = servers.New(c.logger, c.shutdownCh, c)
+
+	// Start server manager rebalancing go routine
+	go c.servers.Start()
 
 	// Initialize the client
 	if err := c.init(); err != nil {
@@ -428,6 +447,9 @@ func NewClient(cfg *config.Config, consulCatalog consul.CatalogAPI, consulServic
 		logger.Warn("batch fingerprint operation timed out; proceeding to register with fingerprinted plugins so far")
 	}
 
+	// Register and then start heartbeating to the servers.
+	c.shutdownGroup.Go(c.registerAndHeartbeat)
+
 	// Restore the state
 	if err := c.restoreState(); err != nil {
 		logger.Error("failed to restore state", "error", err)
@@ -441,9 +463,6 @@ func NewClient(cfg *config.Config, consulCatalog consul.CatalogAPI, consulServic
 			"https://github.com/hashicorp/nomad/issues")
 		return nil, fmt.Errorf("failed to restore state")
 	}
-
-	// Register and then start heartbeating to the servers.
-	c.shutdownGroup.Go(c.registerAndHeartbeat)
 
 	// Begin periodic snapshotting of state.
 	c.shutdownGroup.Go(c.periodicSnapshot)
@@ -703,6 +722,18 @@ func (c *Client) Stats() map[string]map[string]string {
 	return stats
 }
 
+// SignalAllocation sends a signal to the tasks within an allocation.
+// If the provided task is empty, then every allocation will be signalled.
+// If a task is provided, then only an exactly matching task will be signalled.
+func (c *Client) SignalAllocation(allocID, task, signal string) error {
+	ar, err := c.getAllocRunner(allocID)
+	if err != nil {
+		return err
+	}
+
+	return ar.Signal(task, signal)
+}
+
 // CollectAllocation garbage collects a single allocation on a node. Returns
 // true if alloc was found and garbage collected; otherwise false.
 func (c *Client) CollectAllocation(allocID string) bool {
@@ -713,6 +744,22 @@ func (c *Client) CollectAllocation(allocID string) bool {
 // state
 func (c *Client) CollectAllAllocs() {
 	c.garbageCollector.CollectAll()
+}
+
+func (c *Client) RestartAllocation(allocID, taskName string) error {
+	ar, err := c.getAllocRunner(allocID)
+	if err != nil {
+		return err
+	}
+
+	event := structs.NewTaskEvent(structs.TaskRestartSignal).
+		SetRestartReason("User requested restart")
+
+	if taskName != "" {
+		return ar.RestartTask(taskName, event)
+	}
+
+	return ar.RestartAll(event)
 }
 
 // Node returns the locally registered node
@@ -970,6 +1017,7 @@ func (c *Client) restoreState() error {
 			PrevAllocMigrator:   prevAllocMigrator,
 			DeviceManager:       c.devicemanager,
 			DriverManager:       c.drivermanager,
+			ServersContactedCh:  c.serversContactedCh,
 		}
 		c.configLock.RUnlock()
 
@@ -1006,7 +1054,10 @@ func (c *Client) restoreState() error {
 }
 
 func (c *Client) handleInvalidAllocs(alloc *structs.Allocation, err error) {
+	c.invalidAllocsLock.Lock()
 	c.invalidAllocs[alloc.ID] = struct{}{}
+	c.invalidAllocsLock.Unlock()
+
 	// Mark alloc as failed so server can handle this
 	failed := makeFailedAlloc(alloc, err)
 	select {
@@ -1220,14 +1271,30 @@ func (c *Client) updateNodeFromFingerprint(response *fingerprint.FingerprintResp
 	}
 
 	// COMPAT(0.10): Remove in 0.10
-	if response.Resources != nil && !resourcesAreEqual(c.config.Node.Resources, response.Resources) {
-		nodeHasChanged = true
-		c.config.Node.Resources.Merge(response.Resources)
+	// update the response networks with the config
+	// if we still have node changes, merge them
+	if response.Resources != nil {
+		response.Resources.Networks = updateNetworks(
+			c.config.Node.Resources.Networks,
+			response.Resources.Networks,
+			c.config)
+		if !c.config.Node.Resources.Equals(response.Resources) {
+			c.config.Node.Resources.Merge(response.Resources)
+			nodeHasChanged = true
+		}
 	}
 
-	if response.NodeResources != nil && !c.config.Node.NodeResources.Equals(response.NodeResources) {
-		nodeHasChanged = true
-		c.config.Node.NodeResources.Merge(response.NodeResources)
+	// update the response networks with the config
+	// if we still have node changes, merge them
+	if response.NodeResources != nil {
+		response.NodeResources.Networks = updateNetworks(
+			c.config.Node.NodeResources.Networks,
+			response.NodeResources.Networks,
+			c.config)
+		if !c.config.Node.NodeResources.Equals(response.NodeResources) {
+			c.config.Node.NodeResources.Merge(response.NodeResources)
+			nodeHasChanged = true
+		}
 	}
 
 	if nodeHasChanged {
@@ -1237,32 +1304,33 @@ func (c *Client) updateNodeFromFingerprint(response *fingerprint.FingerprintResp
 	return c.configCopy.Node
 }
 
-// resourcesAreEqual is a temporary function to compare whether resources are
-// equal. We can use this until we change fingerprinters to set pointers on a
-// return type.
-func resourcesAreEqual(first, second *structs.Resources) bool {
-	if first.CPU != second.CPU {
-		return false
-	}
-	if first.MemoryMB != second.MemoryMB {
-		return false
-	}
-	if first.DiskMB != second.DiskMB {
-		return false
-	}
-	if len(first.Networks) != len(second.Networks) {
-		return false
-	}
-	for i, e := range first.Networks {
-		if len(second.Networks) < i {
-			return false
+// updateNetworks preserves manually configured network options, but
+// applies fingerprint updates
+func updateNetworks(ns structs.Networks, up structs.Networks, c *config.Config) structs.Networks {
+	if c.NetworkInterface == "" {
+		ns = up
+	} else {
+		// If a network device is configured, filter up to contain details for only
+		// that device
+		upd := []*structs.NetworkResource{}
+		for _, n := range up {
+			if c.NetworkInterface == n.Device {
+				upd = append(upd, n)
+			}
 		}
-		f := second.Networks[i]
-		if !e.Equals(f) {
-			return false
+		// If updates, use them. Otherwise, ns contains the configured interfaces
+		if len(upd) > 0 {
+			ns = upd
 		}
 	}
-	return true
+
+	// ns is set, apply the config NetworkSpeed to all
+	if c.NetworkSpeed != 0 {
+		for _, n := range ns {
+			n.MBits = c.NetworkSpeed
+		}
+	}
+	return ns
 }
 
 // retryIntv calculates a retry interval value given the base
@@ -1302,7 +1370,6 @@ func (c *Client) registerAndHeartbeat() {
 		case <-c.shutdownCh:
 			return
 		}
-
 		if err := c.updateNodeStatus(); err != nil {
 			// The servers have changed such that this node has not been
 			// registered before
@@ -1594,7 +1661,7 @@ func (c *Client) updateNodeStatus() error {
 			c.logger.Warn("ignoring invalid server", "error", err, "server", s.RPCAdvertiseAddr)
 			continue
 		}
-		e := &servers.Server{DC: s.Datacenter, Addr: addr}
+		e := &servers.Server{Addr: addr}
 		nomadServers = append(nomadServers, e)
 	}
 	if len(nomadServers) == 0 {
@@ -1796,7 +1863,9 @@ OUTER:
 			c.allocLock.RUnlock()
 
 			// Ignore alloc updates for allocs that are invalid because of initialization errors
+			c.invalidAllocsLock.Lock()
 			_, isInvalid := c.invalidAllocs[allocID]
+			c.invalidAllocsLock.Unlock()
 
 			if (!ok || modifyIndex > currentAR.Alloc().AllocModifyIndex) && !isInvalid {
 				// Only pull allocs that are required. Filtered
@@ -1975,6 +2044,12 @@ func (c *Client) runAllocs(update *allocUpdates) {
 		}
 	}
 
+	// Mark servers as having been contacted so blocked tasks that failed
+	// to restore can now restart.
+	c.serversContactedOnce.Do(func() {
+		close(c.serversContactedCh)
+	})
+
 	// Trigger the GC once more now that new allocs are started that could
 	// have caused thresholds to be exceeded
 	c.garbageCollector.Trigger()
@@ -2035,6 +2110,7 @@ func (c *Client) removeAlloc(allocID string) {
 
 	ar, ok := c.allocs[allocID]
 	if !ok {
+		c.invalidAllocsLock.Lock()
 		if _, ok := c.invalidAllocs[allocID]; ok {
 			// Removing from invalid allocs map if present
 			delete(c.invalidAllocs, allocID)
@@ -2042,6 +2118,7 @@ func (c *Client) removeAlloc(allocID string) {
 			// Alloc is unknown, log a warning.
 			c.logger.Warn("cannot remove nonexistent alloc", "alloc_id", allocID, "error", "alloc not found")
 		}
+		c.invalidAllocsLock.Unlock()
 		return
 	}
 
@@ -2298,13 +2375,6 @@ func (c *Client) consulDiscovery() {
 
 func (c *Client) consulDiscoveryImpl() error {
 	consulLogger := c.logger.Named("consul")
-
-	// Acquire heartbeat lock to prevent heartbeat from running
-	// concurrently with discovery. Concurrent execution is safe, however
-	// discovery is usually triggered when heartbeating has failed so
-	// there's no point in allowing it.
-	c.heartbeatLock.Lock()
-	defer c.heartbeatLock.Unlock()
 
 	dcs, err := c.consulCatalog.Datacenters()
 	if err != nil {
@@ -2666,11 +2736,11 @@ func (c *Client) getAllocatedResources(selfNode *structs.Node) *structs.Comparab
 	}
 
 	// Sum the allocated resources
-	allocs := c.allAllocs()
 	var allocated structs.ComparableResources
 	allocatedDeviceMbits := make(map[string]int)
-	for _, alloc := range allocs {
-		if alloc.TerminalStatus() {
+	for _, ar := range c.getAllocRunners() {
+		alloc := ar.Alloc()
+		if alloc.ServerTerminalStatus() || ar.AllocState().ClientTerminalStatus() {
 			continue
 		}
 
@@ -2715,17 +2785,6 @@ func (c *Client) getAllocatedResources(selfNode *structs.Node) *structs.Comparab
 	}
 
 	return &allocated
-}
-
-// allAllocs returns all the allocations managed by the client
-func (c *Client) allAllocs() map[string]*structs.Allocation {
-	ars := c.getAllocRunners()
-	allocs := make(map[string]*structs.Allocation, len(ars))
-	for _, ar := range ars {
-		a := ar.Alloc()
-		allocs[a.ID] = a
-	}
-	return allocs
 }
 
 // GetTaskEventHandler returns an event handler for the given allocID and task name

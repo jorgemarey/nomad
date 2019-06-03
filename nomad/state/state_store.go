@@ -108,6 +108,61 @@ func (s *StateStore) Snapshot() (*StateSnapshot, error) {
 	return snap, nil
 }
 
+// SnapshotAfter is used to create a point in time snapshot where the index is
+// guaranteed to be greater than or equal to the index parameter.
+//
+// Some server operations (such as scheduling) exchange objects via RPC
+// concurrent with Raft log application, so they must ensure the state store
+// snapshot they are operating on is at or after the index the objects
+// retrieved via RPC were applied to the Raft log at.
+//
+// Callers should maintain their own timer metric as the time this method
+// blocks indicates Raft log application latency relative to scheduling.
+func (s *StateStore) SnapshotAfter(ctx context.Context, index uint64) (*StateSnapshot, error) {
+	// Ported from work.go:waitForIndex prior to 0.9
+
+	const backoffBase = 20 * time.Millisecond
+	const backoffLimit = 1 * time.Second
+	var retries uint
+	var retryTimer *time.Timer
+
+	// XXX: Potential optimization is to set up a watch on the state
+	// store's index table and only unblock via a trigger rather than
+	// polling.
+	for {
+		// Get the states current index
+		snapshotIndex, err := s.LatestIndex()
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine state store's index: %v", err)
+		}
+
+		// We only need the FSM state to be as recent as the given index
+		if snapshotIndex >= index {
+			return s.Snapshot()
+		}
+
+		// Exponential back off
+		retries++
+		if retryTimer == nil {
+			// First retry, start at baseline
+			retryTimer = time.NewTimer(backoffBase)
+		} else {
+			// Subsequent retry, reset timer
+			deadline := 1 << (2 * retries) * backoffBase
+			if deadline > backoffLimit {
+				deadline = backoffLimit
+			}
+			retryTimer.Reset(deadline)
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-retryTimer.C:
+		}
+	}
+}
+
 // Restore is used to optimize the efficiency of rebuilding
 // state by minimizing the number of transactions and checking
 // overhead.
@@ -177,6 +232,27 @@ RUN_QUERY:
 
 // UpsertPlanResults is used to upsert the results of a plan.
 func (s *StateStore) UpsertPlanResults(index uint64, results *structs.ApplyPlanResultsRequest) error {
+	snapshot, err := s.Snapshot()
+	if err != nil {
+		return err
+	}
+
+	allocsStopped, err := snapshot.DenormalizeAllocationDiffSlice(results.AllocsStopped, results.Job)
+	if err != nil {
+		return err
+	}
+
+	allocsPreempted, err := snapshot.DenormalizeAllocationDiffSlice(results.AllocsPreempted, results.Job)
+	if err != nil {
+		return err
+	}
+
+	// COMPAT 0.11: Remove this denormalization when NodePreemptions is removed
+	results.NodePreemptions, err = snapshot.DenormalizeAllocationSlice(results.NodePreemptions, results.Job)
+	if err != nil {
+		return err
+	}
+
 	txn := s.db.Txn(true)
 	defer txn.Abort()
 
@@ -192,34 +268,6 @@ func (s *StateStore) UpsertPlanResults(index uint64, results *structs.ApplyPlanR
 		s.upsertDeploymentUpdates(index, results.DeploymentUpdates, txn)
 	}
 
-	// Attach the job to all the allocations. It is pulled out in the payload to
-	// avoid the redundancy of encoding, but should be denormalized prior to
-	// being inserted into MemDB.
-	structs.DenormalizeAllocationJobs(results.Job, results.Alloc)
-
-	// COMPAT(0.11): Remove in 0.11
-	// Calculate the total resources of allocations. It is pulled out in the
-	// payload to avoid encoding something that can be computed, but should be
-	// denormalized prior to being inserted into MemDB.
-	for _, alloc := range results.Alloc {
-		if alloc.Resources != nil {
-			continue
-		}
-
-		alloc.Resources = new(structs.Resources)
-		for _, task := range alloc.TaskResources {
-			alloc.Resources.Add(task)
-		}
-
-		// Add the shared resources
-		alloc.Resources.Add(alloc.SharedResources)
-	}
-
-	// Upsert the allocations
-	if err := s.upsertAllocsImpl(index, results.Alloc, txn); err != nil {
-		return err
-	}
-
 	// COMPAT: Nomad versions before 0.7.1 did not include the eval ID when
 	// applying the plan. Thus while we are upgrading, we ignore updating the
 	// modify index of evaluations from older plans.
@@ -230,35 +278,33 @@ func (s *StateStore) UpsertPlanResults(index uint64, results *structs.ApplyPlanR
 		}
 	}
 
-	// Prepare preempted allocs in the plan results for update
-	var preemptedAllocs []*structs.Allocation
-	for _, preemptedAlloc := range results.NodePreemptions {
-		// Look for existing alloc
-		existing, err := txn.First("allocs", "id", preemptedAlloc.ID)
-		if err != nil {
-			return fmt.Errorf("alloc lookup failed: %v", err)
-		}
-
-		// Nothing to do if this does not exist
-		if existing == nil {
-			continue
-		}
-		exist := existing.(*structs.Allocation)
-
-		// Copy everything from the existing allocation
-		copyAlloc := exist.Copy()
-
-		// Only update the fields set by the scheduler
-		copyAlloc.DesiredStatus = preemptedAlloc.DesiredStatus
-		copyAlloc.PreemptedByAllocation = preemptedAlloc.PreemptedByAllocation
-		copyAlloc.DesiredDescription = preemptedAlloc.DesiredDescription
-		copyAlloc.ModifyTime = preemptedAlloc.ModifyTime
-		preemptedAllocs = append(preemptedAllocs, copyAlloc)
-
+	numAllocs := 0
+	if len(results.Alloc) > 0 || len(results.NodePreemptions) > 0 {
+		// COMPAT 0.11: This branch will be removed, when Alloc is removed
+		// Attach the job to all the allocations. It is pulled out in the payload to
+		// avoid the redundancy of encoding, but should be denormalized prior to
+		// being inserted into MemDB.
+		addComputedAllocAttrs(results.Alloc, results.Job)
+		numAllocs = len(results.Alloc) + len(results.NodePreemptions)
+	} else {
+		// Attach the job to all the allocations. It is pulled out in the payload to
+		// avoid the redundancy of encoding, but should be denormalized prior to
+		// being inserted into MemDB.
+		addComputedAllocAttrs(results.AllocsUpdated, results.Job)
+		numAllocs = len(allocsStopped) + len(results.AllocsUpdated) + len(allocsPreempted)
 	}
 
-	// Upsert the preempted allocations
-	if err := s.upsertAllocsImpl(index, preemptedAllocs, txn); err != nil {
+	allocsToUpsert := make([]*structs.Allocation, 0, numAllocs)
+
+	// COMPAT 0.11: Both these appends should be removed when Alloc and NodePreemptions are removed
+	allocsToUpsert = append(allocsToUpsert, results.Alloc...)
+	allocsToUpsert = append(allocsToUpsert, results.NodePreemptions...)
+
+	allocsToUpsert = append(allocsToUpsert, allocsStopped...)
+	allocsToUpsert = append(allocsToUpsert, results.AllocsUpdated...)
+	allocsToUpsert = append(allocsToUpsert, allocsPreempted...)
+
+	if err := s.upsertAllocsImpl(index, allocsToUpsert, txn); err != nil {
 		return err
 	}
 
@@ -271,6 +317,30 @@ func (s *StateStore) UpsertPlanResults(index uint64, results *structs.ApplyPlanR
 
 	txn.Commit()
 	return nil
+}
+
+// addComputedAllocAttrs adds the computed/derived attributes to the allocation.
+// This method is used when an allocation is being denormalized.
+func addComputedAllocAttrs(allocs []*structs.Allocation, job *structs.Job) {
+	structs.DenormalizeAllocationJobs(job, allocs)
+
+	// COMPAT(0.11): Remove in 0.11
+	// Calculate the total resources of allocations. It is pulled out in the
+	// payload to avoid encoding something that can be computed, but should be
+	// denormalized prior to being inserted into MemDB.
+	for _, alloc := range allocs {
+		if alloc.Resources != nil {
+			continue
+		}
+
+		alloc.Resources = new(structs.Resources)
+		for _, task := range alloc.TaskResources {
+			alloc.Resources.Add(task)
+		}
+
+		// Add the shared resources
+		alloc.Resources.Add(alloc.SharedResources)
+	}
 }
 
 // upsertDeploymentUpdates updates the deployments given the passed status
@@ -473,12 +543,22 @@ func (s *StateStore) deploymentByIDImpl(ws memdb.WatchSet, deploymentID string, 
 	return nil, nil
 }
 
-func (s *StateStore) DeploymentsByJobID(ws memdb.WatchSet, namespace, jobID string) ([]*structs.Deployment, error) {
+func (s *StateStore) DeploymentsByJobID(ws memdb.WatchSet, namespace, jobID string, all bool) ([]*structs.Deployment, error) {
 	txn := s.db.Txn(false)
 
 	// COMPAT 0.7: Upgrade old objects that do not have namespaces
 	if namespace == "" {
 		namespace = structs.DefaultNamespace
+	}
+
+	var job *structs.Job
+	// Read job from state store
+	_, existing, err := txn.FirstWatch("jobs", "id", namespace, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("job lookup failed: %v", err)
+	}
+	if existing != nil {
+		job = existing.(*structs.Job)
 	}
 
 	// Get an iterator over the deployments
@@ -495,8 +575,14 @@ func (s *StateStore) DeploymentsByJobID(ws memdb.WatchSet, namespace, jobID stri
 		if raw == nil {
 			break
 		}
-
 		d := raw.(*structs.Deployment)
+
+		// If the allocation belongs to a job with the same ID but a different
+		// create index and we are not getting all the allocations whose Jobs
+		// matches the same Job ID then we skip it
+		if !all && job != nil && d.JobCreateIndex != job.CreateIndex {
+			continue
+		}
 		out = append(out, d)
 	}
 
@@ -2863,7 +2949,7 @@ func (s *StateStore) UpdateDeploymentPromotion(index uint64, req *structs.ApplyD
 		}
 	}
 
-	// For each promotable allocation remoce the canary field
+	// For each promotable allocation remove the canary field
 	for _, alloc := range promotable {
 		promoted := alloc.Copy()
 		promoted.DeploymentStatus.Canary = false
@@ -4105,6 +4191,84 @@ func (s *StateStore) schedulerSetConfigTxn(idx uint64, tx *memdb.Txn, config *st
 // StateSnapshot is used to provide a point-in-time snapshot
 type StateSnapshot struct {
 	StateStore
+}
+
+// DenormalizeAllocationsMap takes in a map of nodes to allocations, and queries the
+// Allocation for each of the Allocation diffs and merges the updated attributes with
+// the existing Allocation, and attaches the Job provided
+func (s *StateSnapshot) DenormalizeAllocationsMap(nodeAllocations map[string][]*structs.Allocation, job *structs.Job) error {
+	for nodeID, allocs := range nodeAllocations {
+		denormalizedAllocs, err := s.DenormalizeAllocationSlice(allocs, job)
+		if err != nil {
+			return err
+		}
+
+		nodeAllocations[nodeID] = denormalizedAllocs
+	}
+	return nil
+}
+
+// DenormalizeAllocationSlice queries the Allocation for each allocation diff
+// represented as an Allocation and merges the updated attributes with the existing
+// Allocation, and attaches the Job provided.
+func (s *StateSnapshot) DenormalizeAllocationSlice(allocs []*structs.Allocation, job *structs.Job) ([]*structs.Allocation, error) {
+	allocDiffs := make([]*structs.AllocationDiff, len(allocs))
+	for i, alloc := range allocs {
+		allocDiffs[i] = alloc.AllocationDiff()
+	}
+
+	return s.DenormalizeAllocationDiffSlice(allocDiffs, job)
+}
+
+// DenormalizeAllocationDiffSlice queries the Allocation for each AllocationDiff and merges
+// the updated attributes with the existing Allocation, and attaches the Job provided
+func (s *StateSnapshot) DenormalizeAllocationDiffSlice(allocDiffs []*structs.AllocationDiff, planJob *structs.Job) ([]*structs.Allocation, error) {
+	// Output index for denormalized Allocations
+	j := 0
+
+	denormalizedAllocs := make([]*structs.Allocation, len(allocDiffs))
+	for _, allocDiff := range allocDiffs {
+		alloc, err := s.AllocByID(nil, allocDiff.ID)
+		if err != nil {
+			return nil, fmt.Errorf("alloc lookup failed: %v", err)
+		}
+		if alloc == nil {
+			return nil, fmt.Errorf("alloc %v doesn't exist", allocDiff.ID)
+		}
+
+		// Merge the updates to the Allocation
+		allocCopy := alloc.CopySkipJob()
+
+		if allocDiff.PreemptedByAllocation != "" {
+			// If alloc is a preemption set the job from the alloc read from the state store
+			allocCopy.Job = alloc.Job.Copy()
+			allocCopy.PreemptedByAllocation = allocDiff.PreemptedByAllocation
+			allocCopy.DesiredDescription = getPreemptedAllocDesiredDescription(allocDiff.PreemptedByAllocation)
+			allocCopy.DesiredStatus = structs.AllocDesiredStatusEvict
+		} else {
+			// If alloc is a stopped alloc
+			allocCopy.Job = planJob
+			allocCopy.DesiredDescription = allocDiff.DesiredDescription
+			allocCopy.DesiredStatus = structs.AllocDesiredStatusStop
+			if allocDiff.ClientStatus != "" {
+				allocCopy.ClientStatus = allocDiff.ClientStatus
+			}
+		}
+		if allocDiff.ModifyTime != 0 {
+			allocCopy.ModifyTime = allocDiff.ModifyTime
+		}
+
+		// Update the allocDiff in the slice to equal the denormalized alloc
+		denormalizedAllocs[j] = allocCopy
+		j++
+	}
+	// Retain only the denormalized Allocations in the slice
+	denormalizedAllocs = denormalizedAllocs[:j]
+	return denormalizedAllocs, nil
+}
+
+func getPreemptedAllocDesiredDescription(PreemptedByAllocID string) string {
+	return fmt.Sprintf("Preempted by alloc ID %v", PreemptedByAllocID)
 }
 
 // StateRestore is used to optimize the performance when

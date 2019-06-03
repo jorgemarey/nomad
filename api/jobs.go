@@ -179,9 +179,17 @@ func (j *Jobs) Allocations(jobID string, allAllocs bool, q *QueryOptions) ([]*Al
 
 // Deployments is used to query the deployments associated with the given job
 // ID.
-func (j *Jobs) Deployments(jobID string, q *QueryOptions) ([]*Deployment, *QueryMeta, error) {
+func (j *Jobs) Deployments(jobID string, all bool, q *QueryOptions) ([]*Deployment, *QueryMeta, error) {
 	var resp []*Deployment
-	qm, err := j.client.query("/v1/job/"+jobID+"/deployments", &resp, q)
+	u, err := url.Parse("/v1/job/" + jobID + "/deployments")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	v := u.Query()
+	v.Add("all", strconv.FormatBool(all))
+	u.RawQuery = v.Encode()
+	qm, err := j.client.query(u.String(), &resp, q)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -321,13 +329,14 @@ func (j *Jobs) Dispatch(jobID string, meta map[string]string,
 // enforceVersion is set, the job is only reverted if the current version is at
 // the passed version.
 func (j *Jobs) Revert(jobID string, version uint64, enforcePriorVersion *uint64,
-	q *WriteOptions) (*JobRegisterResponse, *WriteMeta, error) {
+	q *WriteOptions, vaultToken string) (*JobRegisterResponse, *WriteMeta, error) {
 
 	var resp JobRegisterResponse
 	req := &JobRevertRequest{
 		JobID:               jobID,
 		JobVersion:          version,
 		EnforcePriorVersion: enforcePriorVersion,
+		VaultToken:          vaultToken,
 	}
 	wm, err := j.client.write("/v1/job/"+jobID+"/revert", req, &resp, q)
 	if err != nil {
@@ -366,13 +375,15 @@ type UpdateStrategy struct {
 	MinHealthyTime   *time.Duration `mapstructure:"min_healthy_time"`
 	HealthyDeadline  *time.Duration `mapstructure:"healthy_deadline"`
 	ProgressDeadline *time.Duration `mapstructure:"progress_deadline"`
-	AutoRevert       *bool          `mapstructure:"auto_revert"`
 	Canary           *int           `mapstructure:"canary"`
+	AutoRevert       *bool          `mapstructure:"auto_revert"`
+	AutoPromote      *bool          `mapstructure:"auto_promote"`
 }
 
 // DefaultUpdateStrategy provides a baseline that can be used to upgrade
 // jobs with the old policy or for populating field defaults.
 func DefaultUpdateStrategy() *UpdateStrategy {
+	// boolPtr fields are omitted to avoid masking an unconfigured nil
 	return &UpdateStrategy{
 		Stagger:          timeToPtr(30 * time.Second),
 		MaxParallel:      intToPtr(1),
@@ -424,6 +435,10 @@ func (u *UpdateStrategy) Copy() *UpdateStrategy {
 		copy.Canary = intToPtr(*u.Canary)
 	}
 
+	if u.AutoPromote != nil {
+		copy.AutoPromote = boolToPtr(*u.AutoPromote)
+	}
+
 	return copy
 }
 
@@ -463,10 +478,16 @@ func (u *UpdateStrategy) Merge(o *UpdateStrategy) {
 	if o.Canary != nil {
 		u.Canary = intToPtr(*o.Canary)
 	}
+
+	if o.AutoPromote != nil {
+		u.AutoPromote = boolToPtr(*o.AutoPromote)
+	}
 }
 
 func (u *UpdateStrategy) Canonicalize() {
 	d := DefaultUpdateStrategy()
+
+	// boolPtr fields are omitted to avoid masking an unconfigured nil
 
 	if u.MaxParallel == nil {
 		u.MaxParallel = d.MaxParallel
@@ -929,6 +950,12 @@ type JobRevertRequest struct {
 	// EnforcePriorVersion if set will enforce that the job is at the given
 	// version before reverting.
 	EnforcePriorVersion *uint64
+
+	// VaultToken is the Vault token that proves the submitter of the job revert
+	// has access to any Vault policies specified in the targeted job version. This
+	// field is only used to authorize the revert and is not stored after the Job
+	// revert.
+	VaultToken string `json:",omitempty"`
 
 	WriteRequest
 }

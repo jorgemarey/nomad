@@ -8,6 +8,7 @@ import (
 	"time"
 
 	log "github.com/hashicorp/go-hclog"
+	multierror "github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/nomad/client/allocdir"
 	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
 	"github.com/hashicorp/nomad/client/allocrunner/state"
@@ -135,6 +136,11 @@ type allocRunner struct {
 	// driverManager is responsible for dispensing driver plugins and registering
 	// event handlers
 	driverManager drivermanager.Manager
+
+	// serversContactedCh is passed to TaskRunners so they can detect when
+	// servers have been contacted for the first time in case of a failed
+	// restore.
+	serversContactedCh chan struct{}
 }
 
 // NewAllocRunner returns a new allocation runner.
@@ -166,6 +172,7 @@ func NewAllocRunner(config *Config) (*allocRunner, error) {
 		prevAllocMigrator:        config.PrevAllocMigrator,
 		devicemanager:            config.DeviceManager,
 		driverManager:            config.DriverManager,
+		serversContactedCh:       config.ServersContactedCh,
 	}
 
 	// Create the logger based on the allocation ID
@@ -204,6 +211,7 @@ func (ar *allocRunner) initTaskRunners(tasks []*structs.Task) error {
 			DeviceStatsReporter: ar.deviceStatsReporter,
 			DeviceManager:       ar.devicemanager,
 			DriverManager:       ar.driverManager,
+			ServersContactedCh:  ar.serversContactedCh,
 		}
 
 		// Create, but do not Run, the task runner
@@ -550,10 +558,11 @@ func (ar *allocRunner) clientAlloc(taskStates map[string]*structs.TaskState) *st
 	if a.ClientTerminalStatus() {
 		alloc := ar.Alloc()
 
-		// If we are part of a deployment and the task has failed, mark the
+		// If we are part of a deployment and the alloc has failed, mark the
 		// alloc as unhealthy. This guards against the watcher not be started.
+		// If the health status is already set then terminal allocations should not
 		if a.ClientStatus == structs.AllocClientStatusFailed &&
-			alloc.DeploymentID != "" && !a.DeploymentStatus.IsUnhealthy() {
+			alloc.DeploymentID != "" && !a.DeploymentStatus.HasHealth() {
 			a.DeploymentStatus = &structs.AllocDeploymentStatus{
 				Healthy: helper.BoolToPtr(false),
 			}
@@ -935,4 +944,74 @@ func (ar *allocRunner) GetTaskEventHandler(taskName string) drivermanager.EventH
 		}
 	}
 	return nil
+}
+
+// RestartTask signalls the task runner for the  provided task to restart.
+func (ar *allocRunner) RestartTask(taskName string, taskEvent *structs.TaskEvent) error {
+	tr, ok := ar.tasks[taskName]
+	if !ok {
+		return fmt.Errorf("Could not find task runner for task: %s", taskName)
+	}
+
+	return tr.Restart(context.TODO(), taskEvent, false)
+}
+
+// RestartAll signalls all task runners in the allocation to restart and passes
+// a copy of the task event to each restart event.
+// Returns any errors in a concatenated form.
+func (ar *allocRunner) RestartAll(taskEvent *structs.TaskEvent) error {
+	var err *multierror.Error
+
+	for tn := range ar.tasks {
+		rerr := ar.RestartTask(tn, taskEvent.Copy())
+		if rerr != nil {
+			err = multierror.Append(err, rerr)
+		}
+	}
+
+	return err.ErrorOrNil()
+}
+
+// Signal sends a signal request to task runners inside an allocation. If the
+// taskName is empty, then it is sent to all tasks.
+func (ar *allocRunner) Signal(taskName, signal string) error {
+	event := structs.NewTaskEvent(structs.TaskSignaling).SetSignalText(signal)
+
+	if taskName != "" {
+		tr, ok := ar.tasks[taskName]
+		if !ok {
+			return fmt.Errorf("Task not found")
+		}
+
+		return tr.Signal(event, signal)
+	}
+
+	var err *multierror.Error
+
+	for tn, tr := range ar.tasks {
+		rerr := tr.Signal(event.Copy(), signal)
+		if rerr != nil {
+			err = multierror.Append(err, fmt.Errorf("Failed to signal task: %s, err: %v", tn, rerr))
+		}
+	}
+
+	return err.ErrorOrNil()
+}
+
+func (ar *allocRunner) GetTaskExecHandler(taskName string) drivermanager.TaskExecHandler {
+	tr, ok := ar.tasks[taskName]
+	if !ok {
+		return nil
+	}
+
+	return tr.TaskExecHandler()
+}
+
+func (ar *allocRunner) GetTaskDriverCapabilities(taskName string) (*drivers.Capabilities, error) {
+	tr, ok := ar.tasks[taskName]
+	if !ok {
+		return nil, fmt.Errorf("task not found")
+	}
+
+	return tr.DriverCapabilities()
 }

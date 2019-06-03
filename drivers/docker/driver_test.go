@@ -506,34 +506,6 @@ func TestDockerDriver_Start_LoadImage(t *testing.T) {
 
 }
 
-// Tests that images prefixed with "https://" are supported
-func TestDockerDriver_Start_Image_HTTPS(t *testing.T) {
-	if !tu.IsCI() {
-		t.Parallel()
-	}
-	testutil.DockerCompatible(t)
-
-	taskCfg := TaskConfig{
-		Image: "https://gcr.io/google_containers/pause:0.8.0",
-	}
-	task := &drivers.TaskConfig{
-		ID:        uuid.Generate(),
-		Name:      "pause",
-		AllocID:   uuid.Generate(),
-		Resources: basicResources,
-	}
-	require.NoError(t, task.EncodeConcreteDriverConfig(&taskCfg))
-
-	d := dockerDriverHarness(t, nil)
-	cleanup := d.MkAllocDir(task, true)
-	defer cleanup()
-
-	_, _, err := d.StartTask(task)
-	require.NoError(t, err)
-
-	d.DestroyTask(task.ID, true)
-}
-
 // Tests that starting a task without an image fails
 func TestDockerDriver_Start_NoImage(t *testing.T) {
 	if !tu.IsCI() {
@@ -1580,12 +1552,6 @@ func TestDockerDriver_VolumesEnabled(t *testing.T) {
 		t.Parallel()
 	}
 	testutil.DockerCompatible(t)
-
-	if runtime.GOOS == "windows" {
-		// Nomad assumes : as the delimiter between host:path container, but Windows uses it for
-		// drive paths (e.g. `C:\Users...`).  Lookup volume syntax for windows and update test
-		t.Skip("TODO: Windows volume sharing doesn't work")
-	}
 
 	tmpvol, err := ioutil.TempDir("", "nomadtest_docker_volumesenabled")
 	require.NoError(t, err)

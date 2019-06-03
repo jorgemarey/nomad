@@ -263,7 +263,7 @@ func setImplicitConstraints(j *structs.Job) {
 
 		found := false
 		for _, c := range tg.Constraints {
-			if c.Equal(vaultConstraint) {
+			if c.Equals(vaultConstraint) {
 				found = true
 				break
 			}
@@ -288,7 +288,7 @@ func setImplicitConstraints(j *structs.Job) {
 
 		found := false
 		for _, c := range tg.Constraints {
-			if c.Equal(sigConstraint) {
+			if c.Equals(sigConstraint) {
 				found = true
 				break
 			}
@@ -441,8 +441,11 @@ func (j *Job) Revert(args *structs.JobRevertRequest, reply *structs.JobRegisterR
 	}
 
 	// Build the register request
+	revJob := jobV.Copy()
+	// Use Vault Token from revert request to perform registration of reverted job.
+	revJob.VaultToken = args.VaultToken
 	reg := &structs.JobRegisterRequest{
-		Job:          jobV.Copy(),
+		Job:          revJob,
 		WriteRequest: args.WriteRequest,
 	}
 
@@ -948,7 +951,7 @@ func (j *Job) Allocations(args *structs.JobSpecificRequest,
 		queryMeta: &reply.QueryMeta,
 		run: func(ws memdb.WatchSet, state *state.StateStore) error {
 			// Capture the allocations
-			allocs, err := state.AllocsByJob(ws, args.RequestNamespace(), args.JobID, args.AllAllocs)
+			allocs, err := state.AllocsByJob(ws, args.RequestNamespace(), args.JobID, args.All)
 			if err != nil {
 				return err
 			}
@@ -1039,7 +1042,7 @@ func (j *Job) Deployments(args *structs.JobSpecificRequest,
 		queryMeta: &reply.QueryMeta,
 		run: func(ws memdb.WatchSet, state *state.StateStore) error {
 			// Capture the deployments
-			deploys, err := state.DeploymentsByJobID(ws, args.RequestNamespace(), args.JobID)
+			deploys, err := state.DeploymentsByJobID(ws, args.RequestNamespace(), args.JobID, args.All)
 			if err != nil {
 				return err
 			}
@@ -1081,7 +1084,7 @@ func (j *Job) LatestDeployment(args *structs.JobSpecificRequest,
 		queryMeta: &reply.QueryMeta,
 		run: func(ws memdb.WatchSet, state *state.StateStore) error {
 			// Capture the deployments
-			deploys, err := state.DeploymentsByJobID(ws, args.RequestNamespace(), args.JobID)
+			deploys, err := state.DeploymentsByJobID(ws, args.RequestNamespace(), args.JobID, args.All)
 			if err != nil {
 				return err
 			}
