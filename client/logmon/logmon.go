@@ -3,6 +3,7 @@ package logmon
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -199,7 +200,7 @@ func getIO(cfg *LogConfig, logger hclog.Logger) (ldo io.WriteCloser, lde io.Writ
 // data will be copied from the reader to the rotator.
 type logRotatorWrapper struct {
 	fifoPath          string
-	rotatorWriter     *logging.FileRotator
+	rotatorWriter     io.WriteCloser
 	hasFinishedCopied chan struct{}
 	logger            hclog.Logger
 	driverWriter      io.WriteCloser
@@ -220,10 +221,25 @@ func (l *logRotatorWrapper) isRunning() bool {
 
 // newLogRotatorWrapper takes a rotator and returns a wrapper that has the
 // processOutWriter to attach to the stdout or stderr of a process.
-func newLogRotatorWrapper(path string, logger hclog.Logger, rotator *logging.FileRotator, driverWriter io.WriteCloser) (*logRotatorWrapper, error) {
+func newLogRotatorWrapper(path string, logger hclog.Logger, rotator io.WriteCloser, driverWriter io.WriteCloser) (*logRotatorWrapper, error) {
 	logger.Info("opening fifo", "path", path)
-	fifoOpenFn, err := fifo.CreateAndRead(path)
+
+	var openFn func() (io.ReadCloser, error)
+	var err error
+
+	//FIXME Revert #5990 and check os.IsNotExist once Go >= 1.12 is the
+	// release compiler.
+	_, serr := os.Stat(path)
+	if serr != nil {
+		openFn, err = fifo.CreateAndRead(path)
+	} else {
+		openFn = func() (io.ReadCloser, error) {
+			return fifo.OpenReader(path)
+		}
+	}
+
 	if err != nil {
+		logger.Error("Failed to create FIFO", "stat_error", serr, "create_err", err)
 		return nil, fmt.Errorf("failed to create fifo for extracting logs: %v", err)
 	}
 
@@ -235,13 +251,14 @@ func newLogRotatorWrapper(path string, logger hclog.Logger, rotator *logging.Fil
 		logger:            logger,
 		driverWriter:      driverWriter,
 	}
-	wrap.start(fifoOpenFn)
+
+	wrap.start(openFn)
 	return wrap, nil
 }
 
 // start starts a goroutine that copies from the pipe into the rotator. This is
 // called by the constructor and not the user of the wrapper.
-func (l *logRotatorWrapper) start(readerOpenFn func() (io.ReadCloser, error)) {
+func (l *logRotatorWrapper) start(openFn func() (io.ReadCloser, error)) {
 	go func() {
 		defer close(l.hasFinishedCopied)
 
@@ -253,10 +270,9 @@ func (l *logRotatorWrapper) start(readerOpenFn func() (io.ReadCloser, error)) {
 			l.logger.Info("executor: not logging to driver")
 		}
 
-		reader, err := readerOpenFn()
+		reader, err := openFn()
 		if err != nil {
-			close(l.openCompleted)
-			l.logger.Warn("failed to open log fifo", "error", err)
+			l.logger.Warn("failed to open fifo", "error", err)
 			return
 		}
 		l.processOutReader = reader
@@ -319,5 +335,4 @@ func (l *logRotatorWrapper) Close() {
 		l.driverWriter.Close()
 	}
 	l.rotatorWriter.Close()
-	return
 }

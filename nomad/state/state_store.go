@@ -108,7 +108,7 @@ func (s *StateStore) Snapshot() (*StateSnapshot, error) {
 	return snap, nil
 }
 
-// SnapshotAfter is used to create a point in time snapshot where the index is
+// SnapshotMinIndex is used to create a state snapshot where the index is
 // guaranteed to be greater than or equal to the index parameter.
 //
 // Some server operations (such as scheduling) exchange objects via RPC
@@ -118,7 +118,7 @@ func (s *StateStore) Snapshot() (*StateSnapshot, error) {
 //
 // Callers should maintain their own timer metric as the time this method
 // blocks indicates Raft log application latency relative to scheduling.
-func (s *StateStore) SnapshotAfter(ctx context.Context, index uint64) (*StateSnapshot, error) {
+func (s *StateStore) SnapshotMinIndex(ctx context.Context, index uint64) (*StateSnapshot, error) {
 	// Ported from work.go:waitForIndex prior to 0.9
 
 	const backoffBase = 20 * time.Millisecond
@@ -268,9 +268,6 @@ func (s *StateStore) UpsertPlanResults(index uint64, results *structs.ApplyPlanR
 		s.upsertDeploymentUpdates(index, results.DeploymentUpdates, txn)
 	}
 
-	// COMPAT: Nomad versions before 0.7.1 did not include the eval ID when
-	// applying the plan. Thus while we are upgrading, we ignore updating the
-	// modify index of evaluations from older plans.
 	if results.EvalID != "" {
 		// Update the modify index of the eval id
 		if err := s.updateEvalModifyIndex(txn, index, results.EvalID); err != nil {
@@ -360,11 +357,6 @@ func (s *StateStore) UpsertJobSummary(index uint64, jobSummary *structs.JobSumma
 	txn := s.db.Txn(true)
 	defer txn.Abort()
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if jobSummary.Namespace == "" {
-		jobSummary.Namespace = structs.DefaultNamespace
-	}
-
 	// Check if the job summary already exists
 	existing, err := txn.First("job_summary", "id", jobSummary.Namespace, jobSummary.JobID)
 	if err != nil {
@@ -400,11 +392,6 @@ func (s *StateStore) DeleteJobSummary(index uint64, namespace, id string) error 
 	txn := s.db.Txn(true)
 	defer txn.Abort()
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	// Delete the job summary
 	if _, err := txn.DeleteAll("job_summary", "id", namespace, id); err != nil {
 		return fmt.Errorf("deleting job summary failed: %v", err)
@@ -433,11 +420,6 @@ func (s *StateStore) upsertDeploymentImpl(index uint64, deployment *structs.Depl
 	existing, err := txn.First("deployment", "id", deployment.ID)
 	if err != nil {
 		return fmt.Errorf("deployment lookup failed: %v", err)
-	}
-
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if deployment.Namespace == "" {
-		deployment.Namespace = structs.DefaultNamespace
 	}
 
 	// Setup the indexes correctly
@@ -546,11 +528,6 @@ func (s *StateStore) deploymentByIDImpl(ws memdb.WatchSet, deploymentID string, 
 func (s *StateStore) DeploymentsByJobID(ws memdb.WatchSet, namespace, jobID string, all bool) ([]*structs.Deployment, error) {
 	txn := s.db.Txn(false)
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	var job *structs.Job
 	// Read job from state store
 	_, existing, err := txn.FirstWatch("jobs", "id", namespace, jobID)
@@ -593,11 +570,6 @@ func (s *StateStore) DeploymentsByJobID(ws memdb.WatchSet, namespace, jobID stri
 // latest is determined strictly by CreateIndex.
 func (s *StateStore) LatestDeploymentByJobID(ws memdb.WatchSet, namespace, jobID string) (*structs.Deployment, error) {
 	txn := s.db.Txn(false)
-
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
 
 	// Get an iterator over the deployments
 	iter, err := txn.Get("deployment", "job", namespace, jobID)
@@ -712,24 +684,30 @@ func (s *StateStore) UpsertNode(index uint64, node *structs.Node) error {
 	return nil
 }
 
-// DeleteNode is used to deregister a node
-func (s *StateStore) DeleteNode(index uint64, nodeID string) error {
+// DeleteNode deregisters a batch of nodes
+func (s *StateStore) DeleteNode(index uint64, nodes []string) error {
+	if len(nodes) == 0 {
+		return fmt.Errorf("node ids missing")
+	}
+
 	txn := s.db.Txn(true)
 	defer txn.Abort()
 
-	// Lookup the node
-	existing, err := txn.First("nodes", "id", nodeID)
-	if err != nil {
-		return fmt.Errorf("node lookup failed: %v", err)
-	}
-	if existing == nil {
-		return fmt.Errorf("node not found")
+	for _, nodeID := range nodes {
+		existing, err := txn.First("nodes", "id", nodeID)
+		if err != nil {
+			return fmt.Errorf("node lookup failed: %s: %v", nodeID, err)
+		}
+		if existing == nil {
+			return fmt.Errorf("node not found: %s", nodeID)
+		}
+
+		// Delete the node
+		if err := txn.Delete("nodes", existing); err != nil {
+			return fmt.Errorf("node delete failed: %s: %v", nodeID, err)
+		}
 	}
 
-	// Delete the node
-	if err := txn.Delete("nodes", existing); err != nil {
-		return fmt.Errorf("node delete failed: %v", err)
-	}
 	if err := txn.Insert("index", &IndexEntry{"nodes", index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
@@ -827,7 +805,7 @@ func (s *StateStore) updateNodeDrainImpl(txn *memdb.Txn, index uint64, nodeID st
 	}
 
 	// Update the drain in the copy
-	copyNode.Drain = drain != nil // COMPAT: Remove in Nomad 0.9
+	copyNode.Drain = drain != nil // COMPAT: Remove in Nomad 0.10
 	copyNode.DrainStrategy = drain
 	if drain != nil {
 		copyNode.SchedulingEligibility = structs.NodeSchedulingIneligible
@@ -1032,11 +1010,6 @@ func (s *StateStore) UpsertJobTxn(index uint64, job *structs.Job, txn Txn) error
 
 // upsertJobImpl is the implementation for registering a job or updating a job definition
 func (s *StateStore) upsertJobImpl(index uint64, job *structs.Job, keepVersion bool, txn *memdb.Txn) error {
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if job.Namespace == "" {
-		job.Namespace = structs.DefaultNamespace
-	}
-
 	// Assert the namespace exists
 	if exists, err := s.namespaceExists(txn, job.Namespace); err != nil {
 		return err
@@ -1123,11 +1096,6 @@ func (s *StateStore) DeleteJob(index uint64, namespace, jobID string) error {
 // DeleteJobTxn is used to deregister a job, like DeleteJob,
 // but in a transaction.  Useful for when making multiple modifications atomically
 func (s *StateStore) DeleteJobTxn(index uint64, namespace, jobID string, txn Txn) error {
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	// Lookup the node
 	existing, err := txn.First("jobs", "id", namespace, jobID)
 	if err != nil {
@@ -1171,11 +1139,6 @@ func (s *StateStore) DeleteJobTxn(index uint64, namespace, jobID string, txn Txn
 					// Update the modify index
 					pSummary.ModifyIndex = index
 
-					// COMPAT 0.7: Upgrade old objects that do not have namespaces
-					if pSummary.Namespace == "" {
-						pSummary.Namespace = structs.DefaultNamespace
-					}
-
 					// Insert the summary
 					if err := txn.Insert("job_summary", pSummary); err != nil {
 						return fmt.Errorf("job summary insert failed: %v", err)
@@ -1214,11 +1177,6 @@ func (s *StateStore) DeleteJobTxn(index uint64, namespace, jobID string, txn Txn
 
 // deleteJobVersions deletes all versions of the given job.
 func (s *StateStore) deleteJobVersions(index uint64, job *structs.Job, txn *memdb.Txn) error {
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if job.Namespace == "" {
-		job.Namespace = structs.DefaultNamespace
-	}
-
 	iter, err := txn.Get("job_version", "id_prefix", job.Namespace, job.ID)
 	if err != nil {
 		return err
@@ -1259,11 +1217,6 @@ func (s *StateStore) deleteJobVersions(index uint64, job *structs.Job, txn *memd
 // upsertJobVersion inserts a job into its historic version table and limits the
 // number of job versions that are tracked.
 func (s *StateStore) upsertJobVersion(index uint64, job *structs.Job, txn *memdb.Txn) error {
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if job.Namespace == "" {
-		job.Namespace = structs.DefaultNamespace
-	}
-
 	// Insert the job
 	if err := txn.Insert("job_version", job); err != nil {
 		return fmt.Errorf("failed to insert job into job_version table: %v", err)
@@ -1320,11 +1273,6 @@ func (s *StateStore) JobByID(ws memdb.WatchSet, namespace, id string) (*structs.
 // JobByIDTxn is used to lookup a job by its ID, like  JobByID. JobByID returns the job version
 // accessible through in the transaction
 func (s *StateStore) JobByIDTxn(ws memdb.WatchSet, namespace, id string, txn Txn) (*structs.Job, error) {
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	watchCh, existing, err := txn.FirstWatch("jobs", "id", namespace, id)
 	if err != nil {
 		return nil, fmt.Errorf("job lookup failed: %v", err)
@@ -1341,11 +1289,6 @@ func (s *StateStore) JobByIDTxn(ws memdb.WatchSet, namespace, id string, txn Txn
 func (s *StateStore) JobsByIDPrefix(ws memdb.WatchSet, namespace, id string) (memdb.ResultIterator, error) {
 	txn := s.db.Txn(false)
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	iter, err := txn.Get("jobs", "id_prefix", namespace, id)
 	if err != nil {
 		return nil, fmt.Errorf("job lookup failed: %v", err)
@@ -1360,11 +1303,6 @@ func (s *StateStore) JobsByIDPrefix(ws memdb.WatchSet, namespace, id string) (me
 func (s *StateStore) JobVersionsByID(ws memdb.WatchSet, namespace, id string) ([]*structs.Job, error) {
 	txn := s.db.Txn(false)
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	return s.jobVersionByID(txn, &ws, namespace, id)
 }
 
@@ -1372,11 +1310,6 @@ func (s *StateStore) JobVersionsByID(ws memdb.WatchSet, namespace, id string) ([
 // versions of a job and is called under an existing transaction. A watch set
 // can optionally be passed in to add the job histories to the watch set.
 func (s *StateStore) jobVersionByID(txn *memdb.Txn, ws *memdb.WatchSet, namespace, id string) ([]*structs.Job, error) {
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	// Get all the historic jobs for this ID
 	iter, err := txn.Get("job_version", "id_prefix", namespace, id)
 	if err != nil {
@@ -1414,10 +1347,6 @@ func (s *StateStore) jobVersionByID(txn *memdb.Txn, ws *memdb.WatchSet, namespac
 // JobByIDAndVersion returns the job identified by its ID and Version. The
 // passed watchset may be nil.
 func (s *StateStore) JobByIDAndVersion(ws memdb.WatchSet, namespace, id string, version uint64) (*structs.Job, error) {
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
 	txn := s.db.Txn(false)
 	return s.jobByIDAndVersionImpl(ws, namespace, id, version, txn)
 }
@@ -1426,10 +1355,6 @@ func (s *StateStore) JobByIDAndVersion(ws memdb.WatchSet, namespace, id string, 
 // passed watchset may be nil.
 func (s *StateStore) jobByIDAndVersionImpl(ws memdb.WatchSet, namespace, id string,
 	version uint64, txn *memdb.Txn) (*structs.Job, error) {
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
 
 	watchCh, existing, err := txn.FirstWatch("job_version", "id", namespace, id, version)
 	if err != nil {
@@ -1544,11 +1469,6 @@ func (s *StateStore) JobsByGC(ws memdb.WatchSet, gc bool) (memdb.ResultIterator,
 func (s *StateStore) JobSummaryByID(ws memdb.WatchSet, namespace, jobID string) (*structs.JobSummary, error) {
 	txn := s.db.Txn(false)
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	watchCh, existing, err := txn.FirstWatch("job_summary", "id", namespace, jobID)
 	if err != nil {
 		return nil, err
@@ -1583,11 +1503,6 @@ func (s *StateStore) JobSummaries(ws memdb.WatchSet) (memdb.ResultIterator, erro
 func (s *StateStore) JobSummaryByPrefix(ws memdb.WatchSet, namespace, id string) (memdb.ResultIterator, error) {
 	txn := s.db.Txn(false)
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	iter, err := txn.Get("job_summary", "id_prefix", namespace, id)
 	if err != nil {
 		return nil, fmt.Errorf("eval lookup failed: %v", err)
@@ -1602,11 +1517,6 @@ func (s *StateStore) JobSummaryByPrefix(ws memdb.WatchSet, namespace, id string)
 func (s *StateStore) UpsertPeriodicLaunch(index uint64, launch *structs.PeriodicLaunch) error {
 	txn := s.db.Txn(true)
 	defer txn.Abort()
-
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if launch.Namespace == "" {
-		launch.Namespace = structs.DefaultNamespace
-	}
 
 	// Check if the job already exists
 	existing, err := txn.First("periodic_launch", "id", launch.Namespace, launch.ID)
@@ -1650,11 +1560,6 @@ func (s *StateStore) DeletePeriodicLaunch(index uint64, namespace, jobID string)
 // DeletePeriodicLaunchTxn is used to delete the periodic launch, like DeletePeriodicLaunch
 // but in a transaction.  Useful for when making multiple modifications atomically
 func (s *StateStore) DeletePeriodicLaunchTxn(index uint64, namespace, jobID string, txn Txn) error {
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	// Lookup the launch
 	existing, err := txn.First("periodic_launch", "id", namespace, jobID)
 	if err != nil {
@@ -1679,11 +1584,6 @@ func (s *StateStore) DeletePeriodicLaunchTxn(index uint64, namespace, jobID stri
 // ID.
 func (s *StateStore) PeriodicLaunchByID(ws memdb.WatchSet, namespace, id string) (*structs.PeriodicLaunch, error) {
 	txn := s.db.Txn(false)
-
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
 
 	watchCh, existing, err := txn.FirstWatch("periodic_launch", "id", namespace, id)
 	if err != nil {
@@ -1758,11 +1658,6 @@ func (s *StateStore) nestedUpsertEval(txn *memdb.Txn, index uint64, eval *struct
 		return fmt.Errorf("eval lookup failed: %v", err)
 	}
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if eval.Namespace == "" {
-		eval.Namespace = structs.DefaultNamespace
-	}
-
 	// Update the indexes
 	if existing != nil {
 		eval.CreateIndex = existing.(*structs.Evaluation).CreateIndex
@@ -1794,11 +1689,6 @@ func (s *StateStore) nestedUpsertEval(txn *memdb.Txn, index uint64, eval *struct
 
 		// Insert the job summary
 		if hasSummaryChanged {
-			// COMPAT 0.7: Upgrade old objects that do not have namespaces
-			if js.Namespace == "" {
-				js.Namespace = structs.DefaultNamespace
-			}
-
 			js.ModifyIndex = index
 			if err := txn.Insert("job_summary", js); err != nil {
 				return fmt.Errorf("job summary insert failed: %v", err)
@@ -1832,11 +1722,6 @@ func (s *StateStore) nestedUpsertEval(txn *memdb.Txn, index uint64, eval *struct
 			newEval.Status = structs.EvalStatusCancelled
 			newEval.StatusDescription = fmt.Sprintf("evaluation %q successful", newEval.ID)
 			newEval.ModifyIndex = index
-
-			// COMPAT 0.7: Upgrade old objects that do not have namespaces
-			if newEval.Namespace == "" {
-				newEval.Namespace = structs.DefaultNamespace
-			}
 
 			if err := txn.Insert("evals", newEval); err != nil {
 				return fmt.Errorf("eval insert failed: %v", err)
@@ -1967,11 +1852,6 @@ func (s *StateStore) EvalsByIDPrefix(ws memdb.WatchSet, namespace, id string) (m
 
 	ws.Add(iter.WatchCh())
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	// Wrap the iterator in a filter
 	wrap := memdb.NewFilterIterator(iter, evalNamespaceFilter(namespace))
 	return wrap, nil
@@ -1993,11 +1873,6 @@ func evalNamespaceFilter(namespace string) func(interface{}) bool {
 // EvalsByJob returns all the evaluations by job id
 func (s *StateStore) EvalsByJob(ws memdb.WatchSet, namespace, jobID string) ([]*structs.Evaluation, error) {
 	txn := s.db.Txn(false)
-
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
 
 	// Get an iterator over the node allocations
 	iter, err := txn.Get("evals", "job_prefix", namespace, jobID)
@@ -2098,11 +1973,6 @@ func (s *StateStore) nestedUpdateAllocFromClient(txn *memdb.Txn, index uint64, a
 
 	// Copy everything from the existing allocation
 	copyAlloc := exist.Copy()
-
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if copyAlloc.Namespace == "" {
-		copyAlloc.Namespace = structs.DefaultNamespace
-	}
 
 	// Pull in anything the client is the authority on
 	copyAlloc.ClientStatus = alloc.ClientStatus
@@ -2235,11 +2105,6 @@ func (s *StateStore) upsertAllocsImpl(index uint64, allocs []*structs.Allocation
 			if alloc.Job == nil {
 				alloc.Job = exist.Job
 			}
-		}
-
-		// COMPAT 0.7: Upgrade old objects that do not have namespaces
-		if alloc.Namespace == "" {
-			alloc.Namespace = structs.DefaultNamespace
 		}
 
 		// OPTIMIZATION:
@@ -2465,11 +2330,6 @@ func (s *StateStore) AllocsByNodeTerminal(ws memdb.WatchSet, node string, termin
 // AllocsByJob returns all the allocations by job id
 func (s *StateStore) AllocsByJob(ws memdb.WatchSet, namespace, jobID string, all bool) ([]*structs.Allocation, error) {
 	txn := s.db.Txn(false)
-
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
 
 	// Get the job
 	var job *structs.Job
@@ -2759,11 +2619,6 @@ func (s *StateStore) updateDeploymentStatusImpl(index uint64, u *structs.Deploym
 	copy.StatusDescription = u.StatusDescription
 	copy.ModifyIndex = index
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if copy.Namespace == "" {
-		copy.Namespace = structs.DefaultNamespace
-	}
-
 	// Insert the deployment
 	if err := txn.Insert("deployment", copy); err != nil {
 		return err
@@ -2790,11 +2645,6 @@ func (s *StateStore) UpdateJobStability(index uint64, namespace, jobID string, j
 	txn := s.db.Txn(true)
 	defer txn.Abort()
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	if err := s.updateJobStabilityImpl(index, namespace, jobID, jobVersion, stable, txn); err != nil {
 		return err
 	}
@@ -2805,11 +2655,6 @@ func (s *StateStore) UpdateJobStability(index uint64, namespace, jobID string, j
 
 // updateJobStabilityImpl updates the stability of the given job and version
 func (s *StateStore) updateJobStabilityImpl(index uint64, namespace, jobID string, jobVersion uint64, stable bool, txn *memdb.Txn) error {
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if namespace == "" {
-		namespace = structs.DefaultNamespace
-	}
-
 	// Get the job that is referenced
 	job, err := s.jobByIDAndVersionImpl(nil, namespace, jobID, jobVersion, txn)
 	if err != nil {
@@ -3238,11 +3083,6 @@ func (s *StateStore) ReconcileJobSummaries(index uint64) error {
 			summary.Summary[tg.Name] = structs.TaskGroupSummary{}
 		}
 
-		// COMPAT 0.7: Upgrade old objects that do not have namespaces
-		if job.Namespace == "" {
-			job.Namespace = structs.DefaultNamespace
-		}
-
 		// Find all the allocations for the jobs
 		iterAllocs, err := txn.Get("allocs", "job", job.Namespace, job.ID)
 		if err != nil {
@@ -3306,10 +3146,6 @@ func (s *StateStore) ReconcileJobSummaries(index uint64) error {
 func (s *StateStore) setJobStatuses(index uint64, txn *memdb.Txn,
 	jobs map[structs.NamespacedID]string, evalDelete bool) error {
 	for tuple, forceStatus := range jobs {
-		// COMPAT 0.7: Upgrade old objects that do not have namespaces
-		if tuple.Namespace == "" {
-			tuple.Namespace = structs.DefaultNamespace
-		}
 
 		existing, err := txn.First("jobs", "id", tuple.Namespace, tuple.ID)
 		if err != nil {
@@ -3362,11 +3198,6 @@ func (s *StateStore) setJobStatus(index uint64, txn *memdb.Txn,
 	updated.Status = newStatus
 	updated.ModifyIndex = index
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if updated.Namespace == "" {
-		updated.Namespace = structs.DefaultNamespace
-	}
-
 	// Insert the job
 	if err := txn.Insert("jobs", updated); err != nil {
 		return fmt.Errorf("job insert failed: %v", err)
@@ -3390,11 +3221,6 @@ func (s *StateStore) setJobStatus(index uint64, txn *memdb.Txn,
 			pSummary := existing.Copy()
 			if pSummary.Children == nil {
 				pSummary.Children = new(structs.JobChildrenSummary)
-			}
-
-			// COMPAT 0.7: Upgrade old objects that do not have namespaces
-			if pSummary.Namespace == "" {
-				pSummary.Namespace = structs.DefaultNamespace
 			}
 
 			// Determine the transition and update the correct fields
@@ -3443,11 +3269,6 @@ func (s *StateStore) setJobStatus(index uint64, txn *memdb.Txn,
 }
 
 func (s *StateStore) getJobStatus(txn *memdb.Txn, job *structs.Job, evalDelete bool) (string, error) {
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if job.Namespace == "" {
-		job.Namespace = structs.DefaultNamespace
-	}
-
 	// System, Periodic and Parameterized jobs are running until explicitly
 	// stopped
 	if job.Type == structs.JobTypeSystem || job.IsParameterized() || job.IsPeriodic() {
@@ -3506,11 +3327,6 @@ func (s *StateStore) getJobStatus(txn *memdb.Txn, job *structs.Job, evalDelete b
 func (s *StateStore) updateSummaryWithJob(index uint64, job *structs.Job,
 	txn *memdb.Txn) error {
 
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if job.Namespace == "" {
-		job.Namespace = structs.DefaultNamespace
-	}
-
 	// Update the job summary
 	summaryRaw, err := txn.First("job_summary", "id", job.Namespace, job.ID)
 	if err != nil {
@@ -3549,11 +3365,6 @@ func (s *StateStore) updateSummaryWithJob(index uint64, job *structs.Job,
 	// The job summary has changed, so update the modify index.
 	if hasSummaryChanged {
 		summary.ModifyIndex = index
-
-		// COMPAT 0.7: Upgrade old objects that do not have namespaces
-		if summary.Namespace == "" {
-			summary.Namespace = structs.DefaultNamespace
-		}
 
 		// Update the indexes table for job summary
 		if err := txn.Insert("index", &IndexEntry{"job_summary", index}); err != nil {
@@ -3669,10 +3480,6 @@ func (s *StateStore) updateSummaryWithAlloc(index uint64, alloc *structs.Allocat
 	if alloc.Job == nil {
 		return nil
 	}
-	// COMPAT 0.7: Upgrade old objects that do not have namespaces
-	if alloc.Namespace == "" {
-		alloc.Namespace = structs.DefaultNamespace
-	}
 
 	summaryRaw, err := txn.First("job_summary", "id", alloc.Namespace, alloc.JobID)
 	if err != nil {
@@ -3767,11 +3574,6 @@ func (s *StateStore) updateSummaryWithAlloc(index uint64, alloc *structs.Allocat
 
 	if summaryChanged {
 		jobSummary.ModifyIndex = index
-
-		// COMPAT 0.7: Upgrade old objects that do not have namespaces
-		if jobSummary.Namespace == "" {
-			jobSummary.Namespace = structs.DefaultNamespace
-		}
 
 		// Update the indexes table for job summary
 		if err := txn.Insert("index", &IndexEntry{"job_summary", index}); err != nil {
