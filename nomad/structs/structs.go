@@ -8410,6 +8410,9 @@ type Evaluation struct {
 	// Raft Indexes
 	CreateIndex uint64
 	ModifyIndex uint64
+
+	CreateTime int64
+	ModifyTime int64
 }
 
 // TerminalStatus returns if the current status is terminal and
@@ -8509,6 +8512,7 @@ func (e *Evaluation) MakePlan(j *Job) *Plan {
 
 // NextRollingEval creates an evaluation to followup this eval for rolling updates
 func (e *Evaluation) NextRollingEval(wait time.Duration) *Evaluation {
+	now := time.Now().UTC().UnixNano()
 	return &Evaluation{
 		ID:             uuid.Generate(),
 		Namespace:      e.Namespace,
@@ -8520,6 +8524,8 @@ func (e *Evaluation) NextRollingEval(wait time.Duration) *Evaluation {
 		Status:         EvalStatusPending,
 		Wait:           wait,
 		PreviousEval:   e.ID,
+		CreateTime:     now,
+		ModifyTime:     now,
 	}
 }
 
@@ -8529,7 +8535,7 @@ func (e *Evaluation) NextRollingEval(wait time.Duration) *Evaluation {
 // quota limit was reached.
 func (e *Evaluation) CreateBlockedEval(classEligibility map[string]bool,
 	escaped bool, quotaReached string) *Evaluation {
-
+	now := time.Now().UTC().UnixNano()
 	return &Evaluation{
 		ID:                   uuid.Generate(),
 		Namespace:            e.Namespace,
@@ -8543,6 +8549,8 @@ func (e *Evaluation) CreateBlockedEval(classEligibility map[string]bool,
 		ClassEligibility:     classEligibility,
 		EscapedComputedClass: escaped,
 		QuotaLimitReached:    quotaReached,
+		CreateTime:           now,
+		ModifyTime:           now,
 	}
 }
 
@@ -8551,6 +8559,7 @@ func (e *Evaluation) CreateBlockedEval(classEligibility map[string]bool,
 // be retried by the eval_broker. Callers should copy the created eval's ID to
 // into the old eval's NextEval field.
 func (e *Evaluation) CreateFailedFollowUpEval(wait time.Duration) *Evaluation {
+	now := time.Now().UTC().UnixNano()
 	return &Evaluation{
 		ID:             uuid.Generate(),
 		Namespace:      e.Namespace,
@@ -8562,6 +8571,20 @@ func (e *Evaluation) CreateFailedFollowUpEval(wait time.Duration) *Evaluation {
 		Status:         EvalStatusPending,
 		Wait:           wait,
 		PreviousEval:   e.ID,
+		CreateTime:     now,
+		ModifyTime:     now,
+	}
+}
+
+// UpdateModifyTime takes into account that clocks on different servers may be
+// slightly out of sync. Even in case of a leader change, this method will
+// guarantee that ModifyTime will always be after CreateTime.
+func (e *Evaluation) UpdateModifyTime() {
+	now := time.Now().UTC().UnixNano()
+	if now <= e.CreateTime {
+		e.ModifyTime = e.CreateTime + 1
+	} else {
+		e.ModifyTime = now
 	}
 }
 
