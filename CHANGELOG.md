@@ -1,3 +1,25 @@
+## 0.9.6 (October 7, 2019)
+
+SECURITY:
+
+ * core: Redacted replication token in agent/self API endpoint.  The replication token is a management token that can be used for further privilege escalation. CVE-2019-12741 [[GH-6430](https://github.com/hashicorp/nomad/issues/6430)]
+ * core: Fixed a bug where a user may start raw_exec task on clients despite driver being disabled. CVE-2019-15928 [[GH-6227](https://github.com/hashicorp/nomad/issues/6227)] [[GH-6431](https://github.com/hashicorp/nomad/issues/6431)]
+ * enterprise/acl: Fix ACL access checks in Nomad Enterprise where users may query allocation information and perform lifecycle actions in namespaces they are not authorized to. CVE-2019-16742 [[GH-6432](https://github.com/hashicorp/nomad/issues/6432)]
+
+IMPROVEMENTS:
+
+ * client: Reduced memory footprint of nomad logging and executor processes [[GH-6341](https://github.com/hashicorp/nomad/issues/6341)]
+
+BUG FIXES:
+
+ * core: Fixed a bug where scheduler may schedule an allocation on a node without required drivers [[GH-6227](https://github.com/hashicorp/nomad/issues/6227)]
+ * client: Fixed a bug where completed allocations may re-run after client restart [[GH-6216](https://github.com/hashicorp/nomad/issues/6216)] [[GH-6207](https://github.com/hashicorp/nomad/issues/6207)]
+ * client: Fixed a panic that may occur when an `nomad alloc exec` is initiated while process is terminating [[GH-6065](https://github.com/hashicorp/nomad/issues/6065)]
+ * devices: Fixed a bug causing CPU usage spike when a device is detected [[GH-6201](https://github.com/hashicorp/nomad/issues/6201)]
+ * drivers: Fixed port mapping for docker and qemu drivers [[GH-6251](https://github.com/hashicorp/nomad/pull/6251)]
+ * drivers/docker: Fixed a case where a `nomad alloc exec` would never time out [[GH-6144](https://github.com/hashicorp/nomad/pull/6144)]
+ * ui: Fixed a bug where allocation log viewer doesn't show all content. [[GH-6048](https://github.com/hashicorp/nomad/issues/6048)]
+
 ## 0.9.5 (21 August 2019)
 
 SECURITY:
