@@ -48,9 +48,18 @@ func NewGenericStack(batch bool, ctx Context) *GenericStack {
 	// Upgrade from feasible to rank iterator
 	rankSource := NewFeasibleRankIterator(ctx, s.distinctPropertyConstraint)
 
+	_, schedConfig, _ := s.ctx.State().SchedulerConfig()
+	enablePreemption := true
+	if schedConfig != nil {
+		if batch {
+			enablePreemption = schedConfig.PreemptionConfig.BatchSchedulerEnabled
+		} else {
+			enablePreemption = schedConfig.PreemptionConfig.ServiceSchedulerEnabled
+		}
+	}
 	// Apply the bin packing, this depends on the resources needed
 	// by a particular task group.
-	s.binPack = NewBinPackIterator(ctx, rankSource, false, 0)
+	s.binPack = NewBinPackIterator(ctx, rankSource, enablePreemption, 0)
 
 	// Apply the job anti-affinity iterator. This is to avoid placing
 	// multiple allocations on the same node for this job.
