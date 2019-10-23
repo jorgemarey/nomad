@@ -281,7 +281,6 @@ func TestDriverChecker_DriverInfo(t *testing.T) {
 		}
 	}
 }
-
 func TestDriverChecker_Compatibility(t *testing.T) {
 	_, ctx := testContext(t)
 	nodes := []*structs.Node{

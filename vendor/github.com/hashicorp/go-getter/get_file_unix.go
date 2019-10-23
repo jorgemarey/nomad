@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 )
 
-func (g *FileGetter) Get(dst string, u *url.URL, umask os.FileMode) error {
+func (g *FileGetter) Get(dst string, u *url.URL) error {
 	path := u.Path
 	if u.RawPath != "" {
 		path = u.RawPath

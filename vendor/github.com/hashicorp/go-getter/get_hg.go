@@ -67,7 +67,7 @@ func (g *HgGetter) Get(dst string, u *url.URL) error {
 
 // GetFile for Hg doesn't support updating at this time. It will download
 // the file every time.
-func (g *HgGetter) GetFile(dst string, u *url.URL, umask os.FileMode) error {
+func (g *HgGetter) GetFile(dst string, u *url.URL) error {
 	// Create a temporary directory to store the full source. This has to be
 	// a non-existent directory.
 	td, tdcloser, err := safetemp.Dir("", "getter")
@@ -87,7 +87,7 @@ func (g *HgGetter) GetFile(dst string, u *url.URL, umask os.FileMode) error {
 	}
 
 	// Get the full repository
-	if err := g.Get(td, u, umask); err != nil {
+	if err := g.Get(td, u); err != nil {
 		return err
 	}
 

@@ -84,20 +84,6 @@ func (c *Client) mode(mode os.FileMode) os.FileMode {
 	return m
 }
 
-// umask returns the effective umask for the Client, defaulting to the process umask
-func (c *Client) umask() os.FileMode {
-	if c == nil {
-		return 0
-	}
-	return c.Umask
-}
-
-// mode returns file mode umasked by the Client umask
-func (c *Client) mode(mode os.FileMode) os.FileMode {
-	m := mode & ^c.umask()
-	return m
-}
-
 // Get downloads the configured source to the destination.
 func (c *Client) Get() error {
 	if err := c.Configure(c.Options...); err != nil {
@@ -301,7 +287,7 @@ func (c *Client) Get() error {
 
 		// We're downloading a directory, which might require a bit more work
 		// if we're specifying a subdir.
-		err := g.Get(dst, u, c.umask())
+		err := g.Get(dst, u)
 		if err != nil {
 			err = fmt.Errorf("error downloading '%s': %s", src, err)
 			return err
