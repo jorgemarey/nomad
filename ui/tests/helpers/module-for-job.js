@@ -1,7 +1,7 @@
 import { currentURL } from '@ember/test-helpers';
 import { module, test } from 'qunit';
 import { setupApplicationTest } from 'ember-qunit';
-import setupMirage from 'ember-cli-mirage/test-support/setup-mirage';
+import { setupMirage } from 'ember-cli-mirage/test-support';
 import JobDetail from 'nomad-ui/tests/pages/jobs/detail';
 
 export default function moduleForJob(title, context, jobFactory, additionalTests) {
@@ -53,6 +53,19 @@ export default function moduleForJob(title, context, jobFactory, additionalTests
       test('allocations for the job are shown in the overview', async function(assert) {
         assert.ok(JobDetail.allocationsSummary, 'Allocations are shown in the summary section');
         assert.notOk(JobDetail.childrenSummary, 'Children are not shown in the summary section');
+      });
+
+      test('clicking in an allocation row navigates to that allocation', async function(assert) {
+        const allocationRow = JobDetail.allocations[0];
+        const allocationId = allocationRow.id;
+
+        await allocationRow.visitRow();
+
+        assert.equal(
+          currentURL(),
+          `/allocations/${allocationId}`,
+          'Allocation row links to allocation detail'
+        );
       });
     }
 

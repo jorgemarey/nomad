@@ -8,7 +8,7 @@ import (
 )
 
 // ZipDecompressor is an implementation of Decompressor that can
-// decompress tar.gzip files.
+// decompress zip files.
 type ZipDecompressor struct{}
 
 func (d *ZipDecompressor) Decompress(dst, src string, dir bool, umask os.FileMode) error {
@@ -78,7 +78,7 @@ func (d *ZipDecompressor) Decompress(dst, src string, dir bool, umask os.FileMod
 			return err
 		}
 
-		_, err = copyReader(path, srcF, f.Mode(), umask)
+		err = copyReader(path, srcF, f.Mode(), umask)
 		srcF.Close()
 		if err != nil {
 			return err

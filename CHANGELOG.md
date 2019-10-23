@@ -1,3 +1,42 @@
+## 0.10.0 (October 22, 2019)
+
+FEATURES:
+ * **Consul Connect**: Nomad may now register Consul Connect services and
+   manages an Envoy proxy sidecar to provide secured service-to-service
+   communication.
+ * **Network Namespaces**: Task Groups may now define a shared network
+   namespace. Each allocation will receive its own network namespace and
+   loopback interface. Ports may be forwarded from the host into the network
+   namespace.
+ * **Host Volumes**: Nomad expanded support of stateful workloads through locally mounted storage volumes.
+ * **UI Allocation File Explorer**: Nomad UI enhanced operability with a visual file system explorer for allocations.
+
+IMPROVEMENTS:
+ * core: Added rolling deployments for service jobs by default and max_parallel=0 disables deployments [[GH-6191](https://github.com/hashicorp/nomad/pull/6100)]
+ * agent: Allowed the job GC interval to be configured [[GH-5978](https://github.com/hashicorp/nomad/issues/5978)]
+ * agent: Added `log_level` to be reloaded on SIGHUP [[GH-5996](https://github.com/hashicorp/nomad/pull/5996)]
+ * api: Added follow parameter to file streaming endpoint to support older browsers [[GH-6049](https://github.com/hashicorp/nomad/issues/6049)]
+ * client: Upgraded `go-getter` to support GCP links [[GH-6215](https://github.com/hashicorp/nomad/pull/6215)]
+ * client: Remove consul service stanza from `job init --short` jobspec [[GH-6179](https://github.com/hashicorp/nomad/issues/6179)]
+ * drivers: Exposed namespace as `NOMAD_NAMESPACE` environment variable in running tasks [[GH-6192](https://github.com/hashicorp/nomad/pull/6192)]
+ * metrics: Added job status (pending, running, dead) metrics [[GH-6003](https://github.com/hashicorp/nomad/issues/6003)]
+ * metrics: Added status and scheduling ability to client metrics [[GH-6130](https://github.com/hashicorp/nomad/issues/6130)]
+ * server: Added an option to configure job GC interval [[GH-5978](https://github.com/hashicorp/nomad/issues/5978)]
+ * ui: Added allocation filesystem explorer [[GH-5871](https://github.com/hashicorp/nomad/pull/5871)]
+ * ui: Added creation time to evaluations table [[GH-6050](https://github.com/hashicorp/nomad/pull/6050)]
+
+BUG FIXES:
+
+ * cli: Fixed `nomad run ...` on Windows so it works with unprivileged accounts [[GH-6009](https://github.com/hashicorp/nomad/issues/6009)]
+ * client: Fixed a bug in client fingerprinting on 32-bit nodes [[GH-6239](https://github.com/hashicorp/nomad/issues/6239)]
+ * client: Fixed a bug where completed allocations may re-run after client restart [[GH-6216](https://github.com/hashicorp/nomad/issues/6216)]
+ * client: Fixed failure to start if another client is already running with the same data directory [[GH-6348](https://github.com/hashicorp/nomad/pull/6348)]
+ * devices: Fixed a bug causing CPU usage spike when a device is detected [[GH-6201](https://github.com/hashicorp/nomad/issues/6201)]
+ * drivers/docker: Set gc image_delay default to 3 minutes [[GH-6078](https://github.com/hashicorp/nomad/pull/6078)]
+ * ui: Fixed navigation via clicking recent allocation row [[GH-6087](https://github.com/hashicorp/nomad/pull/6087)]
+ * ui: Fixed a bug where the allocation log viewer would render HTML or hide content that matched XML syntax [[GH-6048](https://github.com/hashicorp/nomad/issues/6048)]
+ * ui: Fixed a bug where allocation log viewer doesn't show all content in Firefox [[GH-6466](https://github.com/hashicorp/nomad/issues/6466)]
+
 ## 0.9.6 (October 7, 2019)
 
 SECURITY:

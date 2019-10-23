@@ -92,6 +92,15 @@ const (
 	// allocSyncRetryIntv is the interval on which we retry updating
 	// the status of the allocation
 	allocSyncRetryIntv = 5 * time.Second
+
+	// defaultConnectSidecarImage is the image set in the node meta by default
+	// to be used by Consul Connect sidecar tasks
+	// Update sidecar_task.html when updating this.
+	defaultConnectSidecarImage = "envoyproxy/envoy:v1.11.2@sha256:a7769160c9c1a55bb8d07a3b71ce5d64f72b1f665f10d81aa1581bc3cf850d09"
+
+	// defaultConnectLogLevel is the log level set in the node meta by default
+	// to be used by Consul Connect sidecar tasks
+	defaultConnectLogLevel = "info"
 )
 
 var (
@@ -1282,10 +1291,31 @@ func (c *Client) setupNode() error {
 	if node.Name == "" {
 		node.Name, _ = os.Hostname()
 	}
+	if node.HostVolumes == nil {
+		if l := len(c.config.HostVolumes); l != 0 {
+			node.HostVolumes = make(map[string]*structs.ClientHostVolumeConfig, l)
+			for k, v := range c.config.HostVolumes {
+				if _, err := os.Stat(v.Path); err != nil {
+					return fmt.Errorf("failed to validate volume %s, err: %v", v.Name, err)
+				}
+				node.HostVolumes[k] = v.Copy()
+			}
+		}
+	}
+
 	if node.Name == "" {
 		node.Name = node.ID
 	}
 	node.Status = structs.NodeStatusInit
+
+	// Setup default meta
+	if _, ok := node.Meta["connect.sidecar_image"]; !ok {
+		node.Meta["connect.sidecar_image"] = defaultConnectSidecarImage
+	}
+	if _, ok := node.Meta["connect.log_level"]; !ok {
+		node.Meta["connect.log_level"] = defaultConnectLogLevel
+	}
+
 	return nil
 }
 
@@ -2578,12 +2608,12 @@ func (c *Client) emitStats() {
 }
 
 // setGaugeForMemoryStats proxies metrics for memory specific statistics
-func (c *Client) setGaugeForMemoryStats(nodeID string, hStats *stats.HostStats) {
+func (c *Client) setGaugeForMemoryStats(nodeID string, hStats *stats.HostStats, baseLabels []metrics.Label) {
 	if !c.config.DisableTaggedMetrics {
-		metrics.SetGaugeWithLabels([]string{"client", "host", "memory", "total"}, float32(hStats.Memory.Total), c.baseLabels)
-		metrics.SetGaugeWithLabels([]string{"client", "host", "memory", "available"}, float32(hStats.Memory.Available), c.baseLabels)
-		metrics.SetGaugeWithLabels([]string{"client", "host", "memory", "used"}, float32(hStats.Memory.Used), c.baseLabels)
-		metrics.SetGaugeWithLabels([]string{"client", "host", "memory", "free"}, float32(hStats.Memory.Free), c.baseLabels)
+		metrics.SetGaugeWithLabels([]string{"client", "host", "memory", "total"}, float32(hStats.Memory.Total), baseLabels)
+		metrics.SetGaugeWithLabels([]string{"client", "host", "memory", "available"}, float32(hStats.Memory.Available), baseLabels)
+		metrics.SetGaugeWithLabels([]string{"client", "host", "memory", "used"}, float32(hStats.Memory.Used), baseLabels)
+		metrics.SetGaugeWithLabels([]string{"client", "host", "memory", "free"}, float32(hStats.Memory.Free), baseLabels)
 	}
 
 	if c.config.BackwardsCompatibleMetrics {
@@ -2595,10 +2625,10 @@ func (c *Client) setGaugeForMemoryStats(nodeID string, hStats *stats.HostStats) 
 }
 
 // setGaugeForCPUStats proxies metrics for CPU specific statistics
-func (c *Client) setGaugeForCPUStats(nodeID string, hStats *stats.HostStats) {
+func (c *Client) setGaugeForCPUStats(nodeID string, hStats *stats.HostStats, baseLabels []metrics.Label) {
 	for _, cpu := range hStats.CPU {
 		if !c.config.DisableTaggedMetrics {
-			labels := append(c.baseLabels, metrics.Label{
+			labels := append(baseLabels, metrics.Label{
 				Name:  "cpu",
 				Value: cpu.CPU,
 			})
@@ -2619,10 +2649,10 @@ func (c *Client) setGaugeForCPUStats(nodeID string, hStats *stats.HostStats) {
 }
 
 // setGaugeForDiskStats proxies metrics for disk specific statistics
-func (c *Client) setGaugeForDiskStats(nodeID string, hStats *stats.HostStats) {
+func (c *Client) setGaugeForDiskStats(nodeID string, hStats *stats.HostStats, baseLabels []metrics.Label) {
 	for _, disk := range hStats.DiskStats {
 		if !c.config.DisableTaggedMetrics {
-			labels := append(c.baseLabels, metrics.Label{
+			labels := append(baseLabels, metrics.Label{
 				Name:  "disk",
 				Value: disk.Device,
 			})
@@ -2722,9 +2752,9 @@ func (c *Client) setGaugeForAllocationStats(nodeID string) {
 }
 
 // No labels are required so we emit with only a key/value syntax
-func (c *Client) setGaugeForUptime(hStats *stats.HostStats) {
+func (c *Client) setGaugeForUptime(hStats *stats.HostStats, baseLabels []metrics.Label) {
 	if !c.config.DisableTaggedMetrics {
-		metrics.SetGaugeWithLabels([]string{"client", "uptime"}, float32(hStats.Uptime), c.baseLabels)
+		metrics.SetGaugeWithLabels([]string{"client", "uptime"}, float32(hStats.Uptime), baseLabels)
 	}
 	if c.config.BackwardsCompatibleMetrics {
 		metrics.SetGauge([]string{"client", "uptime"}, float32(hStats.Uptime))
@@ -2735,11 +2765,18 @@ func (c *Client) setGaugeForUptime(hStats *stats.HostStats) {
 func (c *Client) emitHostStats() {
 	nodeID := c.NodeID()
 	hStats := c.hostStatsCollector.Stats()
+	node := c.Node()
 
-	c.setGaugeForMemoryStats(nodeID, hStats)
-	c.setGaugeForUptime(hStats)
-	c.setGaugeForCPUStats(nodeID, hStats)
-	c.setGaugeForDiskStats(nodeID, hStats)
+	node.Canonicalize()
+	labels := append(c.baseLabels,
+		metrics.Label{Name: "node_status", Value: node.Status},
+		metrics.Label{Name: "node_scheduling_eligibility", Value: node.SchedulingEligibility},
+	)
+
+	c.setGaugeForMemoryStats(nodeID, hStats, labels)
+	c.setGaugeForUptime(hStats, labels)
+	c.setGaugeForCPUStats(nodeID, hStats, labels)
+	c.setGaugeForDiskStats(nodeID, hStats, labels)
 }
 
 // emitClientMetrics emits lower volume client metrics

@@ -1,6 +1,7 @@
 package getter
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,7 @@ func mode(mode, umask os.FileMode) os.FileMode {
 // should already exist.
 //
 // If ignoreDot is set to true, then dot-prefixed files/folders are ignored.
-func copyDir(dst string, src string, ignoreDot bool, umask os.FileMode) error {
+func copyDir(ctx context.Context, dst string, src string, ignoreDot bool, umask os.FileMode) error {
 	src, err := filepath.EvalSymlinks(src)
 	if err != nil {
 		return err
@@ -58,7 +59,7 @@ func copyDir(dst string, src string, ignoreDot bool, umask os.FileMode) error {
 		}
 
 		// If we have a file, copy the contents.
-		_, err = copyFile(dstPath, path, info.Mode(), umask)
+		_, err = copyFile(ctx, dstPath, path, info.Mode(), umask)
 		return err
 	}
 

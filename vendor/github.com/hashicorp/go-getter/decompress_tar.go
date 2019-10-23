@@ -82,7 +82,7 @@ func untar(input io.Reader, dst, src string, dir bool, umask os.FileMode) error 
 		done = true
 
 		// Open the file for writing
-		_, err = copyReader(path, tarR, hdr.FileInfo().Mode(), umask)
+		err = copyReader(path, tarR, hdr.FileInfo().Mode(), umask)
 		if err != nil {
 			return err
 		}

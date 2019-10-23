@@ -185,7 +185,9 @@ func NewAllocRunner(config *Config) (*allocRunner, error) {
 	ar.allocDir = allocdir.NewAllocDir(ar.logger, filepath.Join(config.ClientConfig.AllocDir, alloc.ID))
 
 	// Initialize the runners hooks.
-	ar.initRunnerHooks()
+	if err := ar.initRunnerHooks(config.ClientConfig); err != nil {
+		return nil, err
+	}
 
 	// Create the TaskRunners
 	if err := ar.initTaskRunners(tg.Tasks); err != nil {
@@ -257,7 +259,7 @@ func (ar *allocRunner) Run() {
 			ar.logger.Error("prerun failed", "error", err)
 
 			for _, tr := range ar.tasks {
-				tr.MarkFailedDead(fmt.Sprintf("failed to setup runner: %v", err))
+				tr.MarkFailedDead(fmt.Sprintf("failed to setup alloc: %v", err))
 			}
 
 			goto POST
@@ -268,6 +270,10 @@ func (ar *allocRunner) Run() {
 	ar.runTasks()
 
 POST:
+	if ar.isShuttingDown() {
+		return
+	}
+
 	// Run the postrun hooks
 	if err := ar.postrun(); err != nil {
 		ar.logger.Error("postrun failed", "error", err)
@@ -855,6 +861,14 @@ func (ar *allocRunner) IsDestroyed() bool {
 // This method is safe for calling concurrently with Run().
 func (ar *allocRunner) IsWaiting() bool {
 	return ar.prevAllocWatcher.IsWaiting()
+}
+
+// isShuttingDown returns true if the alloc runner is in a shutdown state
+// due to a call to Shutdown() or Destroy()
+func (ar *allocRunner) isShuttingDown() bool {
+	ar.destroyedLock.Lock()
+	defer ar.destroyedLock.Unlock()
+	return ar.shutdownLaunched
 }
 
 // DestroyCh is a channel that is closed when an allocrunner is closed due to

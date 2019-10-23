@@ -7,8 +7,10 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/containernetworking/plugins/pkg/ns"
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/nomad/helper"
+	"github.com/hashicorp/nomad/plugins/drivers"
 	"github.com/opencontainers/runc/libcontainer/cgroups"
 	cgroupFs "github.com/opencontainers/runc/libcontainer/cgroups/fs"
 	lconfigs "github.com/opencontainers/runc/libcontainer/configs"
@@ -170,4 +172,22 @@ func DestroyCgroup(groups *lconfigs.Cgroup, executorPid int) error {
 		multierror.Append(mErrs, fmt.Errorf("failed to delete the cgroup directories: %v", err))
 	}
 	return mErrs.ErrorOrNil()
+}
+
+// withNetworkIsolation calls the passed function the network namespace `spec`
+func withNetworkIsolation(f func() error, spec *drivers.NetworkIsolationSpec) error {
+	if spec != nil && spec.Path != "" {
+		// Get a handle to the target network namespace
+		netns, err := ns.GetNS(spec.Path)
+		if err != nil {
+			return err
+		}
+
+		// Start the container in the network namespace
+		return netns.Do(func(ns.NetNS) error {
+			return f()
+		})
+	}
+
+	return f()
 }

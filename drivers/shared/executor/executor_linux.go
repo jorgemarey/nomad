@@ -607,6 +607,13 @@ func configureIsolation(cfg *lconfigs.Config, command *ExecCommand) error {
 		{Type: lconfigs.NEWNS},
 	}
 
+	if command.NetworkIsolation != nil {
+		cfg.Namespaces = append(cfg.Namespaces, lconfigs.Namespace{
+			Type: lconfigs.NEWNET,
+			Path: command.NetworkIsolation.Path,
+		})
+	}
+
 	// paths to mask using a bind mount to /dev/null to prevent reading
 	cfg.MaskPaths = []string{
 		"/proc/kcore",

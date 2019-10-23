@@ -1,6 +1,7 @@
 package getter
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -17,7 +18,9 @@ import (
 
 // S3Getter is a Getter implementation that will download a module from
 // a S3 bucket.
-type S3Getter struct{}
+type S3Getter struct {
+	getter
+}
 
 func (g *S3Getter) ClientMode(u *url.URL) (ClientMode, error) {
 	// Parse URL
@@ -58,7 +61,9 @@ func (g *S3Getter) ClientMode(u *url.URL) (ClientMode, error) {
 	return ClientModeFile, nil
 }
 
-func (g *S3Getter) Get(dst string, u *url.URL, umask os.FileMode) error {
+func (g *S3Getter) Get(dst string, u *url.URL) error {
+	ctx := g.Context()
+
 	// Parse URL
 	region, bucket, path, _, creds, err := g.parseUrl(u)
 	if err != nil {
@@ -79,7 +84,7 @@ func (g *S3Getter) Get(dst string, u *url.URL, umask os.FileMode) error {
 	}
 
 	// Create all the parent directories
-	if err := os.MkdirAll(filepath.Dir(dst), mode(0755, umask)); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), g.client.mode(0755)); err != nil {
 		return err
 	}
 
@@ -123,7 +128,7 @@ func (g *S3Getter) Get(dst string, u *url.URL, umask os.FileMode) error {
 			}
 			objDst = filepath.Join(dst, objDst)
 
-			if err := g.getObject(client, objDst, bucket, objPath, "", umask); err != nil {
+			if err := g.getObject(ctx, client, objDst, bucket, objPath, ""); err != nil {
 				return err
 			}
 		}
@@ -132,7 +137,8 @@ func (g *S3Getter) Get(dst string, u *url.URL, umask os.FileMode) error {
 	return nil
 }
 
-func (g *S3Getter) GetFile(dst string, u *url.URL, umask os.FileMode) error {
+func (g *S3Getter) GetFile(dst string, u *url.URL) error {
+	ctx := g.Context()
 	region, bucket, path, version, creds, err := g.parseUrl(u)
 	if err != nil {
 		return err
@@ -141,10 +147,10 @@ func (g *S3Getter) GetFile(dst string, u *url.URL, umask os.FileMode) error {
 	config := g.getAWSConfig(region, u, creds)
 	sess := session.New(config)
 	client := s3.New(sess)
-	return g.getObject(client, dst, bucket, path, version, umask)
+	return g.getObject(ctx, client, dst, bucket, path, version)
 }
 
-func (g *S3Getter) getObject(client *s3.S3, dst, bucket, key, version string, umask os.FileMode) error {
+func (g *S3Getter) getObject(ctx context.Context, client *s3.S3, dst, bucket, key, version string) error {
 	req := &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
@@ -159,12 +165,11 @@ func (g *S3Getter) getObject(client *s3.S3, dst, bucket, key, version string, um
 	}
 
 	// Create all the parent directories
-	if err := os.MkdirAll(filepath.Dir(dst), mode(0755, umask)); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), g.client.mode(0755)); err != nil {
 		return err
 	}
 
-	_, err = copyReader(dst, resp.Body, 0666, umask)
-	return err
+	return copyReader(dst, resp.Body, 0666, g.client.umask())
 }
 
 func (g *S3Getter) getAWSConfig(region string, url *url.URL, creds *credentials.Credentials) *aws.Config {
