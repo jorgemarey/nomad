@@ -286,20 +286,6 @@ type ClientTemplateConfig struct {
 	DisableSandbox bool `hcl:"disable_file_sandbox"`
 }
 
-// ClientTemplateConfig is configuration on the client specific to template
-// rendering
-type ClientTemplateConfig struct {
-
-	// FunctionBlacklist disables functions in consul-template that
-	// are unsafe because they expose information from the client host.
-	FunctionBlacklist []string `hcl:"function_blacklist"`
-
-	// DisableSandbox allows templates to access arbitrary files on the
-	// client host. By default templates can access files only within
-	// the task directory.
-	DisableSandbox bool `hcl:"disable_file_sandbox"`
-}
-
 // ACLConfig is configuration specific to the ACL system
 type ACLConfig struct {
 	// Enabled controls if we are enforce and manage ACLs

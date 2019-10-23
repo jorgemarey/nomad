@@ -258,11 +258,6 @@ func (c *ClientTemplateConfig) Copy() *ClientTemplateConfig {
 	return nc
 }
 
-type ClientTemplateConfig struct {
-	FunctionBlacklist []string
-	DisableSandbox    bool
-}
-
 func (c *Config) Copy() *Config {
 	nc := new(Config)
 	*nc = *c
