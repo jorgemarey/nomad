@@ -3,6 +3,7 @@ package logmon
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/hashicorp/nomad/client/logmon/proto"
 	"github.com/hashicorp/nomad/helper/pluginutils/grpcutils"
@@ -14,6 +15,8 @@ type logmonClient struct {
 	// doneCtx is closed when the plugin exits
 	doneCtx context.Context
 }
+
+const logmonRPCTimeout = 1 * time.Minute
 
 func (c *logmonClient) Start(cfg *LogConfig) error {
 	bc, _ := json.Marshal(cfg.Config)
@@ -31,12 +34,18 @@ func (c *logmonClient) Start(cfg *LogConfig) error {
 		Config:         bc,
 		Data:           bd,
 	}
-	_, err := c.client.Start(context.Background(), req)
+	ctx, cancel := context.WithTimeout(context.Background(), logmonRPCTimeout)
+	defer cancel()
+
+	_, err := c.client.Start(ctx, req)
 	return grpcutils.HandleGrpcErr(err, c.doneCtx)
 }
 
 func (c *logmonClient) Stop() error {
 	req := &proto.StopRequest{}
-	_, err := c.client.Stop(context.Background(), req)
+	ctx, cancel := context.WithTimeout(context.Background(), logmonRPCTimeout)
+	defer cancel()
+
+	_, err := c.client.Stop(ctx, req)
 	return grpcutils.HandleGrpcErr(err, c.doneCtx)
 }
