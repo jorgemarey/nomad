@@ -15,6 +15,24 @@ details provided for their upgrades as a result of new features or changed
 behavior. This page is used to document those details separately from the
 standard upgrade flow.
 
+## Nomad 0.10.2
+
+### Preemption Panic Fixed
+
+Nomad 0.10.2 fixes a [server crashing bug][gh-6787] present in scheduler
+preemption since 0.9.0. Users unable to immediately upgrade to Nomad 0.10.2 can
+[disable preemption][preemption-api] to avoid the panic.
+
+### Dangling Docker Container Cleanup
+
+Nomad 0.10.2 addresses an issue occurring in heavily loaded clients, where
+containers are started without being properly managed by Nomad. Nomad 0.10.2
+introduced a reaper that detects and kills such containers.
+
+Operators may opt to run reaper in a dry-mode or disabling it through a client config.
+
+For more information, see [Docker Dangling containers][dangling-containers].
+
 ## Nomad 0.10.0
 
 ### Deployments
@@ -29,20 +47,6 @@ and this may cause a service degradation or an outage.
 You can regain this behavior and disable deployments by setting `max_parallel` to 0.
 
 For more information, see [`update` stanza][update].
-
-### Raft 3
-Nomad 0.10 defaults to Raft 3 which includes [Autopilot](/guides/operations/autopilot.html), 
-operator-friendly automatic cluster management.
-Once all servers are upgraded and running with Raft protocol version 3, autopilot features are enabled.
-
-If existing servers are still on Raft protocol version 1,
-new servers will need [`raft_protocol`](/docs/configuration/server.html#raft_protocol)
-set to 2, in order to maintain backwards compatibility with
-the old servers during the upgrade.  After the servers have been migrated to
-version 0.10.0 with Raft protocol version 2, `raft_protocol` can be moved up to 3 and the servers restarted
-to match the default.
-
-For more information on upgrading Raft, see [Upgrading to Raft Protocol 3](/guides/upgrade/upgrade-specific.html#upgrading-to-raft-protocol-3).
 
 ## Nomad 0.9.5
 
@@ -378,12 +382,15 @@ deleted and then Nomad 0.3.0 can be launched.
 
 [drain-api]: /api/nodes.html#drain-node
 [drain-cli]: /docs/commands/node/drain.html
+[dangling-containers]:  /docs/drivers/docker.html#dangling-containers
+[gh-6787]: https://github.com/hashicorp/nomad/issues/6787
 [hcl2]: https://github.com/hashicorp/hcl2
 [lxc]: /docs/drivers/external/lxc.html
 [migrate]: /docs/job-specification/migrate.html
 [plugins]: /docs/drivers/external/index.html
 [plugin-stanza]: /docs/configuration/plugin.html
 [preemption]: /docs/internals/scheduling/preemption.html
+[preemption-api]: /api/operator.html#update-scheduler-configuration
 [task-config]: /docs/job-specification/task.html#config
 [validate]: /docs/commands/job/validate.html
 [update]: /docs/job-specification/update.html
