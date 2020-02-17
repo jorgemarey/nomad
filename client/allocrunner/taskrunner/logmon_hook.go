@@ -157,7 +157,7 @@ func (h *logmonHook) prestartOneLoop(ctx context.Context, req *interfaces.TaskPr
 		}
 	}
 
-	config := &logmon.LogConfig{
+	err := h.logmon.Start(&logmon.LogConfig{
 		LogDir:        h.config.logDir,
 		StdoutLogFile: fmt.Sprintf("%s.stdout", req.Task.Name),
 		StderrLogFile: fmt.Sprintf("%s.stderr", req.Task.Name),
@@ -165,14 +165,7 @@ func (h *logmonHook) prestartOneLoop(ctx context.Context, req *interfaces.TaskPr
 		StderrFifo:    h.config.stderrFifo,
 		MaxFiles:      req.Task.LogConfig.MaxFiles,
 		MaxFileSizeMB: req.Task.LogConfig.MaxFileSizeMB,
-		DriverName:    req.Task.LogConfig.Driver,
-		Config:        req.Task.LogConfig.Config,
-	}
-	if req.TaskEnv != nil {
-		config.Data = req.TaskEnv.Map()
-	}
-	err := h.logmon.Start(config)
-
+	})
 	if err != nil {
 		h.logger.Error("failed to start logmon", "error", err)
 		return err

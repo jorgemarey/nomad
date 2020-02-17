@@ -2,7 +2,6 @@ package logmon
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/hashicorp/nomad/client/logmon/proto"
@@ -19,9 +18,6 @@ type logmonClient struct {
 const logmonRPCTimeout = 1 * time.Minute
 
 func (c *logmonClient) Start(cfg *LogConfig) error {
-	bc, _ := json.Marshal(cfg.Config)
-	bd, _ := json.Marshal(cfg.Data)
-
 	req := &proto.StartRequest{
 		LogDir:         cfg.LogDir,
 		StdoutFileName: cfg.StdoutLogFile,
@@ -30,9 +26,6 @@ func (c *logmonClient) Start(cfg *LogConfig) error {
 		MaxFileSizeMb:  uint32(cfg.MaxFileSizeMB),
 		StdoutFifo:     cfg.StdoutFifo,
 		StderrFifo:     cfg.StderrFifo,
-		Driver:         cfg.DriverName,
-		Config:         bc,
-		Data:           bd,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), logmonRPCTimeout)
 	defer cancel()

@@ -1,8 +1,6 @@
 package logmon
 
 import (
-	"encoding/json"
-
 	"golang.org/x/net/context"
 
 	plugin "github.com/hashicorp/go-plugin"
@@ -15,11 +13,6 @@ type logmonServer struct {
 }
 
 func (s *logmonServer) Start(ctx context.Context, req *proto.StartRequest) (*proto.StartResponse, error) {
-	var config map[string]interface{}
-	json.Unmarshal(req.Config, &config)
-	var data map[string]string
-	json.Unmarshal(req.Data, &data)
-
 	cfg := &LogConfig{
 		LogDir:        req.LogDir,
 		StdoutLogFile: req.StdoutFileName,
@@ -28,9 +21,6 @@ func (s *logmonServer) Start(ctx context.Context, req *proto.StartRequest) (*pro
 		MaxFileSizeMB: int(req.MaxFileSizeMb),
 		StdoutFifo:    req.StdoutFifo,
 		StderrFifo:    req.StderrFifo,
-		DriverName:    req.Driver,
-		Config:        config,
-		Data:          data,
 	}
 
 	err := s.impl.Start(cfg)

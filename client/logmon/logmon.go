@@ -41,10 +41,6 @@ type LogConfig struct {
 
 	// MaxFileSizeMB is the max log file size in MB allowed before rotation occures
 	MaxFileSizeMB int
-
-	DriverName string
-	Config     map[string]interface{}
-	Data       map[string]string
 }
 
 type LogMon interface {
@@ -153,9 +149,7 @@ func NewTaskLogger(cfg *LogConfig, logger hclog.Logger) (*TaskLogger, error) {
 		return nil, fmt.Errorf("failed to create stdout logfile for %q: %v", cfg.StdoutLogFile, err)
 	}
 
-	do, de := getIO(cfg, logger)
-
-	wrapperOut, err := newLogRotatorWrapper(cfg.StdoutFifo, logger, lro, do)
+	wrapperOut, err := newLogRotatorWrapper(cfg.StdoutFifo, logger, lro)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +162,7 @@ func NewTaskLogger(cfg *LogConfig, logger hclog.Logger) (*TaskLogger, error) {
 		return nil, fmt.Errorf("failed to create stderr logfile for %q: %v", cfg.StderrLogFile, err)
 	}
 
-	wrapperErr, err := newLogRotatorWrapper(cfg.StderrFifo, logger, lre, de)
+	wrapperErr, err := newLogRotatorWrapper(cfg.StderrFifo, logger, lre)
 	if err != nil {
 		return nil, err
 	}
@@ -179,22 +173,6 @@ func NewTaskLogger(cfg *LogConfig, logger hclog.Logger) (*TaskLogger, error) {
 
 }
 
-func getIO(cfg *LogConfig, logger hclog.Logger) (ldo io.WriteCloser, lde io.WriteCloser) {
-	dname := cfg.DriverName
-	if dname == "" {
-		return
-	}
-	d, err := logging.NewDriver(dname, cfg.Config, cfg.Data, logger.StandardLogger(&hclog.StandardLoggerOptions{InferLevels: true}))
-	if err == nil {
-		ldo, err = d.StdOut()
-		lde, err = d.StdErr()
-		logger.Debug("executor: configured log", "driver", dname)
-	} else {
-		logger.Error("executor: cant configure log", "driver", dname, "error", err)
-	}
-	return
-}
-
 // logRotatorWrapper wraps our log rotator and exposes a pipe that can feed the
 // log rotator data. The processOutWriter should be attached to the process and
 // data will be copied from the reader to the rotator.
@@ -203,7 +181,6 @@ type logRotatorWrapper struct {
 	rotatorWriter     io.WriteCloser
 	hasFinishedCopied chan struct{}
 	logger            hclog.Logger
-	driverWriter      io.WriteCloser
 
 	processOutReader io.ReadCloser
 	openCompleted    chan struct{}
@@ -221,7 +198,7 @@ func (l *logRotatorWrapper) isRunning() bool {
 
 // newLogRotatorWrapper takes a rotator and returns a wrapper that has the
 // processOutWriter to attach to the stdout or stderr of a process.
-func newLogRotatorWrapper(path string, logger hclog.Logger, rotator io.WriteCloser, driverWriter io.WriteCloser) (*logRotatorWrapper, error) {
+func newLogRotatorWrapper(path string, logger hclog.Logger, rotator io.WriteCloser) (*logRotatorWrapper, error) {
 	logger.Info("opening fifo", "path", path)
 
 	var openFn func() (io.ReadCloser, error)
@@ -247,7 +224,6 @@ func newLogRotatorWrapper(path string, logger hclog.Logger, rotator io.WriteClos
 		hasFinishedCopied: make(chan struct{}),
 		openCompleted:     make(chan struct{}),
 		logger:            logger,
-		driverWriter:      driverWriter,
 	}
 
 	wrap.start(openFn)
@@ -260,14 +236,6 @@ func (l *logRotatorWrapper) start(openFn func() (io.ReadCloser, error)) {
 	go func() {
 		defer close(l.hasFinishedCopied)
 
-		var writer io.Writer = l.rotatorWriter
-		if l.driverWriter != nil {
-			writer = io.MultiWriter(l.rotatorWriter, l.driverWriter)
-			l.logger.Info("executor: adding driver output to send logs")
-		} else {
-			l.logger.Info("executor: not logging to driver")
-		}
-
 		reader, err := openFn()
 		if err != nil {
 			l.logger.Warn("failed to open fifo", "error", err)
@@ -276,7 +244,7 @@ func (l *logRotatorWrapper) start(openFn func() (io.ReadCloser, error)) {
 		l.processOutReader = reader
 		close(l.openCompleted)
 
-		_, err = io.Copy(writer, reader)
+		_, err = io.Copy(l.rotatorWriter, reader)
 		if err != nil {
 			l.logger.Warn("failed to read from log fifo", "error", err)
 			// Close reader to propagate io error across pipe.
@@ -329,8 +297,5 @@ func (l *logRotatorWrapper) Close() {
 		l.logger.Warn("timed out waiting for read-side of process output pipe to close")
 	}
 
-	if l.driverWriter != nil {
-		l.driverWriter.Close()
-	}
 	l.rotatorWriter.Close()
 }
