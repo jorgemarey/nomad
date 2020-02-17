@@ -175,12 +175,15 @@ func (h *scriptCheckHook) Stop(ctx context.Context, req *interfaces.TaskStopRequ
 func (h *scriptCheckHook) newScriptChecks() map[string]*scriptCheck {
 	scriptChecks := make(map[string]*scriptCheck)
 	for _, service := range h.task.Services {
+		copyService := service.Copy()
+		copyService.Name = h.taskEnv.ReplaceEnv(copyService.Name)
+		copyService.PortLabel = h.taskEnv.ReplaceEnv(service.PortLabel)
 		for _, check := range service.Checks {
 			if check.Type != structs.ServiceCheckScript {
 				continue
 			}
 			serviceID := agentconsul.MakeAllocServiceID(
-				h.alloc.ID, h.task.Name, service)
+				h.alloc.ID, h.task.Name, copyService)
 			sc := newScriptCheck(&scriptCheckConfig{
 				allocID:    h.alloc.ID,
 				taskName:   h.task.Name,
@@ -205,6 +208,9 @@ func (h *scriptCheckHook) newScriptChecks() map[string]*scriptCheck {
 	// watches Consul for status changes.
 	tg := h.alloc.Job.LookupTaskGroup(h.alloc.TaskGroup)
 	for _, service := range tg.Services {
+		copyService := service.Copy()
+		copyService.Name = h.taskEnv.ReplaceEnv(copyService.Name)
+		copyService.PortLabel = h.taskEnv.ReplaceEnv(service.PortLabel)
 		for _, check := range service.Checks {
 			if check.Type != structs.ServiceCheckScript {
 				continue
@@ -214,7 +220,7 @@ func (h *scriptCheckHook) newScriptChecks() map[string]*scriptCheck {
 			}
 			groupTaskName := "group-" + tg.Name
 			serviceID := agentconsul.MakeAllocServiceID(
-				h.alloc.ID, groupTaskName, service)
+				h.alloc.ID, h.task.Name, copyService)
 			sc := newScriptCheck(&scriptCheckConfig{
 				allocID:    h.alloc.ID,
 				taskName:   groupTaskName,

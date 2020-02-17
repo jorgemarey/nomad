@@ -5088,9 +5088,9 @@ func (tg *TaskGroup) validateServices() error {
 			continue
 		}
 		for _, service := range task.Services {
-			if _, ok := knownServices[service.Name+service.PortLabel]; ok {
-				mErr.Errors = append(mErr.Errors, fmt.Errorf("Service %s is duplicate", service.Name))
-			}
+			// if _, ok := knownServices[service.Name+service.PortLabel]; ok {
+			// 	mErr.Errors = append(mErr.Errors, fmt.Errorf("Service %s is duplicate", service.Name))
+			// }
 			for _, check := range service.Checks {
 				if check.TaskName != "" {
 					mErr.Errors = append(mErr.Errors, fmt.Errorf("Check %s is invalid: only task group service checks can be assigned tasks", check.Name))
@@ -5108,9 +5108,9 @@ func (tg *TaskGroup) validateServices() error {
 			// error messages to provide the user.
 			continue
 		}
-		if _, ok := knownServices[service.Name+service.PortLabel]; ok {
-			mErr.Errors = append(mErr.Errors, fmt.Errorf("Service %s is duplicate", service.Name))
-		}
+		// if _, ok := knownServices[service.Name+service.PortLabel]; ok {
+		// 	mErr.Errors = append(mErr.Errors, fmt.Errorf("Service %s is duplicate", service.Name))
+		// }
 		knownServices[service.Name+service.PortLabel] = struct{}{}
 		for _, check := range service.Checks {
 			if check.TaskName != "" {

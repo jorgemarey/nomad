@@ -455,12 +455,6 @@ func (c *ServiceClient) sync() error {
 		return fmt.Errorf("error querying Consul services: %v", err)
 	}
 
-	consulChecks, err := c.client.Checks()
-	if err != nil {
-		metrics.IncrCounter([]string{"client", "consul", "sync_failure"}, 1)
-		return fmt.Errorf("error querying Consul checks: %v", err)
-	}
-
 	inProbation := time.Now().Before(c.deregisterProbationExpiry)
 
 	// Remove Nomad services in Consul but unknown locally
@@ -523,6 +517,12 @@ func (c *ServiceClient) sync() error {
 		}
 		sreg++
 		metrics.IncrCounter([]string{"client", "consul", "service_registrations"}, 1)
+	}
+
+	consulChecks, err := c.client.Checks()
+	if err != nil {
+		metrics.IncrCounter([]string{"client", "consul", "sync_failure"}, 1)
+		return fmt.Errorf("error querying Consul checks: %v", err)
 	}
 
 	// Remove Nomad checks in Consul but unknown locally
@@ -845,6 +845,10 @@ func (c *ServiceClient) RegisterWorkload(workload *WorkloadServices) error {
 //
 // DriverNetwork must not change between invocations for the same allocation.
 func (c *ServiceClient) UpdateWorkload(old, newWorkload *WorkloadServices) error {
+	if !c.isRegistered(newWorkload.AllocID, newWorkload.Name()) {
+		return nil
+	}
+
 	ops := &operations{}
 
 	regs := new(ServiceRegistrations)
@@ -1082,6 +1086,18 @@ func (c *ServiceClient) Shutdown() error {
 	}
 
 	return nil
+}
+
+func (c *ServiceClient) isRegistered(allocID, taskName string) bool {
+	c.allocRegistrationsLock.Lock()
+	defer c.allocRegistrationsLock.Unlock()
+
+	alloc, ok := c.allocRegistrations[allocID]
+	if !ok {
+		return false
+	}
+	_, ok = alloc.Tasks[taskName]
+	return ok
 }
 
 // addRegistration adds the service registrations for the given allocation.
