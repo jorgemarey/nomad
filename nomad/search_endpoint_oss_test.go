@@ -15,11 +15,11 @@ import (
 func TestSearch_PrefixSearch_Namespace(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s := TestServer(t, func(c *Config) {
+	s, cleanup := TestServer(t, func(c *Config) {
 		c.NumSchedulers = 0
 	})
 
-	defer s.Shutdown()
+	defer cleanup()
 	codec := rpcClient(t, s)
 	testutil.WaitForLeader(t, s.RPC)
 
@@ -51,10 +51,10 @@ func TestSearch_PrefixSearch_Namespace(t *testing.T) {
 func TestSearch_PrefixSearch_Namespace_ACL(t *testing.T) {
 	t.Parallel()
 	assert := assert.New(t)
-	s, root := TestACLServer(t, func(c *Config) {
+	s, root, cleanupS1 := TestACLServer(t, func(c *Config) {
 		c.NumSchedulers = 0
 	})
-	defer s.Shutdown()
+	defer cleanupS1()
 	codec := rpcClient(t, s)
 	testutil.WaitForLeader(t, s.RPC)
 	state := s.fsm.State()

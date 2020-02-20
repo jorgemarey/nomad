@@ -17,8 +17,8 @@ import (
 func TestNamespaceEndpoint_GetNamespace(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1 := TestServer(t, nil)
-	defer s1.Shutdown()
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
@@ -46,8 +46,8 @@ func TestNamespaceEndpoint_GetNamespace(t *testing.T) {
 func TestNamespaceEndpoint_GetNamespace_ACL(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1, root := TestACLServer(t, nil)
-	defer s1.Shutdown()
+	s1, root, cleanupS1 := TestACLServer(t, nil)
+	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
@@ -107,8 +107,8 @@ func TestNamespaceEndpoint_GetNamespace_ACL(t *testing.T) {
 func TestNamespaceEndpoint_GetNamespace_Blocking(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1 := TestServer(t, nil)
-	defer s1.Shutdown()
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
 	state := s1.fsm.State()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
@@ -166,8 +166,8 @@ func TestNamespaceEndpoint_GetNamespace_Blocking(t *testing.T) {
 func TestNamespaceEndpoint_GetNamespaces(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1 := TestServer(t, nil)
-	defer s1.Shutdown()
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
@@ -192,8 +192,8 @@ func TestNamespaceEndpoint_GetNamespaces(t *testing.T) {
 func TestNamespaceEndpoint_GetNamespaces_ACL(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1, root := TestACLServer(t, nil)
-	defer s1.Shutdown()
+	s1, root, cleanupS1 := TestACLServer(t, nil)
+	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
@@ -241,8 +241,8 @@ func TestNamespaceEndpoint_GetNamespaces_ACL(t *testing.T) {
 func TestNamespaceEndpoint_GetNamespaces_Blocking(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1 := TestServer(t, nil)
-	defer s1.Shutdown()
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
 	state := s1.fsm.State()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
@@ -300,8 +300,8 @@ func TestNamespaceEndpoint_GetNamespaces_Blocking(t *testing.T) {
 func TestNamespaceEndpoint_ListNamespaces(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1 := TestServer(t, nil)
-	defer s1.Shutdown()
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
@@ -338,8 +338,8 @@ func TestNamespaceEndpoint_ListNamespaces(t *testing.T) {
 func TestNamespaceEndpoint_List_ACL(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1, root := TestACLServer(t, nil)
-	defer s1.Shutdown()
+	s1, root, cleanupS1 := TestACLServer(t, nil)
+	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
@@ -412,8 +412,8 @@ func TestNamespaceEndpoint_List_ACL(t *testing.T) {
 func TestNamespaceEndpoint_List_Blocking(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1 := TestServer(t, nil)
-	defer s1.Shutdown()
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
 	state := s1.fsm.State()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
@@ -462,8 +462,8 @@ func TestNamespaceEndpoint_List_Blocking(t *testing.T) {
 func TestNamespaceEndpoint_DeleteNamespaces(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1 := TestServer(t, nil)
-	defer s1.Shutdown()
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
@@ -485,8 +485,8 @@ func TestNamespaceEndpoint_DeleteNamespaces(t *testing.T) {
 func TestNamespaceEndpoint_DeleteNamespaces_NonTerminal_Local(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1 := TestServer(t, nil)
-	defer s1.Shutdown()
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
@@ -515,20 +515,20 @@ func TestNamespaceEndpoint_DeleteNamespaces_NonTerminal_Local(t *testing.T) {
 func TestNamespaceEndpoint_DeleteNamespaces_NonTerminal_Federated_ACL(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1, root := TestACLServer(t, func(c *Config) {
+	s1, root, cleanupS1 := TestACLServer(t, func(c *Config) {
 		c.Region = "region1"
 		c.AuthoritativeRegion = "region1"
 		c.ACLEnabled = true
 	})
-	defer s1.Shutdown()
-	s2, _ := TestACLServer(t, func(c *Config) {
+	defer cleanupS1()
+	s2, _, cleanupS2 := TestACLServer(t, func(c *Config) {
 		c.Region = "region2"
 		c.AuthoritativeRegion = "region1"
 		c.ACLEnabled = true
 		c.ReplicationBackoff = 20 * time.Millisecond
 		c.ReplicationToken = root.SecretID
 	})
-	defer s2.Shutdown()
+	defer cleanupS2()
 	TestJoin(t, s1, s2)
 	testutil.WaitForLeader(t, s1.RPC)
 	testutil.WaitForLeader(t, s2.RPC)
@@ -576,8 +576,8 @@ func TestNamespaceEndpoint_DeleteNamespaces_NonTerminal_Federated_ACL(t *testing
 func TestNamespaceEndpoint_DeleteNamespaces_ACL(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1, root := TestACLServer(t, nil)
-	defer s1.Shutdown()
+	s1, root, cleanupS1 := TestACLServer(t, nil)
+	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
@@ -651,8 +651,8 @@ func TestNamespaceEndpoint_DeleteNamespaces_ACL(t *testing.T) {
 func TestNamespaceEndpoint_DeleteNamespaces_Default(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1 := TestServer(t, nil)
-	defer s1.Shutdown()
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
@@ -668,8 +668,8 @@ func TestNamespaceEndpoint_DeleteNamespaces_Default(t *testing.T) {
 func TestNamespaceEndpoint_UpsertNamespaces(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1 := TestServer(t, nil)
-	defer s1.Shutdown()
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
@@ -699,8 +699,8 @@ func TestNamespaceEndpoint_UpsertNamespaces(t *testing.T) {
 func TestNamespaceEndpoint_UpsertNamespaces_ACL(t *testing.T) {
 	assert := assert.New(t)
 	t.Parallel()
-	s1, root := TestACLServer(t, nil)
-	defer s1.Shutdown()
+	s1, root, cleanupS1 := TestACLServer(t, nil)
+	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 

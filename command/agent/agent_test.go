@@ -363,128 +363,47 @@ func TestAgent_ServerConfig_Limits_OK(t *testing.T) {
 	}
 }
 
-// TestAgent_ServerConfig_Limits_Errors asserts invalid Limits configurations
-// cause errors. This is the server-only (RPC) counterpart to
-// TestHTTPServer_Limits_Error.
-func TestAgent_ServerConfig_Limits_Error(t *testing.T) {
+func TestAgent_ClientConfig(t *testing.T) {
 	t.Parallel()
+	conf := DefaultConfig()
+	conf.Client.Enabled = true
 
-	cases := []struct {
-		name        string
-		expectedErr string
-		limits      sconfig.Limits
-	}{
-		{
-			name:        "Negative Timeout",
-			expectedErr: "rpc_handshake_timeout must be >= 0",
-			limits: sconfig.Limits{
-				RPCHandshakeTimeout:  "-5s",
-				RPCMaxConnsPerClient: helper.IntToPtr(100),
-			},
-		},
-		{
-			name:        "Invalid Timeout",
-			expectedErr: "error parsing rpc_handshake_timeout",
-			limits: sconfig.Limits{
-				RPCHandshakeTimeout:  "s",
-				RPCMaxConnsPerClient: helper.IntToPtr(100),
-			},
-		},
-		{
-			name:        "Missing Timeout",
-			expectedErr: "error parsing rpc_handshake_timeout",
-			limits: sconfig.Limits{
-				RPCHandshakeTimeout:  "",
-				RPCMaxConnsPerClient: helper.IntToPtr(100),
-			},
-		},
-		{
-			name:        "Negative Connection Limit",
-			expectedErr: "rpc_max_conns_per_client must be > 25; found: -100",
-			limits: sconfig.Limits{
-				RPCHandshakeTimeout:  "5s",
-				RPCMaxConnsPerClient: helper.IntToPtr(-100),
-			},
-		},
-		{
-			name:        "Low Connection Limit",
-			expectedErr: "rpc_max_conns_per_client must be > 25; found: 20",
-			limits: sconfig.Limits{
-				RPCHandshakeTimeout:  "5s",
-				RPCMaxConnsPerClient: helper.IntToPtr(sconfig.LimitsNonStreamingConnsPerClient),
-			},
-		},
+	// For Clients HTTP and RPC must be set (Serf can be skipped)
+	conf.Addresses.HTTP = "169.254.0.1"
+	conf.Addresses.RPC = "169.254.0.1"
+	conf.Ports.HTTP = 5678
+	a := &Agent{config: conf}
+
+	if err := conf.normalizeAddrs(); err != nil {
+		t.Fatalf("error normalizing config: %v", err)
+	}
+	c, err := a.clientConfig()
+	if err != nil {
+		t.Fatalf("got err: %v", err)
 	}
 
-	for i := range cases {
-		tc := cases[i]
-		t.Run(tc.name, func(t *testing.T) {
-			conf := DevConfig(nil)
-			require.NoError(t, conf.normalizeAddrs())
-
-			conf.Limits = tc.limits
-			serverConf, err := convertServerConfig(conf)
-			assert.Nil(t, serverConf)
-			require.Contains(t, err.Error(), tc.expectedErr)
-		})
-	}
-}
-
-// TestAgent_ServerConfig_Limits_OK asserts valid Limits configurations do not
-// cause errors. This is the server-only (RPC) counterpart to
-// TestHTTPServer_Limits_OK.
-func TestAgent_ServerConfig_Limits_OK(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name   string
-		limits sconfig.Limits
-	}{
-		{
-			name:   "Default",
-			limits: config.DefaultLimits(),
-		},
-		{
-			name: "Zero+nil is valid to disable",
-			limits: sconfig.Limits{
-				RPCHandshakeTimeout:  "0",
-				RPCMaxConnsPerClient: nil,
-			},
-		},
-		{
-			name: "Zeros are valid",
-			limits: sconfig.Limits{
-				RPCHandshakeTimeout:  "0s",
-				RPCMaxConnsPerClient: helper.IntToPtr(0),
-			},
-		},
-		{
-			name: "Low limits are valid",
-			limits: sconfig.Limits{
-				RPCHandshakeTimeout:  "1ms",
-				RPCMaxConnsPerClient: helper.IntToPtr(26),
-			},
-		},
-		{
-			name: "High limits are valid",
-			limits: sconfig.Limits{
-				RPCHandshakeTimeout:  "5h",
-				RPCMaxConnsPerClient: helper.IntToPtr(100000),
-			},
-		},
+	expectedHttpAddr := "169.254.0.1:5678"
+	if c.Node.HTTPAddr != expectedHttpAddr {
+		t.Fatalf("Expected http addr: %v, got: %v", expectedHttpAddr, c.Node.HTTPAddr)
 	}
 
-	for i := range cases {
-		tc := cases[i]
-		t.Run(tc.name, func(t *testing.T) {
-			conf := DevConfig(nil)
-			require.NoError(t, conf.normalizeAddrs())
+	conf = DefaultConfig()
+	conf.DevMode = true
+	a = &Agent{config: conf}
+	conf.Client.Enabled = true
+	conf.Addresses.HTTP = "169.254.0.1"
 
-			conf.Limits = tc.limits
-			serverConf, err := convertServerConfig(conf)
-			assert.NoError(t, err)
-			require.NotNil(t, serverConf)
-		})
+	if err := conf.normalizeAddrs(); err != nil {
+		t.Fatalf("error normalizing config: %v", err)
+	}
+	c, err = a.clientConfig()
+	if err != nil {
+		t.Fatalf("got err: %v", err)
+	}
+
+	expectedHttpAddr = "169.254.0.1:4646"
+	if c.Node.HTTPAddr != expectedHttpAddr {
+		t.Fatalf("Expected http addr: %v, got: %v", expectedHttpAddr, c.Node.HTTPAddr)
 	}
 }
 
