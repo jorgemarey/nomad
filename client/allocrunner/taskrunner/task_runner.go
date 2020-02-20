@@ -50,7 +50,7 @@ const (
 	// giving up and potentially leaking resources.
 	killFailureLimit = 5
 
-	// triggerUpdatechCap is the capacity for the triggerUpdateCh used for
+	// triggerUpdateChCap is the capacity for the triggerUpdateCh used for
 	// triggering updates. It should be exactly 1 as even if multiple
 	// updates have come in since the last one was handled, we only need to
 	// handle the last one.
@@ -158,6 +158,10 @@ type TaskRunner struct {
 	// registering services and checks
 	consulClient consul.ConsulServiceAPI
 
+	// sidsClient is the client used by the service identity hook for managing
+	// service identity tokens
+	siClient consul.ServiceIdentityAPI
+
 	// vaultClient is the client to use to derive and renew Vault tokens
 	vaultClient vaultclient.VaultClient
 
@@ -210,10 +214,15 @@ type TaskRunner struct {
 type Config struct {
 	Alloc        *structs.Allocation
 	ClientConfig *config.Config
-	Consul       consul.ConsulServiceAPI
 	Task         *structs.Task
 	TaskDir      *allocdir.TaskDir
 	Logger       log.Logger
+
+	// Consul is the client to use for managing Consul service registrations
+	Consul consul.ConsulServiceAPI
+
+	// ConsulSI is the client to use for managing Consul SI tokens
+	ConsulSI consul.ServiceIdentityAPI
 
 	// Vault is the client to use to derive and renew Vault tokens
 	Vault vaultclient.VaultClient
@@ -271,6 +280,7 @@ func NewTaskRunner(config *Config) (*TaskRunner, error) {
 		taskLeader:          config.Task.Leader,
 		envBuilder:          envBuilder,
 		consulClient:        config.Consul,
+		siClient:            config.ConsulSI,
 		vaultClient:         config.Vault,
 		state:               tstate,
 		localState:          state.NewLocalState(),
@@ -294,31 +304,15 @@ func NewTaskRunner(config *Config) (*TaskRunner, error) {
 
 	// Pull out the task's resources
 	ares := tr.alloc.AllocatedResources
-	if ares != nil {
-		tres, ok := ares.Tasks[tr.taskName]
-		if !ok {
-			return nil, fmt.Errorf("no task resources found on allocation")
-		}
-		tr.taskResources = tres
-	} else {
-		// COMPAT(0.11): Upgrade from 0.8 resources to 0.9+ resources
-		// Grab the old task resources
-		oldTr, ok := tr.alloc.TaskResources[tr.taskName]
-		if !ok {
-			return nil, fmt.Errorf("no task resources found on allocation")
-		}
-
-		// Convert the old to new
-		tr.taskResources = &structs.AllocatedTaskResources{
-			Cpu: structs.AllocatedCpuResources{
-				CpuShares: int64(oldTr.CPU),
-			},
-			Memory: structs.AllocatedMemoryResources{
-				MemoryMB: int64(oldTr.MemoryMB),
-			},
-			Networks: oldTr.Networks,
-		}
+	if ares == nil {
+		return nil, fmt.Errorf("no task resources found on allocation")
 	}
+
+	tres, ok := ares.Tasks[tr.taskName]
+	if !ok {
+		return nil, fmt.Errorf("no task resources found on allocation")
+	}
+	tr.taskResources = tres
 
 	// Build the restart tracker.
 	tg := tr.alloc.Job.LookupTaskGroup(tr.alloc.TaskGroup)
@@ -1253,15 +1247,9 @@ func (tr *TaskRunner) UpdateStats(ru *cstructs.TaskResourceUsage) {
 func (tr *TaskRunner) setGaugeForMemory(ru *cstructs.TaskResourceUsage) {
 	alloc := tr.Alloc()
 	var allocatedMem float32
-	if alloc.AllocatedResources != nil {
-		if taskRes := alloc.AllocatedResources.Tasks[tr.taskName]; taskRes != nil {
-			// Convert to bytes to match other memory metrics
-			allocatedMem = float32(taskRes.Memory.MemoryMB) * 1024 * 1024
-		}
-	} else if taskRes := alloc.TaskResources[tr.taskName]; taskRes != nil {
-		// COMPAT(0.11) Remove in 0.11 when TaskResources is removed
-		allocatedMem = float32(taskRes.MemoryMB) * 1024 * 1024
-
+	if taskRes := alloc.AllocatedResources.Tasks[tr.taskName]; taskRes != nil {
+		// Convert to bytes to match other memory metrics
+		allocatedMem = float32(taskRes.Memory.MemoryMB) * 1024 * 1024
 	}
 
 	if !tr.clientConfig.DisableTaggedMetrics {
@@ -1301,6 +1289,12 @@ func (tr *TaskRunner) setGaugeForMemory(ru *cstructs.TaskResourceUsage) {
 
 //TODO Remove Backwardscompat or use tr.Alloc()?
 func (tr *TaskRunner) setGaugeForCPU(ru *cstructs.TaskResourceUsage) {
+	alloc := tr.Alloc()
+	var allocatedCPU float32
+	if taskRes := alloc.AllocatedResources.Tasks[tr.taskName]; taskRes != nil {
+		allocatedCPU = float32(taskRes.Cpu.CpuShares)
+	}
+
 	if !tr.clientConfig.DisableTaggedMetrics {
 		metrics.SetGaugeWithLabels([]string{"client", "allocs", "cpu", "total_percent"},
 			float32(ru.ResourceUsage.CpuStats.Percent), tr.baseLabels)
@@ -1314,15 +1308,22 @@ func (tr *TaskRunner) setGaugeForCPU(ru *cstructs.TaskResourceUsage) {
 			float32(ru.ResourceUsage.CpuStats.ThrottledPeriods), tr.baseLabels)
 		metrics.SetGaugeWithLabels([]string{"client", "allocs", "cpu", "total_ticks"},
 			float32(ru.ResourceUsage.CpuStats.TotalTicks), tr.baseLabels)
+		if allocatedCPU > 0 {
+			metrics.SetGaugeWithLabels([]string{"client", "allocs", "cpu", "allocated"},
+				allocatedCPU, tr.baseLabels)
+		}
 	}
 
 	if tr.clientConfig.BackwardsCompatibleMetrics {
-		metrics.SetGauge([]string{"client", "allocs", tr.alloc.Job.Name, tr.alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "total_percent"}, float32(ru.ResourceUsage.CpuStats.Percent))
-		metrics.SetGauge([]string{"client", "allocs", tr.alloc.Job.Name, tr.alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "system"}, float32(ru.ResourceUsage.CpuStats.SystemMode))
-		metrics.SetGauge([]string{"client", "allocs", tr.alloc.Job.Name, tr.alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "user"}, float32(ru.ResourceUsage.CpuStats.UserMode))
-		metrics.SetGauge([]string{"client", "allocs", tr.alloc.Job.Name, tr.alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "throttled_time"}, float32(ru.ResourceUsage.CpuStats.ThrottledTime))
-		metrics.SetGauge([]string{"client", "allocs", tr.alloc.Job.Name, tr.alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "throttled_periods"}, float32(ru.ResourceUsage.CpuStats.ThrottledPeriods))
-		metrics.SetGauge([]string{"client", "allocs", tr.alloc.Job.Name, tr.alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "total_ticks"}, float32(ru.ResourceUsage.CpuStats.TotalTicks))
+		metrics.SetGauge([]string{"client", "allocs", alloc.Job.Name, alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "total_percent"}, float32(ru.ResourceUsage.CpuStats.Percent))
+		metrics.SetGauge([]string{"client", "allocs", alloc.Job.Name, alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "system"}, float32(ru.ResourceUsage.CpuStats.SystemMode))
+		metrics.SetGauge([]string{"client", "allocs", alloc.Job.Name, alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "user"}, float32(ru.ResourceUsage.CpuStats.UserMode))
+		metrics.SetGauge([]string{"client", "allocs", alloc.Job.Name, alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "throttled_time"}, float32(ru.ResourceUsage.CpuStats.ThrottledTime))
+		metrics.SetGauge([]string{"client", "allocs", alloc.Job.Name, alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "throttled_periods"}, float32(ru.ResourceUsage.CpuStats.ThrottledPeriods))
+		metrics.SetGauge([]string{"client", "allocs", alloc.Job.Name, alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "total_ticks"}, float32(ru.ResourceUsage.CpuStats.TotalTicks))
+		if allocatedCPU > 0 {
+			metrics.SetGauge([]string{"client", "allocs", alloc.Job.Name, alloc.TaskGroup, tr.allocID, tr.taskName, "cpu", "allocated"}, allocatedCPU)
+		}
 	}
 }
 

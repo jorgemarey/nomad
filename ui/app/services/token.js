@@ -1,11 +1,17 @@
 import Service, { inject as service } from '@ember/service';
 import { computed } from '@ember/object';
+import { alias } from '@ember/object/computed';
+import { getOwner } from '@ember/application';
 import { assign } from '@ember/polyfills';
+import { task } from 'ember-concurrency';
 import queryString from 'query-string';
 import fetch from 'nomad-ui/utils/fetch';
 
 export default Service.extend({
+  store: service(),
   system: service(),
+
+  aclEnabled: true,
 
   secret: computed({
     get() {
@@ -20,6 +26,45 @@ export default Service.extend({
 
       return value;
     },
+  }),
+
+  fetchSelfToken: task(function*() {
+    const TokenAdapter = getOwner(this).lookup('adapter:token');
+    try {
+      return yield TokenAdapter.findSelf();
+    } catch (e) {
+      const errors = e.errors ? e.errors.mapBy('detail') : [];
+      if (errors.find(error => error === 'ACL support disabled')) {
+        this.set('aclEnabled', false);
+      }
+      return null;
+    }
+  }),
+
+  selfToken: computed('secret', 'fetchSelfToken.lastSuccessful.value', function() {
+    if (this.secret) return this.get('fetchSelfToken.lastSuccessful.value');
+  }),
+
+  fetchSelfTokenPolicies: task(function*() {
+    try {
+      if (this.selfToken) {
+        return yield this.selfToken.get('policies');
+      } else {
+        let policy = yield this.store.findRecord('policy', 'anonymous');
+        return [policy];
+      }
+    } catch (e) {
+      return [];
+    }
+  }),
+
+  selfTokenPolicies: alias('fetchSelfTokenPolicies.lastSuccessful.value'),
+
+  fetchSelfTokenAndPolicies: task(function*() {
+    yield this.fetchSelfToken.perform();
+    if (this.aclEnabled) {
+      yield this.fetchSelfTokenPolicies.perform();
+    }
   }),
 
   // All non Ember Data requests should go through authorizedRequest.
@@ -47,6 +92,12 @@ export default Service.extend({
     }
 
     return this.authorizedRawRequest(url, options);
+  },
+
+  reset() {
+    this.fetchSelfToken.cancelAll({ resetState: true });
+    this.fetchSelfTokenPolicies.cancelAll({ resetState: true });
+    this.fetchSelfTokenAndPolicies.cancelAll({ resetState: true });
   },
 });
 

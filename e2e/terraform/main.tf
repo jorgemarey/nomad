@@ -34,7 +34,8 @@ variable "windows_client_count" {
 }
 
 variable "nomad_sha" {
-  description = "The sha of Nomad to run"
+  description = "The sha of Nomad to write to provisioning output"
+  default     = ""
 }
 
 provider "aws" {
@@ -99,8 +100,12 @@ output "servers" {
   value = aws_instance.server.*.public_ip
 }
 
-output "clients" {
-  value = aws_instance.client.*.public_ip
+output "linux_clients" {
+  value = aws_instance.client_linux.*.public_ip
+}
+
+output "windows_clients" {
+  value = aws_instance.client_windows.*.public_ip
 }
 
 output "message" {
@@ -109,8 +114,8 @@ Your cluster has been provisioned! - To prepare your environment, run the
 following:
 
 ```
-export NOMAD_ADDR=http://${aws_instance.client[0].public_ip}:4646
-export CONSUL_HTTP_ADDR=http://${aws_instance.client[0].public_ip}:8500
+export NOMAD_ADDR=http://${aws_instance.server[0].public_ip}:4646
+export CONSUL_HTTP_ADDR=http://${aws_instance.server[0].public_ip}:8500
 export NOMAD_E2E=1
 ```
 
@@ -122,7 +127,7 @@ go test -v ./e2e
 
 ssh into nodes with:
 ```
-ssh -i keys/${local.random_name}.pem ubuntu@${aws_instance.client[0].public_ip}
+ssh -i keys/${local.random_name}.pem ubuntu@${aws_instance.client_linux[0].public_ip}
 ```
 EOM
 

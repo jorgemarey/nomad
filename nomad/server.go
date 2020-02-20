@@ -205,6 +205,9 @@ type Server struct {
 	// consulCatalog is used for discovering other Nomad Servers via Consul
 	consulCatalog consul.CatalogAPI
 
+	// consulACLs is used for managing Consul Service Identity tokens.
+	consulACLs ConsulACLsAPI
+
 	// vault is the client for communicating with Vault.
 	vault VaultClient
 
@@ -218,6 +221,10 @@ type Server struct {
 	// current leader.
 	leaderAcl     string
 	leaderAclLock sync.Mutex
+
+	// clusterIDLock ensures the server does not try to concurrently establish
+	// a cluster ID, racing against itself in calls of ClusterID
+	clusterIDLock sync.Mutex
 
 	// statsFetcher is used by autopilot to check the status of the other
 	// Nomad router.
@@ -261,7 +268,7 @@ type endpoints struct {
 
 // NewServer is used to construct a new Nomad server from the
 // configuration, potentially returning an error
-func NewServer(config *Config, consulCatalog consul.CatalogAPI) (*Server, error) {
+func NewServer(config *Config, consulCatalog consul.CatalogAPI, consulACLs consul.ACLsAPI) (*Server, error) {
 	// Check the protocol version
 	if err := config.CheckVersion(); err != nil {
 		return nil, err
@@ -337,6 +344,9 @@ func NewServer(config *Config, consulCatalog consul.CatalogAPI) (*Server, error)
 
 	// Initialize the stats fetcher that autopilot will use.
 	s.statsFetcher = NewStatsFetcher(s.logger, s.connPool, s.config.Region)
+
+	// Setup Consul (more)
+	s.setupConsul(consulACLs)
 
 	// Setup Vault
 	if err := s.setupVaultClient(); err != nil {
@@ -622,10 +632,13 @@ func (s *Server) Shutdown() error {
 		s.fsm.Close()
 	}
 
-	// Stop Vault token renewal
+	// Stop Vault token renewal and revocations
 	if s.vault != nil {
 		s.vault.Stop()
 	}
+
+	// Stop the Consul ACLs token revocations
+	s.consulACLs.Stop()
 
 	return nil
 }
@@ -994,6 +1007,11 @@ func (s *Server) setupNodeDrainer() {
 	s.nodeDrainer = drainer.NewNodeDrainer(c)
 }
 
+// setupConsul is used to setup Server specific consul components.
+func (s *Server) setupConsul(consulACLs consul.ACLsAPI) {
+	s.consulACLs = NewConsulACLsAPI(consulACLs, s.logger, s.purgeSITokenAccessors)
+}
+
 // setupVaultClient is used to set up the Vault API client.
 func (s *Server) setupVaultClient() error {
 	v, err := NewVaultClient(s.config.VaultConfig, s.logger, s.purgeVaultAccessors)
@@ -1115,6 +1133,7 @@ func (s *Server) setupRpcServer(server *rpc.Server, ctx *RPCContext) {
 	server.Register(s.staticEndpoints.ClientStats)
 	server.Register(s.staticEndpoints.ClientAllocations)
 	server.Register(s.staticEndpoints.FileSystem)
+	server.Register(s.staticEndpoints.Agent)
 
 	// Create new dynamic endpoints and add them to the RPC server.
 	node := &Node{srv: s, ctx: ctx, logger: s.logger.Named("client")}
@@ -1281,10 +1300,10 @@ func (s *Server) setupRaft() error {
 		}
 	}
 
-	// Setup the leader channel
+	// Setup the leader channel; that keeps the latest leadership alone
 	leaderCh := make(chan bool, 1)
 	s.config.RaftConfig.NotifyCh = leaderCh
-	s.leaderCh = leaderCh
+	s.leaderCh = dropButLastChannel(leaderCh, s.shutdownCh)
 
 	// Setup the Raft store
 	s.raft, err = raft.NewRaft(s.config.RaftConfig, s.fsm, log, stable, snap, trans)
@@ -1564,6 +1583,45 @@ func (s *Server) GetConfig() *Config {
 // dynamic reloading of this value later.
 func (s *Server) ReplicationToken() string {
 	return s.config.ReplicationToken
+}
+
+// ClusterID returns the unique ID for this cluster.
+//
+// Any Nomad server agent may call this method to get at the ID.
+// If we are the leader and the ID has not yet been created, it will
+// be created now. Otherwise an error is returned.
+//
+// The ID will not be created until all participating servers have reached
+// a minimum version (0.10.4).
+func (s *Server) ClusterID() (string, error) {
+	s.clusterIDLock.Lock()
+	defer s.clusterIDLock.Unlock()
+
+	// try to load the cluster ID from state store
+	fsmState := s.fsm.State()
+	existingMeta, err := fsmState.ClusterMetadata()
+	if err != nil {
+		s.logger.Named("core").Error("failed to get cluster ID", "error", err)
+		return "", err
+	}
+
+	// got the cluster ID from state store, cache that and return it
+	if existingMeta != nil && existingMeta.ClusterID != "" {
+		return existingMeta.ClusterID, nil
+	}
+
+	// if we are not the leader, nothing more we can do
+	if !s.IsLeader() {
+		return "", errors.New("cluster ID not ready yet")
+	}
+
+	// we are the leader, try to generate the ID now
+	generatedID, err := s.generateClusterID()
+	if err != nil {
+		return "", err
+	}
+
+	return generatedID, nil
 }
 
 // peersInfoContent is used to help operators understand what happened to the

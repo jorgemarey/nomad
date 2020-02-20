@@ -41,7 +41,7 @@ cluster with zero configuration. To put it another way: if you have a Consul
 agent running on the same host as the Nomad agent with the default
 configuration, Nomad will automatically connect and configure with Consul.
 
-An important requirement is that each Nomad agent talks to a unique Consul
+~> An important requirement is that each Nomad agent talks to a unique Consul
 agent. Nomad agents should be configured to talk to Consul agents and not
 Consul servers. If you are observing flapping services, you may have 
 multiple Nomad agents talking to the same Consul agent. As such avoid
@@ -53,6 +53,12 @@ configuring Nomad to talk to Consul via DNS such as consul.service.consul
   Consul agent, given in the format `host:port`. Supports Unix sockets with the
   format: `unix:///tmp/consul/consul.sock`. Will default to the
   `CONSUL_HTTP_ADDR` environment variable if set.
+
+- `allow_unauthenticated` `(bool: true)` - Specifies if users submitting jobs to
+  the Nomad server should be required to provide their own Consul token, proving
+  they have access to the service identity policies required by the Consul Connect
+  enabled services listed in the job. This option should be
+  disabled in an untrusted environment.
 
 - `auth` `(string: "")` - Specifies the HTTP Basic Authentication information to
   use for access to the Consul Agent, given in the format `username:password`.

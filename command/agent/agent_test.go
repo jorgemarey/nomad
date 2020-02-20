@@ -176,6 +176,193 @@ func TestAgent_ServerConfig(t *testing.T) {
 	require.Equal(t, int32(3), out.BootstrapExpect)
 }
 
+func TestAgent_ServerConfig_SchedulerFlags(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    *structs.SchedulerConfiguration
+		expected structs.SchedulerConfiguration
+	}{
+		{
+			"default case",
+			nil,
+			structs.SchedulerConfiguration{
+				PreemptionConfig: structs.PreemptionConfig{
+					SystemSchedulerEnabled: true,
+				},
+			},
+		},
+		{
+			"empty value: preemption is disabled",
+			&structs.SchedulerConfiguration{},
+			structs.SchedulerConfiguration{
+				PreemptionConfig: structs.PreemptionConfig{
+					SystemSchedulerEnabled: false,
+				},
+			},
+		},
+		{
+			"all explicitly set",
+			&structs.SchedulerConfiguration{
+				PreemptionConfig: structs.PreemptionConfig{
+					SystemSchedulerEnabled:  true,
+					BatchSchedulerEnabled:   true,
+					ServiceSchedulerEnabled: true,
+				},
+			},
+			structs.SchedulerConfiguration{
+				PreemptionConfig: structs.PreemptionConfig{
+					SystemSchedulerEnabled:  true,
+					BatchSchedulerEnabled:   true,
+					ServiceSchedulerEnabled: true,
+				},
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			conf := DefaultConfig()
+			conf.Server.DefaultSchedulerConfig = c.input
+
+			a := &Agent{config: conf}
+			conf.AdvertiseAddrs.Serf = "127.0.0.1:4000"
+			conf.AdvertiseAddrs.RPC = "127.0.0.1:4001"
+			conf.AdvertiseAddrs.HTTP = "10.10.11.1:4005"
+			conf.ACL.Enabled = true
+			require.NoError(t, conf.normalizeAddrs())
+
+			out, err := a.serverConfig()
+			require.NoError(t, err)
+			require.Equal(t, c.expected, out.DefaultSchedulerConfig)
+		})
+	}
+}
+
+// TestAgent_ServerConfig_Limits_Errors asserts invalid Limits configurations
+// cause errors. This is the server-only (RPC) counterpart to
+// TestHTTPServer_Limits_Error.
+func TestAgent_ServerConfig_Limits_Error(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		expectedErr string
+		limits      sconfig.Limits
+	}{
+		{
+			name:        "Negative Timeout",
+			expectedErr: "rpc_handshake_timeout must be >= 0",
+			limits: sconfig.Limits{
+				RPCHandshakeTimeout:  "-5s",
+				RPCMaxConnsPerClient: helper.IntToPtr(100),
+			},
+		},
+		{
+			name:        "Invalid Timeout",
+			expectedErr: "error parsing rpc_handshake_timeout",
+			limits: sconfig.Limits{
+				RPCHandshakeTimeout:  "s",
+				RPCMaxConnsPerClient: helper.IntToPtr(100),
+			},
+		},
+		{
+			name:        "Missing Timeout",
+			expectedErr: "error parsing rpc_handshake_timeout",
+			limits: sconfig.Limits{
+				RPCHandshakeTimeout:  "",
+				RPCMaxConnsPerClient: helper.IntToPtr(100),
+			},
+		},
+		{
+			name:        "Negative Connection Limit",
+			expectedErr: "rpc_max_conns_per_client must be > 25; found: -100",
+			limits: sconfig.Limits{
+				RPCHandshakeTimeout:  "5s",
+				RPCMaxConnsPerClient: helper.IntToPtr(-100),
+			},
+		},
+		{
+			name:        "Low Connection Limit",
+			expectedErr: "rpc_max_conns_per_client must be > 25; found: 20",
+			limits: sconfig.Limits{
+				RPCHandshakeTimeout:  "5s",
+				RPCMaxConnsPerClient: helper.IntToPtr(sconfig.LimitsNonStreamingConnsPerClient),
+			},
+		},
+	}
+
+	for i := range cases {
+		tc := cases[i]
+		t.Run(tc.name, func(t *testing.T) {
+			conf := DevConfig(nil)
+			require.NoError(t, conf.normalizeAddrs())
+
+			conf.Limits = tc.limits
+			serverConf, err := convertServerConfig(conf)
+			assert.Nil(t, serverConf)
+			require.Contains(t, err.Error(), tc.expectedErr)
+		})
+	}
+}
+
+// TestAgent_ServerConfig_Limits_OK asserts valid Limits configurations do not
+// cause errors. This is the server-only (RPC) counterpart to
+// TestHTTPServer_Limits_OK.
+func TestAgent_ServerConfig_Limits_OK(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		limits sconfig.Limits
+	}{
+		{
+			name:   "Default",
+			limits: config.DefaultLimits(),
+		},
+		{
+			name: "Zero+nil is valid to disable",
+			limits: sconfig.Limits{
+				RPCHandshakeTimeout:  "0",
+				RPCMaxConnsPerClient: nil,
+			},
+		},
+		{
+			name: "Zeros are valid",
+			limits: sconfig.Limits{
+				RPCHandshakeTimeout:  "0s",
+				RPCMaxConnsPerClient: helper.IntToPtr(0),
+			},
+		},
+		{
+			name: "Low limits are valid",
+			limits: sconfig.Limits{
+				RPCHandshakeTimeout:  "1ms",
+				RPCMaxConnsPerClient: helper.IntToPtr(26),
+			},
+		},
+		{
+			name: "High limits are valid",
+			limits: sconfig.Limits{
+				RPCHandshakeTimeout:  "5h",
+				RPCMaxConnsPerClient: helper.IntToPtr(100000),
+			},
+		},
+	}
+
+	for i := range cases {
+		tc := cases[i]
+		t.Run(tc.name, func(t *testing.T) {
+			conf := DevConfig(nil)
+			require.NoError(t, conf.normalizeAddrs())
+
+			conf.Limits = tc.limits
+			serverConf, err := convertServerConfig(conf)
+			assert.NoError(t, err)
+			require.NotNil(t, serverConf)
+		})
+	}
+}
+
 // TestAgent_ServerConfig_Limits_Errors asserts invalid Limits configurations
 // cause errors. This is the server-only (RPC) counterpart to
 // TestHTTPServer_Limits_Error.

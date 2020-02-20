@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/consul/lib/freeport"
 	"github.com/hashicorp/nomad/client/testutil"
 	"github.com/hashicorp/nomad/helper"
+	"github.com/hashicorp/nomad/helper/freeport"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/stretchr/testify/require"
@@ -159,21 +159,22 @@ func TestConfig_Merge(t *testing.T) {
 			TLSServerName:        "1",
 		},
 		Consul: &config.ConsulConfig{
-			ServerServiceName:  "1",
-			ClientServiceName:  "1",
-			AutoAdvertise:      &falseValue,
-			Addr:               "1",
-			Timeout:            1 * time.Second,
-			Token:              "1",
-			Auth:               "1",
-			EnableSSL:          &falseValue,
-			VerifySSL:          &falseValue,
-			CAFile:             "1",
-			CertFile:           "1",
-			KeyFile:            "1",
-			ServerAutoJoin:     &falseValue,
-			ClientAutoJoin:     &falseValue,
-			ChecksUseAdvertise: &falseValue,
+			ServerServiceName:    "1",
+			ClientServiceName:    "1",
+			AutoAdvertise:        &falseValue,
+			Addr:                 "1",
+			AllowUnauthenticated: &falseValue,
+			Timeout:              1 * time.Second,
+			Token:                "1",
+			Auth:                 "1",
+			EnableSSL:            &falseValue,
+			VerifySSL:            &falseValue,
+			CAFile:               "1",
+			CertFile:             "1",
+			KeyFile:              "1",
+			ServerAutoJoin:       &falseValue,
+			ClientAutoJoin:       &falseValue,
+			ChecksUseAdvertise:   &falseValue,
 		},
 		Autopilot: &config.AutopilotConfig{
 			CleanupDeadServers:      &falseValue,
@@ -333,21 +334,22 @@ func TestConfig_Merge(t *testing.T) {
 			TLSServerName:        "2",
 		},
 		Consul: &config.ConsulConfig{
-			ServerServiceName:  "2",
-			ClientServiceName:  "2",
-			AutoAdvertise:      &trueValue,
-			Addr:               "2",
-			Timeout:            2 * time.Second,
-			Token:              "2",
-			Auth:               "2",
-			EnableSSL:          &trueValue,
-			VerifySSL:          &trueValue,
-			CAFile:             "2",
-			CertFile:           "2",
-			KeyFile:            "2",
-			ServerAutoJoin:     &trueValue,
-			ClientAutoJoin:     &trueValue,
-			ChecksUseAdvertise: &trueValue,
+			ServerServiceName:    "2",
+			ClientServiceName:    "2",
+			AutoAdvertise:        &trueValue,
+			Addr:                 "2",
+			AllowUnauthenticated: &trueValue,
+			Timeout:              2 * time.Second,
+			Token:                "2",
+			Auth:                 "2",
+			EnableSSL:            &trueValue,
+			VerifySSL:            &trueValue,
+			CAFile:               "2",
+			CertFile:             "2",
+			KeyFile:              "2",
+			ServerAutoJoin:       &trueValue,
+			ClientAutoJoin:       &trueValue,
+			ChecksUseAdvertise:   &trueValue,
 		},
 		Sentinel: &config.SentinelConfig{
 			Imports: []*config.SentinelImport{
@@ -594,7 +596,9 @@ func TestConfig_Listener(t *testing.T) {
 	}
 
 	// Works with valid inputs
-	ports := freeport.GetT(t, 2)
+	ports := freeport.MustTake(2)
+	defer freeport.Return(ports)
+
 	ln, err := config.Listener("tcp", "127.0.0.1", ports[0])
 	if err != nil {
 		t.Fatalf("err: %s", err)

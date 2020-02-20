@@ -31,6 +31,7 @@ func TestParse(t *testing.T) {
 				Datacenters: []string{"us2", "eu1"},
 				Region:      helper.StringToPtr("fooregion"),
 				Namespace:   helper.StringToPtr("foonamespace"),
+				ConsulToken: helper.StringToPtr("abc"),
 				VaultToken:  helper.StringToPtr("foo"),
 
 				Meta: map[string]string{
@@ -218,7 +219,13 @@ func TestParse(t *testing.T) {
 									{
 										Tags:       []string{"foo", "bar"},
 										CanaryTags: []string{"canary", "bam"},
-										PortLabel:  "http",
+										Meta: map[string]string{
+											"abc": "123",
+										},
+										CanaryMeta: map[string]string{
+											"canary": "boom",
+										},
+										PortLabel: "http",
 										Checks: []api.ServiceCheck{
 											{
 												Name:        "check-name",
@@ -928,8 +935,9 @@ func TestParse(t *testing.T) {
 				Datacenters: []string{"dc1"},
 				TaskGroups: []*api.TaskGroup{
 					{
-						Name:  helper.StringToPtr("bar"),
-						Count: helper.IntToPtr(3),
+						Name:          helper.StringToPtr("bar"),
+						ShutdownDelay: helper.TimeToPtr(14 * time.Second),
+						Count:         helper.IntToPtr(3),
 						Networks: []*api.NetworkResource{
 							{
 								Mode: "bridge",
