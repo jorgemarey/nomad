@@ -101,7 +101,6 @@ type Server struct {
 
 	// The raft instance is used among Nomad nodes within the
 	// region to protect operations that require strong consistency
-	leaderCh      <-chan bool
 	raft          *raft.Raft
 	raftLayer     *RaftLayer
 	raftStore     *raftboltdb.BoltStore
@@ -250,6 +249,8 @@ type endpoints struct {
 	Eval       *Eval
 	Plan       *Plan
 	Alloc      *Alloc
+	CSIVolume  *CSIVolume
+	CSIPlugin  *CSIPlugin
 	Deployment *Deployment
 	Region     *Region
 	Search     *Search
@@ -257,6 +258,7 @@ type endpoints struct {
 	System     *System
 	Operator   *Operator
 	ACL        *ACL
+	Scaling    *Scaling
 	Enterprise *EnterpriseEndpoints
 
 	// Client endpoints
@@ -264,6 +266,7 @@ type endpoints struct {
 	FileSystem        *FileSystem
 	Agent             *Agent
 	ClientAllocations *ClientAllocations
+	ClientCSI         *ClientCSI
 }
 
 // NewServer is used to construct a new Nomad server from the
@@ -823,7 +826,7 @@ func (s *Server) setupBootstrapHandler() error {
 
 		// (ab)use serf.go's behavior of setting BootstrapExpect to
 		// zero if we have bootstrapped.  If we have bootstrapped
-		bootstrapExpect := atomic.LoadInt32(&s.config.BootstrapExpect)
+		bootstrapExpect := s.config.BootstrapExpect
 		if bootstrapExpect == 0 {
 			// This Nomad Server has been bootstrapped.  Rely on
 			// the peersTimeout firing as a guard to prevent
@@ -849,7 +852,7 @@ func (s *Server) setupBootstrapHandler() error {
 			// quorum has been reached, we do not need to poll
 			// Consul.  Let the normal timeout-based strategy
 			// take over.
-			if raftPeers >= int(bootstrapExpect) {
+			if raftPeers >= bootstrapExpect {
 				peersTimeout.Reset(peersPollInterval + lib.RandomStagger(peersPollInterval/peersPollJitterFactor))
 				return nil
 			}
@@ -1093,11 +1096,14 @@ func (s *Server) setupRpcServer(server *rpc.Server, ctx *RPCContext) {
 		s.staticEndpoints.Eval = &Eval{srv: s, logger: s.logger.Named("eval")}
 		s.staticEndpoints.Job = NewJobEndpoints(s)
 		s.staticEndpoints.Node = &Node{srv: s, logger: s.logger.Named("client")} // Add but don't register
+		s.staticEndpoints.CSIVolume = &CSIVolume{srv: s, logger: s.logger.Named("csi_volume")}
+		s.staticEndpoints.CSIPlugin = &CSIPlugin{srv: s, logger: s.logger.Named("csi_plugin")}
 		s.staticEndpoints.Deployment = &Deployment{srv: s, logger: s.logger.Named("deployment")}
 		s.staticEndpoints.Operator = &Operator{srv: s, logger: s.logger.Named("operator")}
 		s.staticEndpoints.Periodic = &Periodic{srv: s, logger: s.logger.Named("periodic")}
 		s.staticEndpoints.Plan = &Plan{srv: s, logger: s.logger.Named("plan")}
 		s.staticEndpoints.Region = &Region{srv: s, logger: s.logger.Named("region")}
+		s.staticEndpoints.Scaling = &Scaling{srv: s, logger: s.logger.Named("scaling")}
 		s.staticEndpoints.Status = &Status{srv: s, logger: s.logger.Named("status")}
 		s.staticEndpoints.System = &System{srv: s, logger: s.logger.Named("system")}
 		s.staticEndpoints.Search = &Search{srv: s, logger: s.logger.Named("search")}
@@ -1107,6 +1113,7 @@ func (s *Server) setupRpcServer(server *rpc.Server, ctx *RPCContext) {
 		s.staticEndpoints.ClientStats = &ClientStats{srv: s, logger: s.logger.Named("client_stats")}
 		s.staticEndpoints.ClientAllocations = &ClientAllocations{srv: s, logger: s.logger.Named("client_allocs")}
 		s.staticEndpoints.ClientAllocations.register()
+		s.staticEndpoints.ClientCSI = &ClientCSI{srv: s, logger: s.logger.Named("client_csi")}
 
 		// Streaming endpoints
 		s.staticEndpoints.FileSystem = &FileSystem{srv: s, logger: s.logger.Named("client_fs")}
@@ -1121,17 +1128,21 @@ func (s *Server) setupRpcServer(server *rpc.Server, ctx *RPCContext) {
 	server.Register(s.staticEndpoints.Alloc)
 	server.Register(s.staticEndpoints.Eval)
 	server.Register(s.staticEndpoints.Job)
+	server.Register(s.staticEndpoints.CSIVolume)
+	server.Register(s.staticEndpoints.CSIPlugin)
 	server.Register(s.staticEndpoints.Deployment)
 	server.Register(s.staticEndpoints.Operator)
 	server.Register(s.staticEndpoints.Periodic)
 	server.Register(s.staticEndpoints.Plan)
 	server.Register(s.staticEndpoints.Region)
+	server.Register(s.staticEndpoints.Scaling)
 	server.Register(s.staticEndpoints.Status)
 	server.Register(s.staticEndpoints.System)
 	server.Register(s.staticEndpoints.Search)
 	s.staticEndpoints.Enterprise.Register(server)
 	server.Register(s.staticEndpoints.ClientStats)
 	server.Register(s.staticEndpoints.ClientAllocations)
+	server.Register(s.staticEndpoints.ClientCSI)
 	server.Register(s.staticEndpoints.FileSystem)
 	server.Register(s.staticEndpoints.Agent)
 
@@ -1173,8 +1184,7 @@ func (s *Server) setupRaft() error {
 	s.raftTransport = trans
 
 	// Make sure we set the Logger.
-	logger := s.logger.StandardLoggerIntercept(&log.StandardLoggerOptions{InferLevels: true})
-	s.config.RaftConfig.Logger = logger
+	s.config.RaftConfig.Logger = s.logger.Named("raft")
 	s.config.RaftConfig.LogOutput = nil
 
 	// Our version of Raft protocol 2 requires the LocalID to match the network
@@ -1277,9 +1287,9 @@ func (s *Server) setupRaft() error {
 		}
 	}
 
-	// If we are in bootstrap or dev mode and the state is clean then we can
+	// If we are a single server cluster and the state is clean then we can
 	// bootstrap now.
-	if s.config.Bootstrap || s.config.DevMode {
+	if s.isSingleServerCluster() {
 		hasState, err := raft.HasExistingState(log, stable, snap)
 		if err != nil {
 			return err
@@ -1299,11 +1309,6 @@ func (s *Server) setupRaft() error {
 			}
 		}
 	}
-
-	// Setup the leader channel; that keeps the latest leadership alone
-	leaderCh := make(chan bool, 1)
-	s.config.RaftConfig.NotifyCh = leaderCh
-	s.leaderCh = dropButLastChannel(leaderCh, s.shutdownCh)
 
 	// Setup the Raft store
 	s.raft, err = raft.NewRaft(s.config.RaftConfig, s.fsm, log, stable, snap, trans)
@@ -1327,10 +1332,10 @@ func (s *Server) setupSerf(conf *serf.Config, ch chan serf.Event, path string) (
 	conf.Tags["id"] = s.config.NodeID
 	conf.Tags["rpc_addr"] = s.clientRpcAdvertise.(*net.TCPAddr).IP.String()         // Address that clients will use to RPC to servers
 	conf.Tags["port"] = fmt.Sprintf("%d", s.serverRpcAdvertise.(*net.TCPAddr).Port) // Port servers use to RPC to one and another
-	if s.config.Bootstrap || (s.config.DevMode && !s.config.DevDisableBootstrap) {
+	if s.isSingleServerCluster() {
 		conf.Tags["bootstrap"] = "1"
 	}
-	bootstrapExpect := atomic.LoadInt32(&s.config.BootstrapExpect)
+	bootstrapExpect := s.config.BootstrapExpect
 	if bootstrapExpect != 0 {
 		conf.Tags["expect"] = fmt.Sprintf("%d", bootstrapExpect)
 	}
@@ -1531,7 +1536,7 @@ func (s *Server) Stats() map[string]map[string]string {
 			"server":        "true",
 			"leader":        fmt.Sprintf("%v", s.IsLeader()),
 			"leader_addr":   string(s.raft.Leader()),
-			"bootstrap":     fmt.Sprintf("%v", s.config.Bootstrap),
+			"bootstrap":     fmt.Sprintf("%v", s.isSingleServerCluster()),
 			"known_regions": toString(uint64(len(s.peers))),
 		},
 		"raft":    s.raft.Stats(),
@@ -1622,6 +1627,10 @@ func (s *Server) ClusterID() (string, error) {
 	}
 
 	return generatedID, nil
+}
+
+func (s *Server) isSingleServerCluster() bool {
+	return s.config.BootstrapExpect == 1
 }
 
 // peersInfoContent is used to help operators understand what happened to the

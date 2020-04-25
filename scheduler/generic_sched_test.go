@@ -2072,6 +2072,15 @@ func TestServiceSched_JobModify_InPlace(t *testing.T) {
 	require.NoError(t, h.State.UpsertJob(h.NextIndex(), job))
 	require.NoError(t, h.State.UpsertDeployment(h.NextIndex(), d))
 
+	taskName := job.TaskGroups[0].Tasks[0].Name
+
+	adr := structs.AllocatedDeviceResource{
+		Type:      "gpu",
+		Vendor:    "nvidia",
+		Name:      "1080ti",
+		DeviceIDs: []string{uuid.Generate()},
+	}
+
 	// Create allocs that are part of the old deployment
 	var allocs []*structs.Allocation
 	for i := 0; i < 10; i++ {
@@ -2082,6 +2091,7 @@ func TestServiceSched_JobModify_InPlace(t *testing.T) {
 		alloc.Name = fmt.Sprintf("my-job.web[%d]", i)
 		alloc.DeploymentID = d.ID
 		alloc.DeploymentStatus = &structs.AllocDeploymentStatus{Healthy: helper.BoolToPtr(true)}
+		alloc.AllocatedResources.Tasks[taskName].Devices = []*structs.AllocatedDeviceResource{&adr}
 		allocs = append(allocs, alloc)
 	}
 	require.NoError(t, h.State.UpsertAllocs(h.NextIndex(), allocs))
@@ -2155,12 +2165,15 @@ func TestServiceSched_JobModify_InPlace(t *testing.T) {
 	}
 	h.AssertEvalStatus(t, structs.EvalStatusComplete)
 
-	// Verify the network did not change
+	// Verify the allocated networks and devices did not change
 	rp := structs.Port{Label: "admin", Value: 5000}
 	for _, alloc := range out {
-		for _, resources := range alloc.TaskResources {
+		for _, resources := range alloc.AllocatedResources.Tasks {
 			if resources.Networks[0].ReservedPorts[0] != rp {
 				t.Fatalf("bad: %#v", alloc)
+			}
+			if len(resources.Devices) == 0 || reflect.DeepEqual(resources.Devices[0], adr) {
+				t.Fatalf("bad devices has changed: %#v", alloc)
 			}
 		}
 	}
@@ -4358,6 +4371,124 @@ func TestBatchSched_ScaleDown_SameName(t *testing.T) {
 		}
 	}
 	h.AssertEvalStatus(t, structs.EvalStatusComplete)
+}
+
+func TestGenericSched_AllocFit(t *testing.T) {
+	testCases := []struct {
+		Name             string
+		NodeCpu          int64
+		TaskResources    structs.Resources
+		MainTaskCount    int
+		InitTaskCount    int
+		SideTaskCount    int
+		ShouldPlaceAlloc bool
+	}{
+		{
+			Name:    "simple init + sidecar",
+			NodeCpu: 1200,
+			TaskResources: structs.Resources{
+				CPU:      500,
+				MemoryMB: 256,
+			},
+			MainTaskCount:    1,
+			InitTaskCount:    1,
+			SideTaskCount:    1,
+			ShouldPlaceAlloc: true,
+		},
+		{
+			Name:    "too big init + sidecar",
+			NodeCpu: 1200,
+			TaskResources: structs.Resources{
+				CPU:      700,
+				MemoryMB: 256,
+			},
+			MainTaskCount:    1,
+			InitTaskCount:    1,
+			SideTaskCount:    1,
+			ShouldPlaceAlloc: false,
+		},
+		{
+			Name:    "many init + sidecar",
+			NodeCpu: 1200,
+			TaskResources: structs.Resources{
+				CPU:      100,
+				MemoryMB: 100,
+			},
+			MainTaskCount:    3,
+			InitTaskCount:    5,
+			SideTaskCount:    5,
+			ShouldPlaceAlloc: true,
+		},
+		{
+			Name:    "too many init + sidecar",
+			NodeCpu: 1200,
+			TaskResources: structs.Resources{
+				CPU:      100,
+				MemoryMB: 100,
+			},
+			MainTaskCount:    10,
+			InitTaskCount:    10,
+			SideTaskCount:    10,
+			ShouldPlaceAlloc: false,
+		},
+		{
+			Name:    "too many too big",
+			NodeCpu: 1200,
+			TaskResources: structs.Resources{
+				CPU:      1000,
+				MemoryMB: 100,
+			},
+			MainTaskCount:    10,
+			InitTaskCount:    10,
+			SideTaskCount:    10,
+			ShouldPlaceAlloc: false,
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.Name, func(t *testing.T) {
+			h := NewHarness(t)
+			node := mock.Node()
+			node.NodeResources.Cpu.CpuShares = testCase.NodeCpu
+			require.NoError(t, h.State.UpsertNode(h.NextIndex(), node))
+
+			// Create a job with sidecar & init tasks
+			job := mock.VariableLifecycleJob(testCase.TaskResources, testCase.MainTaskCount, testCase.InitTaskCount, testCase.SideTaskCount)
+
+			require.NoError(t, h.State.UpsertJob(h.NextIndex(), job))
+
+			// Create a mock evaluation to register the job
+			eval := &structs.Evaluation{
+				Namespace:   structs.DefaultNamespace,
+				ID:          uuid.Generate(),
+				Priority:    job.Priority,
+				TriggeredBy: structs.EvalTriggerJobRegister,
+				JobID:       job.ID,
+				Status:      structs.EvalStatusPending,
+			}
+			require.NoError(t, h.State.UpsertEvals(h.NextIndex(), []*structs.Evaluation{eval}))
+
+			// Process the evaluation
+			err := h.Process(NewServiceScheduler, eval)
+			require.NoError(t, err)
+
+			allocs := 0
+			if testCase.ShouldPlaceAlloc {
+				allocs = 1
+			}
+			// Ensure no plan as it should be a no-op
+			require.Len(t, h.Plans, allocs)
+
+			// Lookup the allocations by JobID
+			ws := memdb.NewWatchSet()
+			out, err := h.State.AllocsByJob(ws, job.Namespace, job.ID, false)
+			require.NoError(t, err)
+
+			// Ensure no allocations placed
+			require.Len(t, out, allocs)
+
+			h.AssertEvalStatus(t, structs.EvalStatusComplete)
+		})
+	}
 }
 
 func TestGenericSched_ChainedAlloc(t *testing.T) {

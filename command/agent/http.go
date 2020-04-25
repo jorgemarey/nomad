@@ -18,11 +18,11 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/go-connlimit"
 	log "github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-msgpack/codec"
 	"github.com/hashicorp/nomad/helper/noxssrw"
 	"github.com/hashicorp/nomad/helper/tlsutil"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/rs/cors"
-	"github.com/ugorji/go/codec"
 )
 
 const (
@@ -32,6 +32,13 @@ const (
 	// ErrEntOnly is the error returned if accessing an enterprise only
 	// endpoint
 	ErrEntOnly = "Nomad Enterprise only endpoint"
+
+	// ContextKeyReqID is a unique ID for a given request
+	ContextKeyReqID = "requestID"
+
+	// MissingRequestID is a placeholder if we cannot retrieve a request
+	// UUID from context
+	MissingRequestID = "<missing request id>"
 )
 
 var (
@@ -50,6 +57,9 @@ var (
 	})
 )
 
+type handlerFn func(resp http.ResponseWriter, req *http.Request) (interface{}, error)
+type handlerByteFn func(resp http.ResponseWriter, req *http.Request) ([]byte, error)
+
 // HTTPServer is used to wrap an Agent and expose it over an HTTP interface
 type HTTPServer struct {
 	agent      *Agent
@@ -61,8 +71,6 @@ type HTTPServer struct {
 
 	wsUpgrader *websocket.Upgrader
 }
-
-type handlerFn func(resp http.ResponseWriter, req *http.Request) (interface{}, error)
 
 // NewHTTPServer starts new HTTP server over the agent
 func NewHTTPServer(agent *Agent, config *Config) (*HTTPServer, error) {
@@ -138,6 +146,7 @@ func NewHTTPServer(agent *Agent, config *Config) (*HTTPServer, error) {
 		Addr:      srv.Addr,
 		Handler:   gzip(mux),
 		ConnState: makeConnState(config.TLSConfig.EnableHTTP, handshakeTimeout, maxConns),
+		ErrorLog:  newHTTPServerLogger(srv.logger),
 	}
 
 	go func() {
@@ -256,6 +265,11 @@ func (s *HTTPServer) registerHandlers(enableDebug bool) {
 	s.mux.HandleFunc("/v1/deployments", s.wrap(s.DeploymentsRequest))
 	s.mux.HandleFunc("/v1/deployment/", s.wrap(s.DeploymentSpecificRequest))
 
+	s.mux.HandleFunc("/v1/volumes", s.wrap(s.CSIVolumesRequest))
+	s.mux.HandleFunc("/v1/volume/csi/", s.wrap(s.CSIVolumeSpecificRequest))
+	s.mux.HandleFunc("/v1/plugins", s.wrap(s.CSIPluginsRequest))
+	s.mux.HandleFunc("/v1/plugin/csi/", s.wrap(s.CSIPluginSpecificRequest))
+
 	s.mux.HandleFunc("/v1/acl/policies", s.wrap(s.ACLPoliciesRequest))
 	s.mux.HandleFunc("/v1/acl/policy/", s.wrap(s.ACLPolicySpecificRequest))
 
@@ -292,6 +306,9 @@ func (s *HTTPServer) registerHandlers(enableDebug bool) {
 
 	s.mux.HandleFunc("/v1/regions", s.wrap(s.RegionListRequest))
 
+	s.mux.HandleFunc("/v1/scaling/policies", s.wrap(s.ScalingPoliciesRequest))
+	s.mux.HandleFunc("/v1/scaling/policy/", s.wrap(s.ScalingPolicySpecificRequest))
+
 	s.mux.HandleFunc("/v1/status/leader", s.wrap(s.StatusLeaderRequest))
 	s.mux.HandleFunc("/v1/status/peers", s.wrap(s.StatusPeersRequest))
 
@@ -307,14 +324,14 @@ func (s *HTTPServer) registerHandlers(enableDebug bool) {
 	s.mux.HandleFunc("/v1/operator/scheduler/configuration", s.wrap(s.OperatorSchedulerConfiguration))
 
 	if uiEnabled {
-		s.mux.Handle("/ui/", http.StripPrefix("/ui/", handleUI(http.FileServer(&UIAssetWrapper{FileSystem: assetFS()}))))
+		s.mux.Handle("/ui/", http.StripPrefix("/ui/", s.handleUI(http.FileServer(&UIAssetWrapper{FileSystem: assetFS()}))))
 	} else {
 		// Write the stubHTML
 		s.mux.HandleFunc("/ui/", func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(stubHTML))
 		})
 	}
-	s.mux.Handle("/", handleRootFallthrough())
+	s.mux.Handle("/", s.handleRootFallthrough())
 
 	if enableDebug {
 		if !s.agent.config.DevMode {
@@ -370,7 +387,7 @@ func (e *codedError) Code() int {
 	return e.code
 }
 
-func handleUI(h http.Handler) http.Handler {
+func (s *HTTPServer) handleUI(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		header := w.Header()
 		header.Add("Content-Security-Policy", "default-src 'none'; connect-src *; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'")
@@ -379,14 +396,40 @@ func handleUI(h http.Handler) http.Handler {
 	})
 }
 
-func handleRootFallthrough() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+func (s *HTTPServer) handleRootFallthrough() http.Handler {
+	return s.auditHTTPHandler(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/" {
 			http.Redirect(w, req, "/ui/", 307)
 		} else {
 			w.WriteHeader(http.StatusNotFound)
 		}
-	})
+	}))
+}
+
+func errCodeFromHandler(err error) (int, string) {
+	if err == nil {
+		return 0, ""
+	}
+
+	code := 500
+	errMsg := err.Error()
+	if http, ok := err.(HTTPCodedError); ok {
+		code = http.Code()
+	} else if ecode, emsg, ok := structs.CodeFromRPCCodedErr(err); ok {
+		code = ecode
+		errMsg = emsg
+	} else {
+		// RPC errors get wrapped, so manually unwrap by only looking at their suffix
+		if strings.HasSuffix(errMsg, structs.ErrPermissionDenied.Error()) {
+			errMsg = structs.ErrPermissionDenied.Error()
+			code = 403
+		} else if strings.HasSuffix(errMsg, structs.ErrTokenNotFound.Error()) {
+			errMsg = structs.ErrTokenNotFound.Error()
+			code = 403
+		}
+	}
+
+	return code, errMsg
 }
 
 // wrap is used to wrap functions to make them more convenient
@@ -399,7 +442,7 @@ func (s *HTTPServer) wrap(handler func(resp http.ResponseWriter, req *http.Reque
 		defer func() {
 			s.logger.Debug("request complete", "method", req.Method, "path", reqURL, "duration", time.Now().Sub(start))
 		}()
-		obj, err := handler(resp, req)
+		obj, err := s.auditHandler(handler)(resp, req)
 
 		// Check for an error
 	HAS_ERR:
@@ -471,28 +514,11 @@ func (s *HTTPServer) wrapNonJSON(handler func(resp http.ResponseWriter, req *htt
 		defer func() {
 			s.logger.Debug("request complete", "method", req.Method, "path", reqURL, "duration", time.Now().Sub(start))
 		}()
-		obj, err := handler(resp, req)
+		obj, err := s.auditNonJSONHandler(handler)(resp, req)
 
 		// Check for an error
 		if err != nil {
-			code := 500
-			errMsg := err.Error()
-			if http, ok := err.(HTTPCodedError); ok {
-				code = http.Code()
-			} else if ecode, emsg, ok := structs.CodeFromRPCCodedErr(err); ok {
-				code = ecode
-				errMsg = emsg
-			} else {
-				// RPC errors get wrapped, so manually unwrap by only looking at their suffix
-				if strings.HasSuffix(errMsg, structs.ErrPermissionDenied.Error()) {
-					errMsg = structs.ErrPermissionDenied.Error()
-					code = 403
-				} else if strings.HasSuffix(errMsg, structs.ErrTokenNotFound.Error()) {
-					errMsg = structs.ErrTokenNotFound.Error()
-					code = 403
-				}
-			}
-
+			code, errMsg := errCodeFromHandler(err)
 			resp.WriteHeader(code)
 			resp.Write([]byte(errMsg))
 			s.logger.Error("request failed", "method", req.Method, "path", reqURL, "error", err, "code", code)

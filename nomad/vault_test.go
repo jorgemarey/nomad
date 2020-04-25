@@ -24,7 +24,7 @@ import (
 	"github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/nomad/testutil"
 	vapi "github.com/hashicorp/vault/api"
-	vaultconsts "github.com/hashicorp/vault/helper/consts"
+	vaultconsts "github.com/hashicorp/vault/sdk/helper/consts"
 )
 
 const (
@@ -423,7 +423,7 @@ func TestVaultClient_ValidateRole_Deprecated_Success(t *testing.T) {
 	})
 }
 
-func TestVaultClient_ValidateRole_NonExistant(t *testing.T) {
+func TestVaultClient_ValidateRole_NonExistent(t *testing.T) {
 	t.Parallel()
 	v := testutil.NewTestVault(t)
 	defer v.Stop()

@@ -103,6 +103,10 @@ type AutopilotConfig struct {
 	// be behind before being considered unhealthy.
 	MaxTrailingLogs uint64
 
+	// MinQuorum sets the minimum number of servers required in a cluster
+	// before autopilot can prune dead servers.
+	MinQuorum uint
+
 	// (Enterprise-only) EnableRedundancyZones specifies whether to enable redundancy zones.
 	EnableRedundancyZones bool
 
@@ -158,7 +162,7 @@ type PreemptionConfig struct {
 	BatchSchedulerEnabled bool `hcl:"batch_scheduler_enabled"`
 
 	// ServiceSchedulerEnabled specifies if preemption is enabled for service jobs
-	ServiceSchedulerEnabled bool `hcl:"service_Scheduler_enabled"`
+	ServiceSchedulerEnabled bool `hcl:"service_scheduler_enabled"`
 }
 
 // SchedulerSetConfigRequest is used by the Operator endpoint to update the

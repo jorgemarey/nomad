@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/go-msgpack/codec"
 	msgpackrpc "github.com/hashicorp/net-rpc-msgpackrpc"
 	cstructs "github.com/hashicorp/nomad/client/structs"
 	"github.com/hashicorp/nomad/helper/pool"
@@ -26,7 +27,6 @@ import (
 	"github.com/hashicorp/yamux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/ugorji/go/codec"
 )
 
 // rpcClient is a test helper method to return a ClientCodec to use to make rpc
@@ -45,10 +45,12 @@ func rpcClient(t *testing.T, s *Server) rpc.ClientCodec {
 func TestRPC_forwardLeader(t *testing.T) {
 	t.Parallel()
 
-	s1, cleanupS1 := TestServer(t, nil)
+	s1, cleanupS1 := TestServer(t, func(c *Config) {
+		c.BootstrapExpect = 2
+	})
 	defer cleanupS1()
 	s2, cleanupS2 := TestServer(t, func(c *Config) {
-		c.DevDisableBootstrap = true
+		c.BootstrapExpect = 2
 	})
 	defer cleanupS2()
 	TestJoin(t, s1, s2)
@@ -259,10 +261,12 @@ func TestRPC_streamingRpcConn_badMethod(t *testing.T) {
 	t.Parallel()
 	require := require.New(t)
 
-	s1, cleanupS1 := TestServer(t, nil)
+	s1, cleanupS1 := TestServer(t, func(c *Config) {
+		c.BootstrapExpect = 2
+	})
 	defer cleanupS1()
 	s2, cleanupS2 := TestServer(t, func(c *Config) {
-		c.DevDisableBootstrap = true
+		c.BootstrapExpect = 2
 	})
 	defer cleanupS2()
 	TestJoin(t, s1, s2)
@@ -298,7 +302,6 @@ func TestRPC_streamingRpcConn_badMethod_TLS(t *testing.T) {
 		c.Region = "regionFoo"
 		c.BootstrapExpect = 2
 		c.DevMode = false
-		c.DevDisableBootstrap = true
 		c.DataDir = path.Join(dir, "node1")
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
@@ -315,7 +318,6 @@ func TestRPC_streamingRpcConn_badMethod_TLS(t *testing.T) {
 		c.Region = "regionFoo"
 		c.BootstrapExpect = 2
 		c.DevMode = false
-		c.DevDisableBootstrap = true
 		c.DataDir = path.Join(dir, "node2")
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
@@ -354,7 +356,6 @@ func TestRPC_streamingRpcConn_goodMethod_Plaintext(t *testing.T) {
 		c.Region = "regionFoo"
 		c.BootstrapExpect = 2
 		c.DevMode = false
-		c.DevDisableBootstrap = true
 		c.DataDir = path.Join(dir, "node1")
 	})
 	defer cleanupS1()
@@ -363,7 +364,6 @@ func TestRPC_streamingRpcConn_goodMethod_Plaintext(t *testing.T) {
 		c.Region = "regionFoo"
 		c.BootstrapExpect = 2
 		c.DevMode = false
-		c.DevDisableBootstrap = true
 		c.DataDir = path.Join(dir, "node2")
 	})
 	defer cleanupS2()
@@ -414,7 +414,6 @@ func TestRPC_streamingRpcConn_goodMethod_TLS(t *testing.T) {
 		c.Region = "regionFoo"
 		c.BootstrapExpect = 2
 		c.DevMode = false
-		c.DevDisableBootstrap = true
 		c.DataDir = path.Join(dir, "node1")
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
@@ -431,7 +430,6 @@ func TestRPC_streamingRpcConn_goodMethod_TLS(t *testing.T) {
 		c.Region = "regionFoo"
 		c.BootstrapExpect = 2
 		c.DevMode = false
-		c.DevDisableBootstrap = true
 		c.DataDir = path.Join(dir, "node2")
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
@@ -530,7 +528,10 @@ func TestRPC_handleMultiplexV2(t *testing.T) {
 	require.NotEmpty(l)
 
 	// Make a streaming RPC
-	_, err = s.streamingRpcImpl(s2, s.Region(), "Bogus")
+	_, err = s2.Write([]byte{byte(pool.RpcStreaming)})
+	require.Nil(err)
+
+	_, err = s.streamingRpcImpl(s2, "Bogus")
 	require.NotNil(err)
 	require.Contains(err.Error(), "Bogus")
 	require.True(structs.IsErrUnknownMethod(err))
@@ -805,7 +806,7 @@ func TestRPC_Limits_OK(t *testing.T) {
 		defer conn.Close()
 
 		buf := []byte{0}
-		deadline := time.Now().Add(10 * time.Second)
+		deadline := time.Now().Add(6 * time.Second)
 		conn.SetReadDeadline(deadline)
 		n, err := conn.Read(buf)
 		require.Zero(t, n)
@@ -824,9 +825,13 @@ func TestRPC_Limits_OK(t *testing.T) {
 		for _, conn := range conns {
 			conn.Close()
 		}
-		for range conns {
-			err := <-errCh
-			require.Contains(t, err.Error(), "use of closed network connection")
+		for i := range conns {
+			select {
+			case err := <-errCh:
+				require.Contains(t, err.Error(), "use of closed network connection")
+			case <-time.After(10 * time.Second):
+				t.Fatalf("timed out waiting for connection %d/%d to close", i, len(conns))
+			}
 		}
 	}
 
@@ -863,7 +868,16 @@ func TestRPC_Limits_OK(t *testing.T) {
 			}()
 
 			assertTimeout(t, s, tc.tls, tc.timeout)
+
 			if tc.assertLimit {
+				// There's a race between assertTimeout(false) closing
+				// its connection and the HTTP server noticing and
+				// untracking it. Since there's no way to coordiante
+				// when this occurs, sleeping is the only way to avoid
+				// asserting limits before the timed out connection is
+				// untracked.
+				time.Sleep(1 * time.Second)
+
 				assertLimit(t, s.config.RPCAddr.String(), tc.limit)
 			} else {
 				assertNoLimit(t, s.config.RPCAddr.String())
@@ -975,9 +989,22 @@ func TestRPC_Limits_Streaming(t *testing.T) {
 	t.Logf("expect streaming connection 0 to exit with error")
 	streamers[0].Close()
 	<-errCh
-	conn = dialStreamer()
 
-	conn.SetReadDeadline(time.Now().Add(1 * time.Second))
-	_, err = conn.Read(buf)
-	testutil.RequireDeadlineErr(t, err)
+	// Assert that new connections are allowed.
+	// Due to the distributed nature here, server may not immediately recognize
+	// the connection closure, so first attempts may be rejections (i.e. EOF)
+	// but the first non-EOF request must be a read-deadline error
+	testutil.WaitForResult(func() (bool, error) {
+		conn = dialStreamer()
+		conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		_, err = conn.Read(buf)
+		if err == io.EOF {
+			return false, fmt.Errorf("connection was rejected")
+		}
+
+		testutil.RequireDeadlineErr(t, err)
+		return true, nil
+	}, func(err error) {
+		require.NoError(t, err)
+	})
 }

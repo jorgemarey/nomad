@@ -63,7 +63,7 @@ func (s *SystemScheduler) Process(eval *structs.Evaluation) error {
 	case structs.EvalTriggerJobRegister, structs.EvalTriggerNodeUpdate, structs.EvalTriggerFailedFollowUp,
 		structs.EvalTriggerJobDeregister, structs.EvalTriggerRollingUpdate, structs.EvalTriggerPreemption,
 		structs.EvalTriggerDeploymentWatcher, structs.EvalTriggerNodeDrain, structs.EvalTriggerAllocStop,
-		structs.EvalTriggerQueuedAllocs:
+		structs.EvalTriggerQueuedAllocs, structs.EvalTriggerScaling:
 	default:
 		desc := fmt.Sprintf("scheduler cannot handle '%s' evaluation reason",
 			eval.TriggeredBy)
@@ -340,7 +340,8 @@ func (s *SystemScheduler) computePlacements(place []allocTuple) error {
 
 		// Set fields based on if we found an allocation option
 		resources := &structs.AllocatedResources{
-			Tasks: option.TaskResources,
+			Tasks:          option.TaskResources,
+			TaskLifecycles: option.TaskLifecycles,
 			Shared: structs.AllocatedSharedResources{
 				DiskMB: int64(missing.TaskGroup.EphemeralDisk.SizeMB),
 			},

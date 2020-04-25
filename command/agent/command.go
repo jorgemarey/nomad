@@ -72,6 +72,7 @@ func (c *Command) readConfig() *Config {
 		},
 		Vault: &config.VaultConfig{},
 		ACL:   &ACLConfig{},
+		Audit: &config.AuditConfig{},
 	}
 
 	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
@@ -639,10 +640,12 @@ func (c *Command) Run(args []string) int {
 		logGate.Flush()
 		return 1
 	}
-	defer c.agent.Shutdown()
 
-	// Shutdown the HTTP server at the end
 	defer func() {
+		c.agent.Shutdown()
+
+		// Shutdown the http server at the end, to ease debugging if
+		// the agent takes long to shutdown
 		if c.httpServer != nil {
 			c.httpServer.Shutdown()
 		}
@@ -1216,9 +1219,9 @@ General Options (clients and servers):
     list of mode configurations:
 
   -dev-connect
-	Start the agent in development mode, but bind to a public network
-	interface rather than localhost for using Consul Connect. This
-	mode is supported only on Linux as root.
+    Start the agent in development mode, but bind to a public network
+    interface rather than localhost for using Consul Connect. This
+    mode is supported only on Linux as root.
 
 Server Options:
 

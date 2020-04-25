@@ -86,6 +86,9 @@ var basicConfig = &Config{
 		HostVolumes: []*structs.ClientHostVolumeConfig{
 			{Name: "tmp", Path: "/tmp"},
 		},
+		CNIPath:             "/tmp/cni_path",
+		BridgeNetworkName:   "custom_bridge_name",
+		BridgeNetworkSubnet: "custom_bridge_subnet",
 	},
 	Server: &ServerConfig{
 		Enabled:                true,
@@ -122,6 +125,13 @@ var basicConfig = &Config{
 			RetryIntervalHCL: "15s",
 			RetryMaxAttempts: 3,
 		},
+		DefaultSchedulerConfig: &structs.SchedulerConfiguration{
+			PreemptionConfig: structs.PreemptionConfig{
+				SystemSchedulerEnabled:  true,
+				BatchSchedulerEnabled:   true,
+				ServiceSchedulerEnabled: true,
+			},
+		},
 	},
 	ACL: &ACLConfig{
 		Enabled:          true,
@@ -130,6 +140,31 @@ var basicConfig = &Config{
 		PolicyTTL:        60 * time.Second,
 		PolicyTTLHCL:     "60s",
 		ReplicationToken: "foobar",
+	},
+	Audit: &config.AuditConfig{
+		Enabled: helper.BoolToPtr(true),
+		Sinks: []*config.AuditSink{
+			{
+				DeliveryGuarantee: "enforced",
+				Name:              "file",
+				Type:              "file",
+				Format:            "json",
+				Path:              "/opt/nomad/audit.log",
+				RotateDuration:    24 * time.Hour,
+				RotateDurationHCL: "24h",
+				RotateBytes:       100,
+				RotateMaxFiles:    10,
+			},
+		},
+		Filters: []*config.AuditFilter{
+			{
+				Name:       "default",
+				Type:       "HTTPEvent",
+				Endpoints:  []string{"/v1/metrics"},
+				Stages:     []string{"*"},
+				Operations: []string{"*"},
+			},
+		},
 	},
 	Telemetry: &Telemetry{
 		StatsiteAddr:               "127.0.0.1:1234",
@@ -224,6 +259,7 @@ var basicConfig = &Config{
 		LastContactThreshold:       12705 * time.Second,
 		LastContactThresholdHCL:    "12705s",
 		MaxTrailingLogs:            17849,
+		MinQuorum:                  3,
 		EnableRedundancyZones:      &trueValue,
 		DisableUpgradeMigration:    &trueValue,
 		EnableCustomUpgrades:       &trueValue,
@@ -368,6 +404,30 @@ var nonoptConfig = &Config{
 	Sentinel:                  nil,
 }
 
+func TestConfig_ParseMerge(t *testing.T) {
+	t.Parallel()
+
+	path, err := filepath.Abs(filepath.Join(".", "testdata", "basic.hcl"))
+	require.NoError(t, err)
+
+	actual, err := ParseConfigFile(path)
+	require.NoError(t, err)
+
+	require.Equal(t, basicConfig.Client, actual.Client)
+
+	oldDefault := &Config{
+		Consul:    config.DefaultConsulConfig(),
+		Vault:     config.DefaultVaultConfig(),
+		Autopilot: config.DefaultAutopilotConfig(),
+		Client:    &ClientConfig{},
+		Server:    &ServerConfig{},
+		Audit:     &config.AuditConfig{},
+	}
+	merged := oldDefault.Merge(actual)
+	require.Equal(t, basicConfig.Client, merged.Client)
+
+}
+
 func TestConfig_Parse(t *testing.T) {
 	t.Parallel()
 
@@ -452,6 +512,9 @@ func (c *Config) addDefaults() {
 	}
 	if c.ACL == nil {
 		c.ACL = &ACLConfig{}
+	}
+	if c.Audit == nil {
+		c.Audit = &config.AuditConfig{}
 	}
 	if c.Consul == nil {
 		c.Consul = config.DefaultConsulConfig()
@@ -548,6 +611,31 @@ var sample0 = &Config{
 	ACL: &ACLConfig{
 		Enabled: true,
 	},
+	Audit: &config.AuditConfig{
+		Enabled: helper.BoolToPtr(true),
+		Sinks: []*config.AuditSink{
+			{
+				DeliveryGuarantee: "enforced",
+				Name:              "file",
+				Type:              "file",
+				Format:            "json",
+				Path:              "/opt/nomad/audit.log",
+				RotateDuration:    24 * time.Hour,
+				RotateDurationHCL: "24h",
+				RotateBytes:       100,
+				RotateMaxFiles:    10,
+			},
+		},
+		Filters: []*config.AuditFilter{
+			{
+				Name:       "default",
+				Type:       "HTTPEvent",
+				Endpoints:  []string{"/v1/metrics"},
+				Stages:     []string{"*"},
+				Operations: []string{"*"},
+			},
+		},
+	},
 	Telemetry: &Telemetry{
 		PrometheusMetrics:        true,
 		DisableHostname:          true,
@@ -610,6 +698,31 @@ var sample1 = &Config{
 	},
 	ACL: &ACLConfig{
 		Enabled: true,
+	},
+	Audit: &config.AuditConfig{
+		Enabled: helper.BoolToPtr(true),
+		Sinks: []*config.AuditSink{
+			{
+				Name:              "file",
+				Type:              "file",
+				DeliveryGuarantee: "enforced",
+				Format:            "json",
+				Path:              "/opt/nomad/audit.log",
+				RotateDuration:    24 * time.Hour,
+				RotateDurationHCL: "24h",
+				RotateBytes:       100,
+				RotateMaxFiles:    10,
+			},
+		},
+		Filters: []*config.AuditFilter{
+			{
+				Name:       "default",
+				Type:       "HTTPEvent",
+				Endpoints:  []string{"/v1/metrics"},
+				Stages:     []string{"*"},
+				Operations: []string{"*"},
+			},
+		},
 	},
 	Telemetry: &Telemetry{
 		PrometheusMetrics:        true,

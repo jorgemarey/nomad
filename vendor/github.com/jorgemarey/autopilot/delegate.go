@@ -2,9 +2,9 @@ package autopilot
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/hashicorp/consul/agent/consul/autopilot"
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
 )
 
@@ -12,12 +12,12 @@ import (
 // This can check zones, versions and non voting servers
 type AdvancedAutopilotDelegate struct {
 	autopilot.Delegate
-	logger *log.Logger
+	logger hclog.Logger
 }
 
 // New returns a new AutopilotDelegate using the provided and with improved promotion
 // features
-func New(logger *log.Logger, delegate autopilot.Delegate) *AdvancedAutopilotDelegate {
+func New(logger hclog.Logger, delegate autopilot.Delegate) *AdvancedAutopilotDelegate {
 	return &AdvancedAutopilotDelegate{
 		Delegate: delegate,
 		logger:   logger,
@@ -56,7 +56,7 @@ func (d *AdvancedAutopilotDelegate) buildServerInfo(conf *autopilot.Config, serv
 	info := make(map[raft.ServerID]*serverInfo)
 	temp := make(map[raft.ServerID]*serverInfo)
 
-	for _, m := range d.Serf().Members() { // get the info for every server
+	for _, m := range d.SerfLAN().Members() { // get the info for every server
 		server, err := getServerInfo(conf.RedundancyZoneTag, conf.UpgradeVersionTag, m, d.IsServer)
 		if err == nil && server != nil { // add servers found
 			temp[raft.ServerID(server.ID)] = server

@@ -11,13 +11,13 @@ import (
 	metrics "github.com/armon/go-metrics"
 	log "github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
+	"github.com/hashicorp/go-msgpack/codec"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/state"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/scheduler"
 	"github.com/hashicorp/raft"
 	"github.com/pkg/errors"
-	"github.com/ugorji/go/codec"
 )
 
 const (
@@ -50,6 +50,10 @@ const (
 	SchedulerConfigSnapshot
 	ClusterMetadataSnapshot
 	ServiceIdentityTokenAccessorSnapshot
+	ScalingPolicySnapshot
+	CSIPluginSnapshot
+	CSIVolumeSnapshot
+	ScalingEventsSnapshot
 )
 
 const (
@@ -266,6 +270,14 @@ func (n *nomadFSM) Apply(log *raft.Log) interface{} {
 		return n.applyUpsertSIAccessor(buf[1:], log.Index)
 	case structs.ServiceIdentityAccessorDeregisterRequestType:
 		return n.applyDeregisterSIAccessor(buf[1:], log.Index)
+	case structs.CSIVolumeRegisterRequestType:
+		return n.applyCSIVolumeRegister(buf[1:], log.Index)
+	case structs.CSIVolumeDeregisterRequestType:
+		return n.applyCSIVolumeDeregister(buf[1:], log.Index)
+	case structs.CSIVolumeClaimRequestType:
+		return n.applyCSIVolumeClaim(buf[1:], log.Index)
+	case structs.ScalingEventRegisterRequestType:
+		return n.applyUpsertScalingEvent(buf[1:], log.Index)
 	}
 
 	// Check enterprise only message types.
@@ -1135,6 +1147,66 @@ func (n *nomadFSM) applySchedulerConfigUpdate(buf []byte, index uint64) interfac
 	return n.state.SchedulerSetConfig(index, &req.Config)
 }
 
+func (n *nomadFSM) applyCSIVolumeRegister(buf []byte, index uint64) interface{} {
+	var req structs.CSIVolumeRegisterRequest
+	if err := structs.Decode(buf, &req); err != nil {
+		panic(fmt.Errorf("failed to decode request: %v", err))
+	}
+	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_csi_volume_register"}, time.Now())
+
+	if err := n.state.CSIVolumeRegister(index, req.Volumes); err != nil {
+		n.logger.Error("CSIVolumeRegister failed", "error", err)
+		return err
+	}
+
+	return nil
+}
+
+func (n *nomadFSM) applyCSIVolumeDeregister(buf []byte, index uint64) interface{} {
+	var req structs.CSIVolumeDeregisterRequest
+	if err := structs.Decode(buf, &req); err != nil {
+		panic(fmt.Errorf("failed to decode request: %v", err))
+	}
+	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_csi_volume_deregister"}, time.Now())
+
+	if err := n.state.CSIVolumeDeregister(index, req.RequestNamespace(), req.VolumeIDs); err != nil {
+		n.logger.Error("CSIVolumeDeregister failed", "error", err)
+		return err
+	}
+
+	return nil
+}
+
+func (n *nomadFSM) applyCSIVolumeClaim(buf []byte, index uint64) interface{} {
+	var req structs.CSIVolumeClaimRequest
+	if err := structs.Decode(buf, &req); err != nil {
+		panic(fmt.Errorf("failed to decode request: %v", err))
+	}
+	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_csi_volume_claim"}, time.Now())
+
+	ws := memdb.NewWatchSet()
+	alloc, err := n.state.AllocByID(ws, req.AllocationID)
+	if err != nil {
+		n.logger.Error("AllocByID failed", "error", err)
+		return err
+	}
+	if alloc == nil {
+		n.logger.Error("AllocByID failed to find alloc", "alloc_id", req.AllocationID)
+		if err != nil {
+			return err
+		}
+
+		return structs.ErrUnknownAllocationPrefix
+	}
+
+	if err := n.state.CSIVolumeClaim(index, req.RequestNamespace(), req.VolumeID, alloc, req.Claim); err != nil {
+		n.logger.Error("CSIVolumeClaim failed", "error", err)
+		return err
+	}
+
+	return nil
+}
+
 func (n *nomadFSM) Snapshot() (raft.FSMSnapshot, error) {
 	// Create a new snapshot
 	snap, err := n.state.Snapshot()
@@ -1373,6 +1445,46 @@ func (n *nomadFSM) Restore(old io.ReadCloser) error {
 				return err
 			}
 
+		case ScalingEventsSnapshot:
+			jobScalingEvents := new(structs.JobScalingEvents)
+			if err := dec.Decode(jobScalingEvents); err != nil {
+				return err
+			}
+
+			if err := restore.ScalingEventsRestore(jobScalingEvents); err != nil {
+				return err
+			}
+
+		case ScalingPolicySnapshot:
+			scalingPolicy := new(structs.ScalingPolicy)
+			if err := dec.Decode(scalingPolicy); err != nil {
+				return err
+			}
+
+			if err := restore.ScalingPolicyRestore(scalingPolicy); err != nil {
+				return err
+			}
+
+		case CSIPluginSnapshot:
+			plugin := new(structs.CSIPlugin)
+			if err := dec.Decode(plugin); err != nil {
+				return err
+			}
+
+			if err := restore.CSIPluginRestore(plugin); err != nil {
+				return err
+			}
+
+		case CSIVolumeSnapshot:
+			plugin := new(structs.CSIVolume)
+			if err := dec.Decode(plugin); err != nil {
+				return err
+			}
+
+			if err := restore.CSIVolumeRestore(plugin); err != nil {
+				return err
+			}
+
 		default:
 			// Check if this is an enterprise only object being restored
 			restorer, ok := n.enterpriseRestorers[snapType]
@@ -1569,6 +1681,21 @@ func (n *nomadFSM) reconcileQueuedAllocations(index uint64) error {
 	return nil
 }
 
+func (n *nomadFSM) applyUpsertScalingEvent(buf []byte, index uint64) interface{} {
+	defer metrics.MeasureSince([]string{"nomad", "fsm", "upsert_scaling_event"}, time.Now())
+	var req structs.ScalingEventRequest
+	if err := structs.Decode(buf, &req); err != nil {
+		panic(fmt.Errorf("failed to decode request: %v", err))
+	}
+
+	if err := n.state.UpsertScalingEvent(index, &req); err != nil {
+		n.logger.Error("UpsertScalingEvent failed", "error", err)
+		return err
+	}
+
+	return nil
+}
+
 func (s *nomadSnapshot) Persist(sink raft.SnapshotSink) error {
 	defer metrics.MeasureSince([]string{"nomad", "fsm", "persist"}, time.Now())
 	// Register the nodes
@@ -1630,6 +1757,22 @@ func (s *nomadSnapshot) Persist(sink raft.SnapshotSink) error {
 		return err
 	}
 	if err := s.persistDeployments(sink, encoder); err != nil {
+		sink.Cancel()
+		return err
+	}
+	if err := s.persistScalingPolicies(sink, encoder); err != nil {
+		sink.Cancel()
+		return err
+	}
+	if err := s.persistScalingEvents(sink, encoder); err != nil {
+		sink.Cancel()
+		return err
+	}
+	if err := s.persistCSIPlugins(sink, encoder); err != nil {
+		sink.Cancel()
+		return err
+	}
+	if err := s.persistCSIVolumes(sink, encoder); err != nil {
 		sink.Cancel()
 		return err
 	}
@@ -2032,6 +2175,120 @@ func (s *nomadSnapshot) persistClusterMetadata(sink raft.SnapshotSink,
 		return err
 	}
 
+	return nil
+}
+
+func (s *nomadSnapshot) persistScalingPolicies(sink raft.SnapshotSink,
+	encoder *codec.Encoder) error {
+
+	// Get all the scaling policies
+	ws := memdb.NewWatchSet()
+	scalingPolicies, err := s.snap.ScalingPolicies(ws)
+	if err != nil {
+		return err
+	}
+
+	for {
+		// Get the next item
+		raw := scalingPolicies.Next()
+		if raw == nil {
+			break
+		}
+
+		// Prepare the request struct
+		scalingPolicy := raw.(*structs.ScalingPolicy)
+
+		// Write out a scaling policy snapshot
+		sink.Write([]byte{byte(ScalingPolicySnapshot)})
+		if err := encoder.Encode(scalingPolicy); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *nomadSnapshot) persistScalingEvents(sink raft.SnapshotSink, encoder *codec.Encoder) error {
+	// Get all the scaling events
+	ws := memdb.NewWatchSet()
+	iter, err := s.snap.ScalingEvents(ws)
+	if err != nil {
+		return err
+	}
+
+	for {
+		// Get the next item
+		raw := iter.Next()
+		if raw == nil {
+			break
+		}
+
+		// Prepare the request struct
+		events := raw.(*structs.JobScalingEvents)
+
+		// Write out a scaling events snapshot
+		sink.Write([]byte{byte(ScalingEventsSnapshot)})
+		if err := encoder.Encode(events); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *nomadSnapshot) persistCSIPlugins(sink raft.SnapshotSink,
+	encoder *codec.Encoder) error {
+
+	// Get all the CSI plugins
+	ws := memdb.NewWatchSet()
+	plugins, err := s.snap.CSIPlugins(ws)
+	if err != nil {
+		return err
+	}
+
+	for {
+		// Get the next item
+		raw := plugins.Next()
+		if raw == nil {
+			break
+		}
+
+		// Prepare the request struct
+		plugin := raw.(*structs.CSIPlugin)
+
+		// Write out a plugin snapshot
+		sink.Write([]byte{byte(CSIPluginSnapshot)})
+		if err := encoder.Encode(plugin); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *nomadSnapshot) persistCSIVolumes(sink raft.SnapshotSink,
+	encoder *codec.Encoder) error {
+
+	// Get all the CSI volumes
+	ws := memdb.NewWatchSet()
+	volumes, err := s.snap.CSIVolumes(ws)
+	if err != nil {
+		return err
+	}
+
+	for {
+		// Get the next item
+		raw := volumes.Next()
+		if raw == nil {
+			break
+		}
+
+		// Prepare the request struct
+		volume := raw.(*structs.CSIVolume)
+
+		// Write out a volume snapshot
+		sink.Write([]byte{byte(CSIVolumeSnapshot)})
+		if err := encoder.Encode(volume); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

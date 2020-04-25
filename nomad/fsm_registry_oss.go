@@ -1,12 +1,12 @@
-// +build !pro,!ent
+// +build !ent
 
 package nomad
 
 import (
 	memdb "github.com/hashicorp/go-memdb"
 	"github.com/hashicorp/nomad/nomad/structs"
+	"github.com/hashicorp/go-msgpack/codec"
 	"github.com/hashicorp/raft"
-	"github.com/ugorji/go/codec"
 )
 
 // registerLogAppliers is a no-op for open-source only FSMs.
