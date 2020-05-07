@@ -977,10 +977,6 @@ func (c *ServiceClient) RegisterWorkload(workload *WorkloadServices) error {
 //
 // DriverNetwork must not change between invocations for the same allocation.
 func (c *ServiceClient) UpdateWorkload(old, newWorkload *WorkloadServices) error {
-	if !c.isRegistered(newWorkload.AllocID, newWorkload.Name()) { // TODO: remove?
-		return nil
-	}
-
 	ops := new(operations)
 	regs := new(ServiceRegistrations)
 	regs.Services = make(map[string]*ServiceRegistration, len(newWorkload.Services))
@@ -1218,18 +1214,6 @@ func (c *ServiceClient) Shutdown() error {
 	}
 
 	return nil
-}
-
-func (c *ServiceClient) isRegistered(allocID, taskName string) bool {
-	c.allocRegistrationsLock.Lock()
-	defer c.allocRegistrationsLock.Unlock()
-
-	alloc, ok := c.allocRegistrations[allocID]
-	if !ok {
-		return false
-	}
-	_, ok = alloc.Tasks[taskName]
-	return ok
 }
 
 // addRegistration adds the service registrations for the given allocation.
