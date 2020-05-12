@@ -12,8 +12,8 @@ func (s *HTTPServer) registerEnterpriseHandlers() {
 	s.mux.HandleFunc("/v1/namespace", s.wrap(s.NamespaceCreateRequest))
 	s.mux.HandleFunc("/v1/namespace/", s.wrap(s.NamespaceSpecificRequest))
 
-	s.mux.HandleFunc("/v1/sentinel/policies", s.wrap(s.entOnly))
-	s.mux.HandleFunc("/v1/sentinel/policy/", s.wrap(s.entOnly))
+	s.mux.HandleFunc("/v1/sentinel/policies", s.wrap(s.SentinelPoliciesRequest))
+	s.mux.HandleFunc("/v1/sentinel/policy/", s.wrap(s.SentinelPolicySpecificRequest))
 
 	s.mux.HandleFunc("/v1/quotas", s.wrap(s.entOnly))
 	s.mux.HandleFunc("/v1/quota-usages", s.wrap(s.entOnly))

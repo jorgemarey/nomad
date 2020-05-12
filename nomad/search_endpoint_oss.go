@@ -77,7 +77,7 @@ func anySearchPerms(aclObj *acl.ACL, namespace string, context structs.Context) 
 		acl.NamespaceCapabilityReadJob)
 	volRead := allowVolume(aclObj, namespace)
 
-	if !nodeRead && !allowNS && !jobRead && !volRead { // TODO: revise this (added allowNS)
+	if !nodeRead && !allowNS && !jobRead && !volRead {
 		return false
 	}
 

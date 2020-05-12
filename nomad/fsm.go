@@ -58,6 +58,7 @@ const (
 
 const (
 	NamespaceSnapshot SnapshotType = (64 + iota)
+	SentinelPolicySnapshot
 )
 
 // LogApplier is the definition of a function that can apply a Raft log
