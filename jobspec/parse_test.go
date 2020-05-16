@@ -184,6 +184,7 @@ func TestParse(t *testing.T) {
 								},
 							},
 						},
+						StopAfterClientDisconnect: helper.TimeToPtr(120 * time.Second),
 						ReschedulePolicy: &api.ReschedulePolicy{
 							Interval: helper.TimeToPtr(12 * time.Hour),
 							Attempts: helper.IntToPtr(5),
@@ -1311,6 +1312,32 @@ func TestParse(t *testing.T) {
 				},
 			},
 			false,
+		},
+
+		{
+			"tg-scaling-policy-minimal.hcl",
+			&api.Job{
+				ID:   helper.StringToPtr("elastic"),
+				Name: helper.StringToPtr("elastic"),
+				TaskGroups: []*api.TaskGroup{
+					{
+						Name: helper.StringToPtr("group"),
+						Scaling: &api.ScalingPolicy{
+							Min:     nil,
+							Max:     0,
+							Policy:  nil,
+							Enabled: nil,
+						},
+					},
+				},
+			},
+			false,
+		},
+
+		{
+			"tg-scaling-policy-multi-policy.hcl",
+			nil,
+			true,
 		},
 	}
 

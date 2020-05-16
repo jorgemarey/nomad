@@ -1351,26 +1351,10 @@ func (x *AllocFileInfo) CodecEncodeSelf(e *codec1978.Encoder) {
 			yy2arr2 := z.EncBasicHandle().StructToArray
 			_, _ = yysep2, yy2arr2
 			const yyr2 bool = false // struct tag has 'toArray'
-			var yyq2 = [6]bool{     // should field at this index be written?
-				true,                // Name
-				true,                // IsDir
-				true,                // Size
-				true,                // FileMode
-				true,                // ModTime
-				x.ContentType != "", // ContentType
-			}
-			_ = yyq2
 			if yyr2 || yy2arr2 {
 				r.WriteArrayStart(6)
 			} else {
-				var yynn2 int
-				for _, b := range yyq2 {
-					if b {
-						yynn2++
-					}
-				}
-				r.WriteMapStart(yynn2)
-				yynn2 = 0
+				r.WriteMapStart(6)
 			}
 			if yyr2 || yy2arr2 {
 				r.WriteArrayElem()
@@ -1501,38 +1485,28 @@ func (x *AllocFileInfo) CodecEncodeSelf(e *codec1978.Encoder) {
 			}
 			if yyr2 || yy2arr2 {
 				r.WriteArrayElem()
-				if yyq2[5] {
-					if false {
-					} else {
-						if z.EncBasicHandle().StringToRaw {
-							r.EncodeStringBytesRaw(z.BytesView(string(x.ContentType)))
-						} else {
-							r.EncodeStringEnc(codecSelferCcUTF8102, string(x.ContentType))
-						}
-					}
+				if false {
 				} else {
 					if z.EncBasicHandle().StringToRaw {
-						r.EncodeStringBytesRaw([]byte{})
+						r.EncodeStringBytesRaw(z.BytesView(string(x.ContentType)))
 					} else {
-						r.EncodeStringEnc(codecSelferCcUTF8102, "")
+						r.EncodeStringEnc(codecSelferCcUTF8102, string(x.ContentType))
 					}
 				}
 			} else {
-				if yyq2[5] {
-					r.WriteMapElemKey()
-					if z.IsJSONHandle() {
-						z.WriteStr("\"ContentType\"")
+				r.WriteMapElemKey()
+				if z.IsJSONHandle() {
+					z.WriteStr("\"ContentType\"")
+				} else {
+					r.EncodeStringEnc(codecSelferCcUTF8102, `ContentType`)
+				}
+				r.WriteMapElemValue()
+				if false {
+				} else {
+					if z.EncBasicHandle().StringToRaw {
+						r.EncodeStringBytesRaw(z.BytesView(string(x.ContentType)))
 					} else {
-						r.EncodeStringEnc(codecSelferCcUTF8102, `ContentType`)
-					}
-					r.WriteMapElemValue()
-					if false {
-					} else {
-						if z.EncBasicHandle().StringToRaw {
-							r.EncodeStringBytesRaw(z.BytesView(string(x.ContentType)))
-						} else {
-							r.EncodeStringEnc(codecSelferCcUTF8102, string(x.ContentType))
-						}
+						r.EncodeStringEnc(codecSelferCcUTF8102, string(x.ContentType))
 					}
 				}
 			}

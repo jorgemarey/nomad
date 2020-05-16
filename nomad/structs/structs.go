@@ -23,9 +23,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorhill/cronexpr"
+	"github.com/hashicorp/cronexpr"
 	"github.com/hashicorp/go-msgpack/codec"
-	hcodec "github.com/hashicorp/go-msgpack/codec"
 	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/go-version"
 	"github.com/mitchellh/copystructure"
@@ -51,6 +50,8 @@ var (
 
 type MessageType uint8
 
+// note: new raft message types need to be added to the end of this
+// list of contents
 const (
 	NodeRegisterRequestType MessageType = iota
 	NodeDeregisterRequestType
@@ -92,6 +93,8 @@ const (
 	CSIVolumeDeregisterRequestType
 	CSIVolumeClaimRequestType
 	ScalingEventRegisterRequestType
+	CSIVolumeClaimBatchRequestType
+	CSIPluginDeleteRequestType
 )
 
 const (
@@ -3804,6 +3807,10 @@ func (j *Job) Validate() error {
 			mErr.Errors = append(mErr.Errors, errors.New("ShutdownDelay must be a positive value"))
 		}
 
+		if tg.StopAfterClientDisconnect != nil && *tg.StopAfterClientDisconnect < 0 {
+			mErr.Errors = append(mErr.Errors, errors.New("StopAfterClientDisconnect must be a positive value"))
+		}
+
 		if j.Type == "system" && tg.Count > 1 {
 			mErr.Errors = append(mErr.Errors,
 				fmt.Errorf("Job task group %s has count %d. Count cannot exceed 1 with system scheduler",
@@ -4429,9 +4436,11 @@ func CronParseNext(e *cronexpr.Expression, fromTime time.Time, spec string) (t t
 func (p *PeriodicConfig) Next(fromTime time.Time) (time.Time, error) {
 	switch p.SpecType {
 	case PeriodicSpecCron:
-		if e, err := cronexpr.Parse(p.Spec); err == nil {
-			return CronParseNext(e, fromTime, p.Spec)
+		e, err := cronexpr.Parse(p.Spec)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("failed parsing cron expression: %q: %v", p.Spec, err)
 		}
+		return CronParseNext(e, fromTime, p.Spec)
 	case PeriodicSpecTest:
 		split := strings.Split(p.Spec, ",")
 		if len(split) == 1 && split[0] == "" {
@@ -5213,6 +5222,10 @@ type TaskGroup struct {
 	// ShutdownDelay is the amount of time to wait between deregistering
 	// group services in consul and stopping tasks.
 	ShutdownDelay *time.Duration
+
+	// StopAfterClientDisconnect, if set, configures the client to stop the task group
+	// after this duration since the last known good heartbeat
+	StopAfterClientDisconnect *time.Duration
 }
 
 func (tg *TaskGroup) Copy() *TaskGroup {
@@ -5262,6 +5275,10 @@ func (tg *TaskGroup) Copy() *TaskGroup {
 
 	if tg.ShutdownDelay != nil {
 		ntg.ShutdownDelay = tg.ShutdownDelay
+	}
+
+	if tg.StopAfterClientDisconnect != nil {
+		ntg.StopAfterClientDisconnect = tg.StopAfterClientDisconnect
 	}
 
 	return ntg
@@ -6515,6 +6532,19 @@ func (t *Template) Warnings() error {
 	}
 
 	return mErr.ErrorOrNil()
+}
+
+// AllocState records a single event that changes the state of the whole allocation
+type AllocStateField uint8
+
+const (
+	AllocStateFieldClientStatus AllocStateField = iota
+)
+
+type AllocState struct {
+	Field AllocStateField
+	Value string
+	Time  time.Time
 }
 
 // Set of possible states for a task.
@@ -8153,6 +8183,9 @@ type Allocation struct {
 	// TaskStates stores the state of each task,
 	TaskStates map[string]*TaskState
 
+	// AllocStates track meta data associated with changes to the state of the whole allocation, like becoming lost
+	AllocStates []*AllocState
+
 	// PreviousAllocation is the allocation that this allocation is replacing
 	PreviousAllocation string
 
@@ -8421,6 +8454,49 @@ func (a *Allocation) NextRescheduleTime() (time.Time, bool) {
 	return nextRescheduleTime, rescheduleEligible
 }
 
+// ShouldClientStop tests an alloc for StopAfterClientDisconnect configuration
+func (a *Allocation) ShouldClientStop() bool {
+	tg := a.Job.LookupTaskGroup(a.TaskGroup)
+	if tg == nil ||
+		tg.StopAfterClientDisconnect == nil ||
+		*tg.StopAfterClientDisconnect == 0*time.Nanosecond {
+		return false
+	}
+	return true
+}
+
+// WaitClientStop uses the reschedule delay mechanism to block rescheduling until
+// StopAfterClientDisconnect's block interval passes
+func (a *Allocation) WaitClientStop() time.Time {
+	tg := a.Job.LookupTaskGroup(a.TaskGroup)
+
+	// An alloc can only be marked lost once, so use the first lost transition
+	var t time.Time
+	for _, s := range a.AllocStates {
+		if s.Field == AllocStateFieldClientStatus &&
+			s.Value == AllocClientStatusLost {
+			t = s.Time
+			break
+		}
+	}
+
+	// On the first pass, the alloc hasn't been marked lost yet, and so we start
+	// counting from now
+	if t.IsZero() {
+		t = time.Now().UTC()
+	}
+
+	// Find the max kill timeout
+	kill := DefaultKillTimeout
+	for _, t := range tg.Tasks {
+		if t.KillTimeout > kill {
+			kill = t.KillTimeout
+		}
+	}
+
+	return t.Add(*tg.StopAfterClientDisconnect + kill)
+}
+
 // NextDelay returns a duration after which the allocation can be rescheduled.
 // It is calculated according to the delay function and previous reschedule attempts.
 func (a *Allocation) NextDelay() time.Duration {
@@ -8475,6 +8551,24 @@ func (a *Allocation) Terminated() bool {
 		return true
 	}
 	return false
+}
+
+// SetStopped updates the allocation in place to a DesiredStatus stop, with the ClientStatus
+func (a *Allocation) SetStop(clientStatus, clientDesc string) {
+	a.DesiredStatus = AllocDesiredStatusStop
+	a.ClientStatus = clientStatus
+	a.ClientDescription = clientDesc
+	a.AppendState(AllocStateFieldClientStatus, clientStatus)
+}
+
+// AppendState creates and appends an AllocState entry recording the time of the state
+// transition. Used to mark the transition to lost
+func (a *Allocation) AppendState(field AllocStateField, value string) {
+	a.AllocStates = append(a.AllocStates, &AllocState{
+		Field: field,
+		Value: value,
+		Time:  time.Now().UTC(),
+	})
 }
 
 // RanSuccessfully returns whether the client has ran the allocation and all
@@ -8993,6 +9087,11 @@ const (
 	// claiming them. If so, we unclaim the volume.
 	CoreJobCSIVolumeClaimGC = "csi-volume-claim-gc"
 
+	// CoreJobCSIPluginGC is use for the garbage collection of CSI plugins.
+	// We periodically scan plugins to see if they have no associated volumes
+	// or allocs running them. If so, we delete the plugin.
+	CoreJobCSIPluginGC = "csi-plugin-gc"
+
 	// CoreJobForceGC is used to force garbage collection of all GCable objects.
 	CoreJobForceGC = "force-gc"
 )
@@ -9380,6 +9479,8 @@ func (p *Plan) AppendStoppedAlloc(alloc *Allocation, desiredDesc, clientStatus s
 		newAlloc.ClientStatus = clientStatus
 	}
 
+	newAlloc.AppendState(AllocStateFieldClientStatus, clientStatus)
+
 	node := alloc.NodeID
 	existing := p.NodeUpdate[node]
 	p.NodeUpdate[node] = append(existing, newAlloc)
@@ -9559,6 +9660,9 @@ var MsgpackHandle = func() *codec.MsgpackHandle {
 	// nil interface{}.
 	h.MapType = reflect.TypeOf(map[string]interface{}(nil))
 
+	// only review struct codec tags
+	h.TypeInfos = codec.NewTypeInfos([]string{"codec"})
+
 	return h
 }()
 
@@ -9573,23 +9677,6 @@ var (
 		Indent:        4,
 	}
 )
-
-// TODO Figure out if we can remove this. This is our fork that is just way
-// behind. I feel like its original purpose was to pin at a stable version but
-// now we can accomplish this with vendoring.
-var HashiMsgpackHandle = func() *hcodec.MsgpackHandle {
-	h := &hcodec.MsgpackHandle{}
-	h.RawToString = true
-
-	// maintain binary format from time prior to upgrading latest ugorji
-	h.BasicHandle.TimeNotBuiltin = true
-
-	// Sets the default type for decoding a map into a nil interface{}.
-	// This is necessary in particular because we store the driver configs as a
-	// nil interface{}.
-	h.MapType = reflect.TypeOf(map[string]interface{}(nil))
-	return h
-}()
 
 // Decode is used to decode a MsgPack encoded object
 func Decode(buf []byte, out interface{}) error {

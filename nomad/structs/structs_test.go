@@ -2903,45 +2903,42 @@ func TestPeriodicConfig_ValidCron(t *testing.T) {
 }
 
 func TestPeriodicConfig_NextCron(t *testing.T) {
-	require := require.New(t)
-
-	type testExpectation struct {
-		Time     time.Time
-		HasError bool
-		ErrorMsg string
-	}
-
 	from := time.Date(2009, time.November, 10, 23, 22, 30, 0, time.UTC)
-	specs := []string{"0 0 29 2 * 1980",
-		"*/5 * * * *",
-		"1 15-0 * * 1-5"}
-	expected := []*testExpectation{
+
+	cases := []struct {
+		spec     string
+		nextTime time.Time
+		errorMsg string
+	}{
 		{
-			Time:     time.Time{},
-			HasError: false,
+			spec:     "0 0 29 2 * 1980",
+			nextTime: time.Time{},
 		},
 		{
-			Time:     time.Date(2009, time.November, 10, 23, 25, 0, 0, time.UTC),
-			HasError: false,
+			spec:     "*/5 * * * *",
+			nextTime: time.Date(2009, time.November, 10, 23, 25, 0, 0, time.UTC),
 		},
 		{
-			Time:     time.Time{},
-			HasError: true,
-			ErrorMsg: "failed parsing cron expression",
+			spec:     "1 15-0 *",
+			nextTime: time.Time{},
+			errorMsg: "failed parsing cron expression",
 		},
 	}
 
-	for i, spec := range specs {
-		p := &PeriodicConfig{Enabled: true, SpecType: PeriodicSpecCron, Spec: spec}
-		p.Canonicalize()
-		n, err := p.Next(from)
-		nextExpected := expected[i]
+	for i, c := range cases {
+		t.Run(fmt.Sprintf("case: %d: %s", i, c.spec), func(t *testing.T) {
+			p := &PeriodicConfig{Enabled: true, SpecType: PeriodicSpecCron, Spec: c.spec}
+			p.Canonicalize()
+			n, err := p.Next(from)
 
-		require.Equal(nextExpected.Time, n)
-		require.Equal(err != nil, nextExpected.HasError)
-		if err != nil {
-			require.True(strings.Contains(err.Error(), nextExpected.ErrorMsg))
-		}
+			require.Equal(t, c.nextTime, n)
+			if c.errorMsg == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), c.errorMsg)
+			}
+		})
 	}
 }
 
@@ -2963,7 +2960,7 @@ func TestPeriodicConfig_DST(t *testing.T) {
 	p := &PeriodicConfig{
 		Enabled:  true,
 		SpecType: PeriodicSpecCron,
-		Spec:     "0 2 11-12 3 * 2017",
+		Spec:     "0 2 11-13 3 * 2017",
 		TimeZone: "America/Los_Angeles",
 	}
 	p.Canonicalize()
@@ -2973,7 +2970,7 @@ func TestPeriodicConfig_DST(t *testing.T) {
 
 	// E1 is an 8 hour adjustment, E2 is a 7 hour adjustment
 	e1 := time.Date(2017, time.March, 11, 10, 0, 0, 0, time.UTC)
-	e2 := time.Date(2017, time.March, 12, 9, 0, 0, 0, time.UTC)
+	e2 := time.Date(2017, time.March, 13, 9, 0, 0, 0, time.UTC)
 
 	n1, err := p.Next(t1)
 	require.Nil(err)
@@ -3598,13 +3595,21 @@ func TestPlan_AppendStoppedAllocAppendsAllocWithUpdatedAttrs(t *testing.T) {
 
 	plan.AppendStoppedAlloc(alloc, desiredDesc, AllocClientStatusLost)
 
-	appendedAlloc := plan.NodeUpdate[alloc.NodeID][0]
 	expectedAlloc := new(Allocation)
 	*expectedAlloc = *alloc
 	expectedAlloc.DesiredDescription = desiredDesc
 	expectedAlloc.DesiredStatus = AllocDesiredStatusStop
 	expectedAlloc.ClientStatus = AllocClientStatusLost
 	expectedAlloc.Job = nil
+	expectedAlloc.AllocStates = []*AllocState{{
+		Field: AllocStateFieldClientStatus,
+		Value: "lost",
+	}}
+
+	// This value is set to time.Now() in AppendStoppedAlloc, so clear it
+	appendedAlloc := plan.NodeUpdate[alloc.NodeID][0]
+	appendedAlloc.AllocStates[0].Time = time.Time{}
+
 	assert.Equal(t, expectedAlloc, appendedAlloc)
 	assert.Equal(t, alloc.Job, plan.Job)
 }
@@ -4373,6 +4378,65 @@ func TestAllocation_NextDelay(t *testing.T) {
 		})
 	}
 
+}
+
+func TestAllocation_WaitClientStop(t *testing.T) {
+	type testCase struct {
+		desc                   string
+		stop                   time.Duration
+		status                 string
+		expectedShould         bool
+		expectedRescheduleTime time.Time
+	}
+	now := time.Now().UTC()
+	testCases := []testCase{
+		{
+			desc:           "running",
+			stop:           2 * time.Second,
+			status:         AllocClientStatusRunning,
+			expectedShould: true,
+		},
+		{
+			desc:           "no stop_after_client_disconnect",
+			status:         AllocClientStatusLost,
+			expectedShould: false,
+		},
+		{
+			desc:                   "stop",
+			status:                 AllocClientStatusLost,
+			stop:                   2 * time.Second,
+			expectedShould:         true,
+			expectedRescheduleTime: now.Add((2 + 5) * time.Second),
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			j := testJob()
+			a := &Allocation{
+				ClientStatus: tc.status,
+				Job:          j,
+				TaskStates:   map[string]*TaskState{},
+			}
+
+			if tc.status == AllocClientStatusLost {
+				a.AppendState(AllocStateFieldClientStatus, AllocClientStatusLost)
+			}
+
+			j.TaskGroups[0].StopAfterClientDisconnect = &tc.stop
+			a.TaskGroup = j.TaskGroups[0].Name
+
+			require.Equal(t, tc.expectedShould, a.ShouldClientStop())
+
+			if !tc.expectedShould || tc.status != AllocClientStatusLost {
+				return
+			}
+
+			// the reschedTime is close to the expectedRescheduleTime
+			reschedTime := a.WaitClientStop()
+			e := reschedTime.Unix() - tc.expectedRescheduleTime.Unix()
+			require.Less(t, e, int64(2))
+		})
+	}
 }
 
 func TestAllocation_Canonicalize_Old(t *testing.T) {

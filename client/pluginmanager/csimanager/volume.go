@@ -170,6 +170,7 @@ func (v *volumeManager) stageVolume(ctx context.Context, vol *structs.CSIVolume,
 		publishContext,
 		pluginStagingPath,
 		capability,
+		vol.Secrets,
 		grpc_retry.WithPerRetryTimeout(DefaultMountActionTimeout),
 		grpc_retry.WithMax(3),
 		grpc_retry.WithBackoff(grpc_retry.BackoffExponential(100*time.Millisecond)),
@@ -202,12 +203,13 @@ func (v *volumeManager) publishVolume(ctx context.Context, vol *structs.CSIVolum
 	// CSI NodePublishVolume errors for timeout, codes.Unavailable and
 	// codes.ResourceExhausted are retried; all other errors are fatal.
 	err = v.plugin.NodePublishVolume(ctx, &csi.NodePublishVolumeRequest{
-		VolumeID:          vol.RemoteID(),
+		ExternalID:        vol.RemoteID(),
 		PublishContext:    publishContext,
 		StagingTargetPath: pluginStagingPath,
 		TargetPath:        pluginTargetPath,
 		VolumeCapability:  capabilities,
 		Readonly:          usage.ReadOnly,
+		Secrets:           vol.Secrets,
 	},
 		grpc_retry.WithPerRetryTimeout(DefaultMountActionTimeout),
 		grpc_retry.WithMax(3),

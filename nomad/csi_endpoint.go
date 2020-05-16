@@ -237,6 +237,8 @@ func (v *CSIVolume) controllerValidateVolume(req *structs.CSIVolumeRegisterReque
 		VolumeID:       vol.RemoteID(),
 		AttachmentMode: vol.AttachmentMode,
 		AccessMode:     vol.AccessMode,
+		Secrets:        vol.Secrets,
+		// Parameters: TODO: https://github.com/hashicorp/nomad/issues/7670
 	}
 	cReq.PluginID = plugin.ID
 	cResp := &cstructs.ClientCSIControllerValidateVolumeResponse{}
@@ -348,15 +350,31 @@ func (v *CSIVolume) Claim(args *structs.CSIVolumeClaimRequest, reply *structs.CS
 		return structs.ErrPermissionDenied
 	}
 
-	// if this is a new claim, add a Volume and PublishContext from the
-	// controller (if any) to the reply
+	// COMPAT(1.0): the NodeID field was added after 0.11.0 and so we
+	// need to ensure it's been populated during upgrades from 0.11.0
+	// to later patch versions. Remove this block in 1.0
+	if args.Claim != structs.CSIVolumeClaimRelease && args.NodeID == "" {
+		state := v.srv.fsm.State()
+		ws := memdb.NewWatchSet()
+		alloc, err := state.AllocByID(ws, args.AllocationID)
+		if err != nil {
+			return err
+		}
+		if alloc == nil {
+			return fmt.Errorf("%s: %s",
+				structs.ErrUnknownAllocationPrefix, args.AllocationID)
+		}
+		args.NodeID = alloc.NodeID
+	}
+
 	if args.Claim != structs.CSIVolumeClaimRelease {
+		// if this is a new claim, add a Volume and PublishContext from the
+		// controller (if any) to the reply
 		err = v.controllerPublishVolume(args, reply)
 		if err != nil {
 			return fmt.Errorf("controller publish: %v", err)
 		}
 	}
-
 	resp, index, err := v.srv.raftApply(structs.CSIVolumeClaimRequestType, args)
 	if err != nil {
 		v.logger.Error("csi raft apply failed", "error", err, "method", "claim")
@@ -400,6 +418,7 @@ func (v *CSIVolume) controllerPublishVolume(req *structs.CSIVolumeClaimRequest, 
 		return nil
 	}
 
+	// get Nomad's ID for the client node (not the storage provider's ID)
 	targetNode, err := state.NodeByID(ws, alloc.NodeID)
 	if err != nil {
 		return err
@@ -407,18 +426,24 @@ func (v *CSIVolume) controllerPublishVolume(req *structs.CSIVolumeClaimRequest, 
 	if targetNode == nil {
 		return fmt.Errorf("%s: %s", structs.ErrUnknownNodePrefix, alloc.NodeID)
 	}
+
+	// get the the storage provider's ID for the client node (not
+	// Nomad's ID for the node)
 	targetCSIInfo, ok := targetNode.CSINodePlugins[plug.ID]
 	if !ok {
 		return fmt.Errorf("Failed to find NodeInfo for node: %s", targetNode.ID)
 	}
+	externalNodeID := targetCSIInfo.NodeInfo.ID
 
 	method := "ClientCSI.ControllerAttachVolume"
 	cReq := &cstructs.ClientCSIControllerAttachVolumeRequest{
 		VolumeID:        vol.RemoteID(),
-		ClientCSINodeID: targetCSIInfo.NodeInfo.ID,
+		ClientCSINodeID: externalNodeID,
 		AttachmentMode:  vol.AttachmentMode,
 		AccessMode:      vol.AccessMode,
 		ReadOnly:        req.Claim == structs.CSIVolumeClaimRead,
+		Secrets:         vol.Secrets,
+		// VolumeContext: TODO https://github.com/hashicorp/nomad/issues/7771
 	}
 	cReq.PluginID = plug.ID
 	cResp := &cstructs.ClientCSIControllerAttachVolumeResponse{}
@@ -572,4 +597,35 @@ func (v *CSIPlugin) Get(args *structs.CSIPluginGetRequest, reply *structs.CSIPlu
 			return v.srv.replySetIndex(csiPluginTable, &reply.QueryMeta)
 		}}
 	return v.srv.blockingRPC(&opts)
+}
+
+// Delete deletes a plugin if it is unused
+func (v *CSIPlugin) Delete(args *structs.CSIPluginDeleteRequest, reply *structs.CSIPluginDeleteResponse) error {
+	if done, err := v.srv.forward("CSIPlugin.Delete", args, args, reply); done {
+		return err
+	}
+
+	// Check that it is a management token.
+	if aclObj, err := v.srv.ResolveToken(args.AuthToken); err != nil {
+		return err
+	} else if aclObj != nil && !aclObj.IsManagement() {
+		return structs.ErrPermissionDenied
+	}
+
+	metricsStart := time.Now()
+	defer metrics.MeasureSince([]string{"nomad", "plugin", "delete"}, metricsStart)
+
+	resp, index, err := v.srv.raftApply(structs.CSIPluginDeleteRequestType, args)
+	if err != nil {
+		v.logger.Error("csi raft apply failed", "error", err, "method", "delete")
+		return err
+	}
+
+	if respErr, ok := resp.(error); ok {
+		return respErr
+	}
+
+	reply.Index = index
+	v.srv.setQueryMeta(&reply.QueryMeta)
+	return nil
 }

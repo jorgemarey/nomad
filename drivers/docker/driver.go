@@ -274,6 +274,13 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 		return nil, nil, err
 	}
 
+	if runtime.GOOS == "windows" {
+		err = d.convertAllocPathsForWindowsLCOW(cfg, driverConfig.Image)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
 	containerCfg, err := d.createContainerConfig(cfg, &driverConfig, driverConfig.Image)
 	if err != nil {
 		d.logger.Error("failed to create container configuration", "image_name", driverConfig.Image,
@@ -512,8 +519,6 @@ func (d *Driver) createImage(task *drivers.TaskConfig, driverConfig *TaskConfig,
 	image := driverConfig.Image
 	repo, tag := parseDockerImage(image)
 
-	callerID := fmt.Sprintf("%s-%s", task.ID, task.Name)
-
 	// We're going to check whether the image is already downloaded. If the tag
 	// is "latest", or ForcePull is set, we have to check for a new version every time so we don't
 	// bother to check and cache the id here. We'll download first, then cache.
@@ -522,7 +527,7 @@ func (d *Driver) createImage(task *drivers.TaskConfig, driverConfig *TaskConfig,
 	} else if tag != "latest" {
 		if dockerImage, _ := client.InspectImage(image); dockerImage != nil {
 			// Image exists so just increment its reference count
-			d.coordinator.IncrementImageReference(dockerImage.ID, image, callerID)
+			d.coordinator.IncrementImageReference(dockerImage.ID, image, task.ID)
 			return dockerImage.ID, nil
 		}
 	}
@@ -616,8 +621,24 @@ func (d *Driver) loadImage(task *drivers.TaskConfig, driverConfig *TaskConfig, c
 	return dockerImage.ID, nil
 }
 
-func (d *Driver) containerBinds(task *drivers.TaskConfig, driverConfig *TaskConfig) ([]string, error) {
+func (d *Driver) convertAllocPathsForWindowsLCOW(task *drivers.TaskConfig, image string) error {
+	imageConfig, err := client.InspectImage(image)
+	if err != nil {
+		return fmt.Errorf("the image does not exist: %v", err)
+	}
+	// LCOW If we are running a Linux Container on Windows, we need to mount it correctly, as c:\ does not exist on unix
+	if imageConfig.OS == "linux" {
+		a := []rune(task.Env[taskenv.AllocDir])
+		task.Env[taskenv.AllocDir] = strings.ReplaceAll(string(a[2:]), "\\", "/")
+		l := []rune(task.Env[taskenv.TaskLocalDir])
+		task.Env[taskenv.TaskLocalDir] = strings.ReplaceAll(string(l[2:]), "\\", "/")
+		s := []rune(task.Env[taskenv.SecretsDir])
+		task.Env[taskenv.SecretsDir] = strings.ReplaceAll(string(s[2:]), "\\", "/")
+	}
+	return nil
+}
 
+func (d *Driver) containerBinds(task *drivers.TaskConfig, driverConfig *TaskConfig) ([]string, error) {
 	allocDirBind := fmt.Sprintf("%s:%s", task.TaskDir().SharedAllocDir, task.Env[taskenv.AllocDir])
 	taskLocalBind := fmt.Sprintf("%s:%s", task.TaskDir().LocalDir, task.Env[taskenv.TaskLocalDir])
 	secretDirBind := fmt.Sprintf("%s:%s", task.TaskDir().SecretsDir, task.Env[taskenv.SecretsDir])
@@ -723,7 +744,6 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		logger.Error("task.Resources is empty")
 		return c, fmt.Errorf("task.Resources is empty")
 	}
-
 	binds, err := d.containerBinds(task, driverConfig)
 	if err != nil {
 		return c, err
@@ -744,6 +764,20 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		config.WorkingDir = driverConfig.WorkDir
 	}
 
+	containerRuntime := driverConfig.Runtime
+	if _, ok := task.DeviceEnv[nvidiaVisibleDevices]; ok {
+		if !d.gpuRuntime {
+			return c, fmt.Errorf("requested docker runtime %q was not found", d.config.GPURuntimeName)
+		}
+		if containerRuntime != "" && containerRuntime != d.config.GPURuntimeName {
+			return c, fmt.Errorf("conflicting runtime requests: gpu runtime %q conflicts with task runtime %q", d.config.GPURuntimeName, containerRuntime)
+		}
+		containerRuntime = d.config.GPURuntimeName
+	}
+	if _, ok := d.config.allowRuntimes[containerRuntime]; !ok && containerRuntime != "" {
+		return c, fmt.Errorf("requested runtime %q is not allowed", containerRuntime)
+	}
+
 	hostConfig := &docker.HostConfig{
 		Memory:    task.Resources.LinuxResources.MemoryLimitBytes,
 		CPUShares: task.Resources.LinuxResources.CPUShares,
@@ -757,13 +791,8 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		VolumeDriver: driverConfig.VolumeDriver,
 
 		PidsLimit: &driverConfig.PidsLimit,
-	}
 
-	if _, ok := task.DeviceEnv[nvidiaVisibleDevices]; ok {
-		if !d.gpuRuntime {
-			return c, fmt.Errorf("requested docker-runtime %q was not found", d.config.GPURuntimeName)
-		}
-		hostConfig.Runtime = d.config.GPURuntimeName
+		Runtime: containerRuntime,
 	}
 
 	// Calculate CPU Quota
@@ -817,6 +846,7 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	logger.Debug("configured resources", "memory", hostConfig.Memory,
 		"cpu_shares", hostConfig.CPUShares, "cpu_quota", hostConfig.CPUQuota,
 		"cpu_period", hostConfig.CPUPeriod)
+
 	logger.Debug("binding directories", "binds", hclog.Fmt("%#v", hostConfig.Binds))
 
 	//  set privileged mode

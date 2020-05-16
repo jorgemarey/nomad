@@ -7,7 +7,7 @@ export default Fragment.extend({
   plugin: fragmentOwner(),
 
   node: belongsTo('node'),
-  allocation: belongsTo('allocation'),
+  allocID: attr('string'),
 
   provider: attr('string'),
   version: attr('string'),
@@ -18,4 +18,9 @@ export default Fragment.extend({
   requiresTopologies: attr('boolean'),
 
   controllerInfo: attr(),
+
+  // Fragments can't have relationships, so provider a manual getter instead.
+  async getAllocation() {
+    return this.store.findRecord('allocation', this.allocID);
+  },
 });

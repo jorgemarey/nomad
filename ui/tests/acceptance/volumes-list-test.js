@@ -4,6 +4,7 @@ import { setupApplicationTest } from 'ember-qunit';
 import { setupMirage } from 'ember-cli-mirage/test-support';
 import pageSizeSelect from './behaviors/page-size-select';
 import VolumesList from 'nomad-ui/tests/pages/storage/volumes/list';
+import Layout from 'nomad-ui/tests/pages/layout';
 
 const assignWriteAlloc = (volume, alloc) => {
   volume.writeAllocs.add(alloc);
@@ -101,6 +102,30 @@ module('Acceptance | volumes list', function(hooks) {
     assert.equal(VolumesList.emptyState.headline, 'No Volumes');
   });
 
+  test('when there are volumes, but no matches for a search, there is an empty message', async function(assert) {
+    server.create('csi-volume', { id: 'cat 1' });
+    server.create('csi-volume', { id: 'cat 2' });
+
+    await VolumesList.visit();
+
+    await VolumesList.search('dog');
+    assert.ok(VolumesList.isEmpty);
+    assert.equal(VolumesList.emptyState.headline, 'No Matches');
+  });
+
+  test('searching resets the current page', async function(assert) {
+    server.createList('csi-volume', VolumesList.pageSize + 1);
+
+    await VolumesList.visit();
+    await VolumesList.nextPage();
+
+    assert.equal(currentURL(), '/csi/volumes?page=2');
+
+    await VolumesList.search('foobar');
+
+    assert.equal(currentURL(), '/csi/volumes?search=foobar');
+  });
+
   test('when the namespace query param is set, only matching volumes are shown and the namespace value is forwarded to app state', async function(assert) {
     server.createList('namespace', 2);
     const volume1 = server.create('csi-volume', { namespaceId: server.db.namespaces[0].id });
@@ -116,6 +141,17 @@ module('Acceptance | volumes list', function(hooks) {
 
     assert.equal(VolumesList.volumes.length, 1);
     assert.equal(VolumesList.volumes.objectAt(0).name, volume2.id);
+  });
+
+  test('the active namespace is carried over to the jobs pages', async function(assert) {
+    server.createList('namespace', 2);
+
+    const namespace = server.db.namespaces[1];
+    await VolumesList.visit({ namespace: namespace.id });
+
+    await Layout.gutter.visitJobs();
+
+    assert.equal(currentURL(), `/jobs?namespace=${namespace.id}`);
   });
 
   test('when accessing volumes is forbidden, a message is shown with a link to the tokens page', async function(assert) {

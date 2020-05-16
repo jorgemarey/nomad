@@ -279,6 +279,10 @@ func (n *nomadFSM) Apply(log *raft.Log) interface{} {
 		return n.applyCSIVolumeClaim(buf[1:], log.Index)
 	case structs.ScalingEventRegisterRequestType:
 		return n.applyUpsertScalingEvent(buf[1:], log.Index)
+	case structs.CSIVolumeClaimBatchRequestType:
+		return n.applyCSIVolumeBatchClaim(buf[1:], log.Index)
+	case structs.CSIPluginDeleteRequestType:
+		return n.applyCSIPluginDelete(buf[1:], log.Index)
 	}
 
 	// Check enterprise only message types.
@@ -1138,6 +1142,8 @@ func (n *nomadFSM) applySchedulerConfigUpdate(buf []byte, index uint64) interfac
 	}
 	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_scheduler_config"}, time.Now())
 
+	req.Config.Canonicalize()
+
 	if req.CAS {
 		applied, err := n.state.SchedulerCASConfig(index, req.Config.ModifyIndex, &req.Config)
 		if err != nil {
@@ -1178,6 +1184,24 @@ func (n *nomadFSM) applyCSIVolumeDeregister(buf []byte, index uint64) interface{
 	return nil
 }
 
+func (n *nomadFSM) applyCSIVolumeBatchClaim(buf []byte, index uint64) interface{} {
+	var batch *structs.CSIVolumeClaimBatchRequest
+	if err := structs.Decode(buf, &batch); err != nil {
+		panic(fmt.Errorf("failed to decode request: %v", err))
+	}
+	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_csi_volume_batch_claim"}, time.Now())
+
+	for _, req := range batch.Claims {
+		err := n.state.CSIVolumeClaim(index, req.RequestNamespace(),
+			req.VolumeID, req.ToClaim())
+		if err != nil {
+			n.logger.Error("CSIVolumeClaim for batch failed", "error", err)
+			return err // note: fails the remaining batch
+		}
+	}
+	return nil
+}
+
 func (n *nomadFSM) applyCSIVolumeClaim(buf []byte, index uint64) interface{} {
 	var req structs.CSIVolumeClaimRequest
 	if err := structs.Decode(buf, &req); err != nil {
@@ -1185,26 +1209,28 @@ func (n *nomadFSM) applyCSIVolumeClaim(buf []byte, index uint64) interface{} {
 	}
 	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_csi_volume_claim"}, time.Now())
 
-	ws := memdb.NewWatchSet()
-	alloc, err := n.state.AllocByID(ws, req.AllocationID)
-	if err != nil {
-		n.logger.Error("AllocByID failed", "error", err)
-		return err
-	}
-	if alloc == nil {
-		n.logger.Error("AllocByID failed to find alloc", "alloc_id", req.AllocationID)
-		if err != nil {
-			return err
-		}
-
-		return structs.ErrUnknownAllocationPrefix
-	}
-
-	if err := n.state.CSIVolumeClaim(index, req.RequestNamespace(), req.VolumeID, alloc, req.Claim); err != nil {
+	if err := n.state.CSIVolumeClaim(index, req.RequestNamespace(), req.VolumeID, req.ToClaim()); err != nil {
 		n.logger.Error("CSIVolumeClaim failed", "error", err)
 		return err
 	}
+	return nil
+}
 
+func (n *nomadFSM) applyCSIPluginDelete(buf []byte, index uint64) interface{} {
+	var req structs.CSIPluginDeleteRequest
+	if err := structs.Decode(buf, &req); err != nil {
+		panic(fmt.Errorf("failed to decode request: %v", err))
+	}
+	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_csi_plugin_delete"}, time.Now())
+
+	if err := n.state.DeleteCSIPlugin(index, req.ID); err != nil {
+		// "plugin in use" is an error for the state store but not for typical
+		// callers, so reduce log noise by not logging that case here
+		if err.Error() != "plugin in use" {
+			n.logger.Error("DeleteCSIPlugin failed", "error", err)
+		}
+		return err
+	}
 	return nil
 }
 
@@ -1431,6 +1457,7 @@ func (n *nomadFSM) Restore(old io.ReadCloser) error {
 			if err := dec.Decode(schedConfig); err != nil {
 				return err
 			}
+			schedConfig.Canonicalize()
 			if err := restore.SchedulerConfigRestore(schedConfig); err != nil {
 				return err
 			}
