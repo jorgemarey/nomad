@@ -58,7 +58,10 @@ func NewGenericStack(batch bool, ctx Context) *GenericStack {
 	// Upgrade from feasible to rank iterator
 	rankSource := NewFeasibleRankIterator(ctx, s.distinctPropertyConstraint)
 
+	// Apply the bin packing, this depends on the resources needed
+	// by a particular task group.
 	_, schedConfig, _ := s.ctx.State().SchedulerConfig()
+	schedulerAlgorithm := schedConfig.EffectiveSchedulerAlgorithm()
 	enablePreemption := true
 	if schedConfig != nil {
 		if batch {
@@ -67,10 +70,6 @@ func NewGenericStack(batch bool, ctx Context) *GenericStack {
 			enablePreemption = schedConfig.PreemptionConfig.ServiceSchedulerEnabled
 		}
 	}
-	// Apply the bin packing, this depends on the resources needed
-	// by a particular task group.
-	_, schedConfig, _ := s.ctx.State().SchedulerConfig()
-	schedulerAlgorithm := schedConfig.EffectiveSchedulerAlgorithm()
 
 	s.binPack = NewBinPackIterator(ctx, rankSource, enablePreemption, 0, schedulerAlgorithm)
 
