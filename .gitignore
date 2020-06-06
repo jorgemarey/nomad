@@ -104,3 +104,5 @@ azure-hashistack.pem
 
 # generated keys for e2e tests
 e2e/terraform/keys/
+
+*.diff
