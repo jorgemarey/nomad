@@ -301,6 +301,19 @@ func (a *allocReconciler) markStop(allocs allocSet, clientStatus, statusDescript
 	}
 }
 
+// markDelayed does markStop, but optionally includes a FollowupEvalID so that we can update
+// the stopped alloc with its delayed rescheduling evalID
+func (a *allocReconciler) markDelayed(allocs allocSet, clientStatus, statusDescription string, followupEvals map[string]string) {
+	for _, alloc := range allocs {
+		a.result.stop = append(a.result.stop, allocStopResult{
+			alloc:             alloc,
+			clientStatus:      clientStatus,
+			statusDescription: statusDescription,
+			followupEvalID:    followupEvals[alloc.ID],
+		})
+	}
+}
+
 // computeGroup reconciles state for a particular task group. It returns whether
 // the deployment it is for is complete with regards to the task group.
 func (a *allocReconciler) computeGroup(group string, all allocSet) bool {
@@ -355,17 +368,11 @@ func (a *allocReconciler) computeGroup(group string, all allocSet) bool {
 
 	// Find delays for any lost allocs that have stop_after_client_disconnect
 	lostLater := lost.delayByStopAfterClientDisconnect()
-	rescheduleLater = append(rescheduleLater, lostLater...)
+	lostLaterEvals := a.handleDelayedLost(lostLater, all, tg.Name)
 
 	// Create batched follow up evaluations for allocations that are
 	// reschedulable later and mark the allocations for in place updating
 	a.handleDelayedReschedules(rescheduleLater, all, tg.Name)
-
-	// Allocs that are lost and delayed have an attributeUpdate that correctly links to
-	// the eval, but incorrectly has the current (running) status
-	for _, d := range lostLater {
-		a.result.attributeUpdates[d.allocID].SetStop(structs.AllocClientStatusLost, structs.AllocClientStatusLost)
-	}
 
 	// Create a structure for choosing names. Seed with the taken names which is
 	// the union of untainted and migrating nodes (includes canaries)
@@ -374,7 +381,7 @@ func (a *allocReconciler) computeGroup(group string, all allocSet) bool {
 	// Stop any unneeded allocations and update the untainted set to not
 	// included stopped allocations.
 	canaryState := dstate != nil && dstate.DesiredCanaries != 0 && !dstate.Promoted
-	stop := a.computeStop(tg, nameIndex, untainted, migrate, lost, canaries, canaryState)
+	stop := a.computeStop(tg, nameIndex, untainted, migrate, lost, canaries, canaryState, lostLaterEvals)
 	desiredChanges.Stop += uint64(len(stop))
 	untainted = untainted.difference(stop)
 
@@ -423,7 +430,7 @@ func (a *allocReconciler) computeGroup(group string, all allocSet) bool {
 	// * The deployment is not paused or failed
 	// * Not placing any canaries
 	// * If there are any canaries that they have been promoted
-	// * There is no delayed stop_after_client_disconnect alloc
+	// * There is no delayed stop_after_client_disconnect alloc, which delays scheduling for the whole group
 	var place []allocPlaceResult
 	if len(lostLater) == 0 {
 		place = a.computePlacements(tg, nameIndex, untainted, migrate, rescheduleNow)
@@ -711,13 +718,13 @@ func (a *allocReconciler) computePlacements(group *structs.TaskGroup,
 // the group definition, the set of allocations in various states and whether we
 // are canarying.
 func (a *allocReconciler) computeStop(group *structs.TaskGroup, nameIndex *allocNameIndex,
-	untainted, migrate, lost, canaries allocSet, canaryState bool) allocSet {
+	untainted, migrate, lost, canaries allocSet, canaryState bool, followupEvals map[string]string) allocSet {
 
 	// Mark all lost allocations for stop. Previous allocation doesn't matter
 	// here since it is on a lost node
 	var stop allocSet
 	stop = stop.union(lost)
-	a.markStop(lost, structs.AllocClientStatusLost, allocLost)
+	a.markDelayed(lost, structs.AllocClientStatusLost, allocLost, followupEvals)
 
 	// If we are still deploying or creating canaries, don't stop them
 	if canaryState {
@@ -842,11 +849,33 @@ func (a *allocReconciler) computeUpdates(group *structs.TaskGroup, untainted all
 	return
 }
 
-// handleDelayedReschedules creates batched followup evaluations with the WaitUntil field set
-// for allocations that are eligible to be rescheduled later
+// handleDelayedReschedules creates batched followup evaluations with the WaitUntil field
+// set for allocations that are eligible to be rescheduled later, and marks the alloc with
+// the followupEvalID
 func (a *allocReconciler) handleDelayedReschedules(rescheduleLater []*delayedRescheduleInfo, all allocSet, tgName string) {
+	// followupEvals are created in the same way as for delayed lost allocs
+	allocIDToFollowupEvalID := a.handleDelayedLost(rescheduleLater, all, tgName)
+
+	// Initialize the annotations
+	if len(allocIDToFollowupEvalID) != 0 && a.result.attributeUpdates == nil {
+		a.result.attributeUpdates = make(map[string]*structs.Allocation)
+	}
+
+	// Create updates that will be applied to the allocs to mark the FollowupEvalID
+	for allocID, evalID := range allocIDToFollowupEvalID {
+		existingAlloc := all[allocID]
+		updatedAlloc := existingAlloc.Copy()
+		updatedAlloc.FollowupEvalID = evalID
+		a.result.attributeUpdates[updatedAlloc.ID] = updatedAlloc
+	}
+}
+
+// handleDelayedLost creates batched followup evaluations with the WaitUntil field set for
+// lost allocations. followupEvals are appended to a.result as a side effect, we return a
+// map of alloc IDs to their followupEval IDs
+func (a *allocReconciler) handleDelayedLost(rescheduleLater []*delayedRescheduleInfo, all allocSet, tgName string) map[string]string {
 	if len(rescheduleLater) == 0 {
-		return
+		return map[string]string{}
 	}
 
 	// Sort by time
@@ -899,16 +928,5 @@ func (a *allocReconciler) handleDelayedReschedules(rescheduleLater []*delayedRes
 
 	a.result.desiredFollowupEvals[tgName] = evals
 
-	// Initialize the annotations
-	if len(allocIDToFollowupEvalID) != 0 && a.result.attributeUpdates == nil {
-		a.result.attributeUpdates = make(map[string]*structs.Allocation)
-	}
-
-	// Create in-place updates for every alloc ID that needs to be updated with its follow up eval ID
-	for allocID, evalID := range allocIDToFollowupEvalID {
-		existingAlloc := all[allocID]
-		updatedAlloc := existingAlloc.Copy()
-		updatedAlloc.FollowupEvalID = evalID
-		a.result.attributeUpdates[updatedAlloc.ID] = updatedAlloc
-	}
+	return allocIDToFollowupEvalID
 }
