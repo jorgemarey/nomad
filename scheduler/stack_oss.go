@@ -60,18 +60,8 @@ func NewGenericStack(batch bool, ctx Context) *GenericStack {
 
 	// Apply the bin packing, this depends on the resources needed
 	// by a particular task group.
-	_, schedConfig, _ := s.ctx.State().SchedulerConfig()
-	schedulerAlgorithm := schedConfig.EffectiveSchedulerAlgorithm()
-	enablePreemption := true
-	if schedConfig != nil {
-		if batch {
-			enablePreemption = schedConfig.PreemptionConfig.BatchSchedulerEnabled
-		} else {
-			enablePreemption = schedConfig.PreemptionConfig.ServiceSchedulerEnabled
-		}
-	}
-
-	s.binPack = NewBinPackIterator(ctx, rankSource, enablePreemption, 0, schedulerAlgorithm)
+	_, schedConfig, _ := ctx.State().SchedulerConfig()
+	s.binPack = NewBinPackIterator(ctx, rankSource, false, 0, schedConfig.EffectiveSchedulerAlgorithm())
 
 	// Apply the job anti-affinity iterator. This is to avoid placing
 	// multiple allocations on the same node for this job.
@@ -87,8 +77,11 @@ func NewGenericStack(batch bool, ctx Context) *GenericStack {
 	// Apply scores based on spread stanza
 	s.spread = NewSpreadIterator(ctx, s.nodeAffinity)
 
+	// Add the preemption options scoring iterator
+	preemptionScorer := NewPreemptionScoringIterator(ctx, s.spread)
+
 	// Normalizes scores by averaging them across various scorers
-	s.scoreNorm = NewScoreNormalizationIterator(ctx, s.spread)
+	s.scoreNorm = NewScoreNormalizationIterator(ctx, preemptionScorer)
 
 	// Apply a limit function. This is to avoid scanning *every* possible node.
 	s.limit = NewLimitIterator(ctx, s.scoreNorm, 2, skipScoreThreshold, maxSkip)
