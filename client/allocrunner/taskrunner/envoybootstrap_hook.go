@@ -162,7 +162,7 @@ func (h *envoyBootstrapHook) Prestart(ctx context.Context, req *interfaces.TaskP
 	}
 
 	bootstrapArgs := bootstrapBuilder.args()
-	bootstrapEnv := bootstrapBuilder.env(os.Environ())
+	bootstrapEnv := bootstrapBuilder.env(append(os.Environ(), h.groupEnv()...))
 
 	// Since Consul services are registered asynchronously with this task
 	// hook running, retry a small number of times with backoff.
@@ -225,6 +225,16 @@ func (h *envoyBootstrapHook) Prestart(ctx context.Context, req *interfaces.TaskP
 	// Bootstrap written. Mark as done and move on.
 	resp.Done = true
 	return nil
+}
+
+func (h *envoyBootstrapHook) groupEnv() []string {
+	return []string{
+		fmt.Sprintf("%s=%s", "NOMAD_ALLOC_ID", h.alloc.ID),
+		fmt.Sprintf("%s=%s", "NOMAD_ALLOC_NAME", h.alloc.Name),
+		fmt.Sprintf("%s=%s", "NOMAD_GROUP_NAME", h.alloc.TaskGroup),
+		fmt.Sprintf("%s=%s", "NOMAD_JOB_NAME", h.alloc.Job.Name),
+		fmt.Sprintf("%s=%s", "NOMAD_NAMESPACE", h.alloc.Namespace),
+	}
 }
 
 func buildEnvoyAdminBind(alloc *structs.Allocation, taskName string) string {
