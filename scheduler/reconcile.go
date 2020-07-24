@@ -197,8 +197,17 @@ func (a *allocReconciler) Compute() *reconcileResults {
 
 	// Detect if the deployment is paused
 	if a.deployment != nil {
-		a.deploymentPaused = a.deployment.Status == structs.DeploymentStatusPaused
+		a.deploymentPaused = a.deployment.Status == structs.DeploymentStatusPaused ||
+			a.deployment.Status == structs.DeploymentStatusPending
 		a.deploymentFailed = a.deployment.Status == structs.DeploymentStatusFailed
+	}
+	if a.deployment == nil {
+		// When we create the deployment later, it will be in a pending
+		// state. But we also need to tell Compute we're paused, otherwise we
+		// make placements on the paused deployment.
+		if a.job.IsMultiregion() && !(a.job.IsPeriodic() || a.job.IsParameterized()) {
+			a.deploymentPaused = true
+		}
 	}
 
 	// Reconcile each group
@@ -210,11 +219,24 @@ func (a *allocReconciler) Compute() *reconcileResults {
 
 	// Mark the deployment as complete if possible
 	if a.deployment != nil && complete {
-		a.result.deploymentUpdates = append(a.result.deploymentUpdates, &structs.DeploymentStatusUpdate{
-			DeploymentID:      a.deployment.ID,
-			Status:            structs.DeploymentStatusSuccessful,
-			StatusDescription: structs.DeploymentStatusDescriptionSuccessful,
-		})
+		if a.job.IsMultiregion() {
+			// the unblocking/successful states come after blocked, so we
+			// need to make sure we don't revert those states
+			if a.deployment.Status != structs.DeploymentStatusUnblocking &&
+				a.deployment.Status != structs.DeploymentStatusSuccessful {
+				a.result.deploymentUpdates = append(a.result.deploymentUpdates, &structs.DeploymentStatusUpdate{
+					DeploymentID:      a.deployment.ID,
+					Status:            structs.DeploymentStatusBlocked,
+					StatusDescription: structs.DeploymentStatusDescriptionBlocked,
+				})
+			}
+		} else {
+			a.result.deploymentUpdates = append(a.result.deploymentUpdates, &structs.DeploymentStatusUpdate{
+				DeploymentID:      a.deployment.ID,
+				Status:            structs.DeploymentStatusSuccessful,
+				StatusDescription: structs.DeploymentStatusDescriptionSuccessful,
+			})
+		}
 	}
 
 	// Set the description of a created deployment
@@ -406,12 +428,12 @@ func (a *allocReconciler) computeGroup(group string, all allocSet) bool {
 	strategy := tg.Update
 	canariesPromoted := dstate != nil && dstate.Promoted
 	requireCanary := numDestructive != 0 && strategy != nil && len(canaries) < strategy.Canary && !canariesPromoted
+	if requireCanary {
+		dstate.DesiredCanaries = strategy.Canary
+	}
 	if requireCanary && !a.deploymentPaused && !a.deploymentFailed {
 		number := strategy.Canary - len(canaries)
 		desiredChanges.Canary += uint64(number)
-		if !existingDeployment {
-			dstate.DesiredCanaries = strategy.Canary
-		}
 
 		for _, name := range nameIndex.NextCanaries(uint(number), canaries, destructive) {
 			a.result.place = append(a.result.place, allocPlaceResult{
@@ -534,6 +556,11 @@ func (a *allocReconciler) computeGroup(group string, all allocSet) bool {
 		// A previous group may have made the deployment already
 		if a.deployment == nil {
 			a.deployment = structs.NewDeployment(a.job)
+			// in multiregion jobs, most deployments start in a pending state
+			if a.job.IsMultiregion() && !(a.job.IsPeriodic() && a.job.IsParameterized()) {
+				a.deployment.Status = structs.DeploymentStatusPending
+				a.deployment.StatusDescription = structs.DeploymentStatusDescriptionPendingForPeer
+			}
 			a.result.deployment = a.deployment
 		}
 
@@ -590,18 +617,18 @@ func (a *allocReconciler) handleGroupCanaries(all allocSet, desiredChanges *stru
 
 	// Cancel any non-promoted canaries from the older deployment
 	if a.oldDeployment != nil {
-		for _, s := range a.oldDeployment.TaskGroups {
-			if !s.Promoted {
-				stop = append(stop, s.PlacedCanaries...)
+		for _, dstate := range a.oldDeployment.TaskGroups {
+			if !dstate.Promoted {
+				stop = append(stop, dstate.PlacedCanaries...)
 			}
 		}
 	}
 
 	// Cancel any non-promoted canaries from a failed deployment
 	if a.deployment != nil && a.deployment.Status == structs.DeploymentStatusFailed {
-		for _, s := range a.deployment.TaskGroups {
-			if !s.Promoted {
-				stop = append(stop, s.PlacedCanaries...)
+		for _, dstate := range a.deployment.TaskGroups {
+			if !dstate.Promoted {
+				stop = append(stop, dstate.PlacedCanaries...)
 			}
 		}
 	}
@@ -617,8 +644,8 @@ func (a *allocReconciler) handleGroupCanaries(all allocSet, desiredChanges *stru
 	// needed by just stopping them.
 	if a.deployment != nil {
 		var canaryIDs []string
-		for _, s := range a.deployment.TaskGroups {
-			canaryIDs = append(canaryIDs, s.PlacedCanaries...)
+		for _, dstate := range a.deployment.TaskGroups {
+			canaryIDs = append(canaryIDs, dstate.PlacedCanaries...)
 		}
 
 		canaries = all.fromKeys(canaryIDs)

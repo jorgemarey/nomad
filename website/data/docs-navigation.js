@@ -38,7 +38,8 @@ export default [
         content: ['scheduling', 'preemption']
       },
       'consensus',
-      'gossip'
+      'gossip',
+      'security'
     ]
   },
   {
@@ -83,10 +84,10 @@ export default [
         category: 'alloc',
         content: ['exec', 'fs', 'logs', 'restart', 'signal', 'status', 'stop']
       },
-
+      'debug',
       {
         category: 'deployment',
-        content: ['fail', 'list', 'pause', 'promote', 'resume', 'status']
+        content: ['fail', 'list', 'pause', 'promote', 'resume', 'status', 'unblock']
       },
       'eval-status',
       {
@@ -108,6 +109,10 @@ export default [
           'validate'
         ]
       },
+      {
+        category: 'license',
+        content: ['get', 'put']
+      },
       'monitor',
       {
         category: 'namespace',
@@ -125,7 +130,11 @@ export default [
           'keygen',
           'keyring',
           'raft-list-peers',
-          'raft-remove-peer'
+          'raft-remove-peer',
+          'snapshot-agent',
+          'snapshot-inspect',
+          'snapshot-restore',
+          'snapshot-save'
         ]
       },
       { category: 'plugin', content: ['status'] },
@@ -163,6 +172,7 @@ export default [
       'logs',
       'meta',
       'migrate',
+      'multiregion',
       'network',
       'parameterized',
       'periodic',
@@ -190,6 +200,7 @@ export default [
       'docker',
       'exec',
       'java',
+      'podman',
       'qemu',
       'raw_exec',
       {
@@ -197,7 +208,6 @@ export default [
         content: [
           'lxc',
           'rkt',
-          'podman',
           'singularity',
           'jail-task-driver',
           'pot',
@@ -214,6 +224,29 @@ export default [
   },
   'schedulers',
   { category: 'runtime', content: ['environment', 'interpolation'] },
+  {
+    category: 'autoscaling',
+    content: [
+      'agent',
+      'api',
+      'cli',
+      'policy',
+      {
+        category: 'plugins',
+        content: [
+          'apm',
+          'strategy',
+          'target'
+        ]
+      },
+      {
+        category: 'internals',
+        content: [
+          'checks'
+        ]
+      }
+    ]
+  },
   { category: 'telemetry', content: ['metrics'] },
   { category: 'vault-integration' },
   '------------',

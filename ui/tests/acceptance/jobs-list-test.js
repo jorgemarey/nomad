@@ -155,7 +155,7 @@ module('Acceptance | jobs list', function(hooks) {
 
     await JobsList.visit();
 
-    await JobsList.search('dog');
+    await JobsList.search.fillIn('dog');
     assert.ok(JobsList.isEmpty, 'The empty message is shown');
     assert.equal(JobsList.emptyState.headline, 'No Matches', 'The message is appropriate');
   });
@@ -168,7 +168,7 @@ module('Acceptance | jobs list', function(hooks) {
 
     assert.equal(currentURL(), '/jobs?page=2', 'Page query param captures page=2');
 
-    await JobsList.search('foobar');
+    await JobsList.search.fillIn('foobar');
 
     assert.equal(currentURL(), '/jobs?search=foobar', 'No page query param');
   });
@@ -451,6 +451,20 @@ module('Acceptance | jobs list', function(hooks) {
         `/jobs?${paramName}=${encodeURIComponent(JSON.stringify(selection))}`,
         'URL has the correct query param key and value'
       );
+    });
+
+    test('the run job button works when filters are set', async function(assert) {
+      ['pre-one', 'pre-two', 'pre-three'].forEach(name => {
+        server.create('job', { name, createAllocations: false, childrenCount: 0 });
+      });
+
+      await JobsList.visit();
+
+      await JobsList.facets.prefix.toggle();
+      await JobsList.facets.prefix.options[0].toggle();
+
+      await JobsList.runJobButton.click();
+      assert.equal(currentURL(), '/jobs/run');
     });
   }
 });

@@ -108,6 +108,14 @@ type Server struct {
 	raftInmem     *raft.InmemStore
 	raftTransport *raft.NetworkTransport
 
+	// reassertLeaderCh is used to signal that the leader loop must
+	// re-establish leadership.
+	//
+	// This might be relevant in snapshot restores, where leader in-memory
+	// state changed significantly such that leader state (e.g. periodic
+	// jobs, eval brokers) need to be recomputed.
+	reassertLeaderCh chan chan error
+
 	// autopilot is the Autopilot instance for this server.
 	autopilot *autopilot.Autopilot
 
@@ -312,22 +320,23 @@ func NewServer(config *Config, consulCatalog consul.CatalogAPI, consulACLs consu
 
 	// Create the server
 	s := &Server{
-		config:        config,
-		consulCatalog: consulCatalog,
-		connPool:      pool.NewPool(logger, serverRPCCache, serverMaxStreams, tlsWrap),
-		logger:        logger,
-		tlsWrap:       tlsWrap,
-		rpcServer:     rpc.NewServer(),
-		streamingRpcs: structs.NewStreamingRpcRegistry(),
-		nodeConns:     make(map[string][]*nodeConnState),
-		peers:         make(map[string][]*serverParts),
-		localPeers:    make(map[raft.ServerAddress]*serverParts),
-		reconcileCh:   make(chan serf.Member, 32),
-		eventCh:       make(chan serf.Event, 256),
-		evalBroker:    evalBroker,
-		blockedEvals:  NewBlockedEvals(evalBroker, logger),
-		rpcTLS:        incomingTLS,
-		aclCache:      aclCache,
+		config:           config,
+		consulCatalog:    consulCatalog,
+		connPool:         pool.NewPool(logger, serverRPCCache, serverMaxStreams, tlsWrap),
+		logger:           logger,
+		tlsWrap:          tlsWrap,
+		rpcServer:        rpc.NewServer(),
+		streamingRpcs:    structs.NewStreamingRpcRegistry(),
+		nodeConns:        make(map[string][]*nodeConnState),
+		peers:            make(map[string][]*serverParts),
+		localPeers:       make(map[raft.ServerAddress]*serverParts),
+		reassertLeaderCh: make(chan chan error),
+		reconcileCh:      make(chan serf.Member, 32),
+		eventCh:          make(chan serf.Event, 256),
+		evalBroker:       evalBroker,
+		blockedEvals:     NewBlockedEvals(evalBroker, logger),
+		rpcTLS:           incomingTLS,
+		aclCache:         aclCache,
 	}
 
 	s.shutdownCtx, s.shutdownCancel = context.WithCancel(context.Background())
@@ -996,9 +1005,13 @@ func (s *Server) setupDeploymentWatcher() error {
 
 	// Create the deployment watcher
 	s.deploymentWatcher = deploymentwatcher.NewDeploymentsWatcher(
-		s.logger, raftShim,
+		s.logger,
+		raftShim,
+		s.staticEndpoints.Deployment,
+		s.staticEndpoints.Job,
 		deploymentwatcher.LimitStateQueriesPerSecond,
-		deploymentwatcher.CrossDeploymentUpdateBatchDuration)
+		deploymentwatcher.CrossDeploymentUpdateBatchDuration,
+	)
 
 	return nil
 }
@@ -1131,6 +1144,8 @@ func (s *Server) setupRpcServer(server *rpc.Server, ctx *RPCContext) {
 		s.staticEndpoints.CSIPlugin = &CSIPlugin{srv: s, logger: s.logger.Named("csi_plugin")}
 		s.staticEndpoints.Deployment = &Deployment{srv: s, logger: s.logger.Named("deployment")}
 		s.staticEndpoints.Operator = &Operator{srv: s, logger: s.logger.Named("operator")}
+		s.staticEndpoints.Operator.register()
+
 		s.staticEndpoints.Periodic = &Periodic{srv: s, logger: s.logger.Named("periodic")}
 		s.staticEndpoints.Plan = &Plan{srv: s, logger: s.logger.Named("plan")}
 		s.staticEndpoints.Region = &Region{srv: s, logger: s.logger.Named("region")}
@@ -1635,7 +1650,7 @@ func (s *Server) ClusterID() (string, error) {
 
 	// try to load the cluster ID from state store
 	fsmState := s.fsm.State()
-	existingMeta, err := fsmState.ClusterMetadata()
+	existingMeta, err := fsmState.ClusterMetadata(nil)
 	if err != nil {
 		s.logger.Named("core").Error("failed to get cluster ID", "error", err)
 		return "", err

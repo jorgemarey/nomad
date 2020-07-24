@@ -43,6 +43,7 @@ endif
 # On MacOS, we only build for MacOS
 ifeq (Darwin,$(THIS_OS))
 ALL_TARGETS += darwin_amd64
+# Copy CGO files for darwin into place
 endif
 
 # On FreeBSD, we only build for FreeBSD
@@ -165,22 +166,23 @@ bootstrap: deps lint-deps git-hooks # Install all dependencies
 
 .PHONY: deps
 deps:  ## Install build and development dependencies
+## Keep versions in sync with tools/go.mod for now (see https://github.com/golang/go/issues/30515)
 	@echo "==> Updating build dependencies..."
-	GO111MODULE=on go get -u github.com/kardianos/govendor
-	GO111MODULE=on go get -u github.com/hashicorp/go-bindata/go-bindata@master
-	GO111MODULE=on go get -u github.com/elazarl/go-bindata-assetfs/go-bindata-assetfs@master
-	GO111MODULE=on go get -u github.com/a8m/tree/cmd/tree
-	GO111MODULE=on go get -u github.com/magiconair/vendorfmt/cmd/vendorfmt
-	GO111MODULE=on go get -u gotest.tools/gotestsum
-	GO111MODULE=on go get -u github.com/fatih/hclfmt
-	GO111MODULE=on go get -u github.com/golang/protobuf/protoc-gen-go@v1.3.4
-	GO111MODULE=on go get -u github.com/hashicorp/go-msgpack/codec/codecgen@v1.1.5
+	GO111MODULE=on cd tools && go get github.com/hashicorp/go-bindata/go-bindata@bf7910af899725e4938903fb32048c7c0b15f12e
+	GO111MODULE=on cd tools && go get github.com/elazarl/go-bindata-assetfs/go-bindata-assetfs@234c15e7648ff35458026de92b34c637bae5e6f7
+	GO111MODULE=on cd tools && go get github.com/a8m/tree/cmd/tree
+	GO111MODULE=on cd tools && go get gotest.tools/gotestsum@v0.4.2
+	GO111MODULE=on cd tools && go get github.com/hashicorp/hcl/v2/cmd/hclfmt@v2.5.1
+	GO111MODULE=on cd tools && go get github.com/golang/protobuf/protoc-gen-go@v1.3.4
+	GO111MODULE=on cd tools && go get github.com/hashicorp/go-msgpack/codec/codecgen@v1.1.5
 
 .PHONY: lint-deps
 lint-deps: ## Install linter dependencies
+## Keep versions in sync with tools/go.mod (see https://github.com/golang/go/issues/30515)
 	@echo "==> Updating linter dependencies..."
-	GO111MODULE=on go get -u github.com/golangci/golangci-lint/cmd/golangci-lint@v1.24.0
-	GO111MODULE=on go get -u github.com/client9/misspell/cmd/misspell
+	GO111MODULE=on cd tools && go get github.com/golangci/golangci-lint/cmd/golangci-lint@v1.24.0
+	GO111MODULE=on cd tools && go get github.com/client9/misspell/cmd/misspell@v0.3.4
+	GO111MODULE=on cd tools && go get github.com/hashicorp/go-hclog/hclogvet@v0.1.3
 
 .PHONY: git-hooks
 git-dir = $(shell git rev-parse --git-dir)
@@ -193,6 +195,9 @@ $(git-dir)/hooks/%: dev/hooks/%
 check: ## Lint the source code
 	@echo "==> Linting source code..."
 	@golangci-lint run -j 1
+	
+	@echo "==> Linting hclog statements..."
+	@hclogvet .
 
 	@echo "==> Spell checking website..."
 	@misspell -error -source=text website/pages/
@@ -206,10 +211,7 @@ check: ## Lint the source code
 	@if (git status -s | grep -q -e '\.hcl$$' -e '\.nomad$$'); then echo the following HCL files are out of sync; git status -s | grep -e '\.hcl$$' -e '\.nomad$$'; exit 1; fi
 
 	@echo "==> Check API package is isolated from rest"
-	@if go list --test -f '{{ join .Deps "\n" }}' ./api | grep github.com/hashicorp/nomad/ | grep -v -e /vendor/ -e /nomad/api/ -e nomad/api.test; then echo "  /api package depends the ^^ above internal nomad packages.  Remove such dependency"; exit 1; fi
-
-	@echo "==> Check non-vendored packages"
-	@if go list --test -tags "$(GO_TAGS)" -f '{{join .Deps "\n"}}' . | grep -v github.com/hashicorp/nomad.test | xargs go list -tags "$(GO_TAGS)" -f '{{if not .Standard}}{{.ImportPath}}{{end}}' | grep -v -e github.com/hashicorp/nomad; then echo "  found referenced packages ^^ that are not vendored"; exit 1; fi
+	@cd ./api && if go list --test -f '{{ join .Deps "\n" }}' . | grep github.com/hashicorp/nomad/ | grep -v -e /vendor/ -e /nomad/api/ -e nomad/api.test; then echo "  /api package depends the ^^ above internal nomad packages.  Remove such dependency"; exit 1; fi
 
 .PHONY: checkscripts
 checkscripts: ## Lint shell scripts
@@ -238,11 +240,6 @@ generate-examples: command/job_init.bindata_assetfs.go
 command/job_init.bindata_assetfs.go: command/assets/*
 	go-bindata-assetfs -pkg command -o command/job_init.bindata_assetfs.go ./command/assets/...
 
-.PHONY: vendorfmt
-vendorfmt:
-	@echo "--> Formatting vendor/vendor.json"
-	vendorfmt
-
 .PHONY: changelogfmt
 changelogfmt:
 	@echo "--> Making [GH-xxxx] references clickable..."
@@ -256,12 +253,25 @@ hclfmt:
 	@find . -path ./terraform -prune -o -name 'upstart.nomad' -prune -o \( -name '*.nomad' -o -name '*.hcl' \) -exec \
 sh -c 'hclfmt -w {} || echo in path {}' ';'
 
+.PHONY: tidy
+tidy:
+	@echo "--> Tidy up submodules"
+	@cd tools && go mod tidy
+	@cd api && go mod tidy
+	@echo "--> Tidy nomad module"
+	@go mod tidy
+
+.PHONY: sync
+sync: tidy
+	@echo "--> Sync vendor directory"
+	@go mod vendor
+
 .PHONY: dev
 dev: GOOS=$(shell go env GOOS)
 dev: GOARCH=$(shell go env GOARCH)
 dev: GOPATH=$(shell go env GOPATH)
 dev: DEV_TARGET=pkg/$(GOOS)_$(GOARCH)/nomad
-dev: vendorfmt changelogfmt hclfmt ## Build for the current development platform
+dev: changelogfmt hclfmt ## Build for the current development platform
 	@echo "==> Removing old development build..."
 	@rm -f $(PROJECT_ROOT)/$(DEV_TARGET)
 	@rm -f $(PROJECT_ROOT)/bin/nomad
@@ -308,6 +318,19 @@ test-nomad: dev ## Run Nomad test suites
 		-timeout=15m \
 		-tags "$(GO_TAGS)" \
 		$(GOTEST_PKGS) $(if $(VERBOSE), >test.log ; echo $$? > exit-code)
+	@if [ $(VERBOSE) ] ; then \
+		bash -C "$(PROJECT_ROOT)/scripts/test_check.sh" ; \
+	fi
+
+.PHONY: test-nomad-module
+test-nomad-module: dev ## Run Nomad test suites on a sub-module
+	@echo "==> Running Nomad test suites on sub-module:"
+	@cd $(GOTEST_MOD) && $(if $(ENABLE_RACE),GORACE="strip_path_prefix=$(GOPATH)/src") $(GO_TEST_CMD) \
+		$(if $(ENABLE_RACE),-race) $(if $(VERBOSE),-v) \
+		-cover \
+		-timeout=15m \
+		-tags "$(GO_TAGS)" \
+		./... $(if $(VERBOSE), >test.log ; echo $$? > exit-code)
 	@if [ $(VERBOSE) ] ; then \
 		bash -C "$(PROJECT_ROOT)/scripts/test_check.sh" ; \
 	fi
@@ -382,7 +405,7 @@ help: ## Display this usage information
 .PHONY: ui-screenshots
 ui-screenshots:
 	@echo "==> Collecting UI screenshots..."
-	# Build the screenshots image if it doesn't exist yet
+        # Build the screenshots image if it doesn't exist yet
 	@if [[ "$$(docker images -q nomad-ui-screenshots 2> /dev/null)" == "" ]]; then \
 		docker build --tag="nomad-ui-screenshots" ./scripts/screenshots; \
 	fi

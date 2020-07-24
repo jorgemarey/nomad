@@ -3,8 +3,8 @@ export const ALERT_BANNER_ACTIVE = true
 // https://github.com/hashicorp/web-components/tree/master/packages/alert-banner
 export default {
   url:
-    'https://www.nomadproject.io/downloads/',
-  tag: 'NEW',
+    'https://www.hashicorp.com/webinars/nomad-0-12-multi-cluster-federations-cni-advanced-scheduling-and-more/',
+  tag: 'WEBINAR',
   text:
-    'Nomad 0.11 is now generally available, with CSI integration, autoscaling, and more. Download now',
+    'Join us for a webinar to learn about Nomad 0.12. This release included 15+ new features and our breakthrough Multi-Cluster Deployment. Register here!',
 }

@@ -244,6 +244,8 @@ func (n *Node) constructNodeServerInfoResponse(snap *state.StateSnapshot, reply 
 		}
 	}
 
+	reply.Features = n.srv.EnterpriseState.Features()
+
 	return nil
 }
 
@@ -1887,8 +1889,7 @@ func taskUsesConnect(task *structs.Task) bool {
 		// not even in the task group
 		return false
 	}
-
-	return task.Kind.IsConnectProxy() || task.Kind.IsConnectNative()
+	return task.UsesConnect()
 }
 
 func (n *Node) EmitEvents(args *structs.EmitNodeEventsRequest, reply *structs.EmitNodeEventsResponse) error {

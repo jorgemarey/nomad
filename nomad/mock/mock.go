@@ -65,9 +65,17 @@ func Node() *structs.Node {
 			},
 			Networks: []*structs.NetworkResource{
 				{
+					Mode:   "host",
 					Device: "eth0",
 					CIDR:   "192.168.0.100/32",
 					MBits:  1000,
+				},
+			},
+			NodeNetworks: []*structs.NodeNetworkResource{
+				{
+					Mode:   "host",
+					Device: "eth0",
+					Speed:  1000,
 				},
 			},
 		},
@@ -1285,6 +1293,34 @@ func JobWithScalingPolicy() (*structs.Job, *structs.ScalingPolicy) {
 	policy.TargetTaskGroup(job, job.TaskGroups[0])
 	job.TaskGroups[0].Scaling = policy
 	return job, policy
+}
+
+func MultiregionJob() *structs.Job {
+	job := Job()
+	update := *structs.DefaultUpdateStrategy
+	job.Update = update
+	job.TaskGroups[0].Update = &update
+	job.Multiregion = &structs.Multiregion{
+		Strategy: &structs.MultiregionStrategy{
+			MaxParallel: 1,
+			OnFailure:   "fail_all",
+		},
+		Regions: []*structs.MultiregionRegion{
+			{
+				Name:        "west",
+				Count:       2,
+				Datacenters: []string{"west-1", "west-2"},
+				Meta:        map[string]string{"region_code": "W"},
+			},
+			{
+				Name:        "east",
+				Count:       1,
+				Datacenters: []string{"east-1"},
+				Meta:        map[string]string{"region_code": "E"},
+			},
+		},
+	}
+	return job
 }
 
 func CSIPlugin() *structs.CSIPlugin {

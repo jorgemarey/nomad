@@ -2991,7 +2991,12 @@ func TestStateStore_CSIVolume(t *testing.T) {
 	require.Error(t, err, fmt.Sprintf("volume exists: %s", vol0))
 	// as is deregistration
 	index++
-	err = state.CSIVolumeDeregister(index, ns, []string{vol0})
+	err = state.CSIVolumeDeregister(index, ns, []string{vol0}, false)
+	require.Error(t, err, fmt.Sprintf("volume in use: %s", vol0))
+
+	// even if forced, because we have a non-terminal claim
+	index++
+	err = state.CSIVolumeDeregister(index, ns, []string{vol0}, true)
 	require.Error(t, err, fmt.Sprintf("volume in use: %s", vol0))
 
 	// release claims to unblock deregister
@@ -3006,7 +3011,7 @@ func TestStateStore_CSIVolume(t *testing.T) {
 	require.NoError(t, err)
 
 	index++
-	err = state.CSIVolumeDeregister(index, ns, []string{vol0})
+	err = state.CSIVolumeDeregister(index, ns, []string{vol0}, false)
 	require.NoError(t, err)
 
 	// List, now omitting the deregistered volume
@@ -8481,7 +8486,7 @@ func TestStateStore_ClusterMetadata(t *testing.T) {
 	err := state.ClusterSetMetadata(100, meta)
 	require.NoError(err)
 
-	result, err := state.ClusterMetadata()
+	result, err := state.ClusterMetadata(nil)
 	require.NoError(err)
 	require.Equal(clusterID, result.ClusterID)
 	require.Equal(now, result.CreateTime)
@@ -8503,7 +8508,7 @@ func TestStateStore_ClusterMetadataRestore(t *testing.T) {
 
 	restore.Commit()
 
-	out, err := state.ClusterMetadata()
+	out, err := state.ClusterMetadata(nil)
 	require.NoError(err)
 	require.Equal(clusterID, out.ClusterID)
 	require.Equal(now, out.CreateTime)

@@ -1,4 +1,4 @@
-// +build !pro,!ent
+// +build !ent
 
 package nomad
 
@@ -9,8 +9,16 @@ import (
 	"github.com/jorgemarey/sentinel"
 )
 
-type EnterpriseState struct{
+// LicenseConfig allows for tunable licensing config
+// primarily used for enterprise testing
+type LicenseConfig struct{}
+
+type EnterpriseState struct {
 	sentinel *sentinel.Sentinel
+}
+
+func (es *EnterpriseState) Features() uint64 {
+	return 0
 }
 
 func (s *Server) setupEnterprise(config *Config) error {
@@ -21,5 +29,4 @@ func (s *Server) setupEnterprise(config *Config) error {
 	s.sentinel = sentinel.New(nil)
 	return nil
 }
-
 func (s *Server) startEnterpriseBackground() {}

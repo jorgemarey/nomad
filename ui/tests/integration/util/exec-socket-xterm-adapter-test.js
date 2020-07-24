@@ -3,7 +3,7 @@ import { setupRenderingTest } from 'ember-qunit';
 import { module, test } from 'qunit';
 import { render, settled } from '@ember/test-helpers';
 import hbs from 'htmlbars-inline-precompile';
-import { Terminal } from 'xterm-vendor';
+import { Terminal } from 'xterm';
 
 module('Integration | Utility | exec-socket-xterm-adapter', function(hooks) {
   setupRenderingTest(hooks);
@@ -15,7 +15,7 @@ module('Integration | Utility | exec-socket-xterm-adapter', function(hooks) {
     this.set('terminal', terminal);
 
     await render(hbs`
-      {{exec-terminal terminal=terminal}}
+      <ExecTerminal @terminal={{terminal}} />
     `);
 
     await settled();
@@ -45,7 +45,7 @@ module('Integration | Utility | exec-socket-xterm-adapter', function(hooks) {
     this.set('terminal', terminal);
 
     await render(hbs`
-      {{exec-terminal terminal=terminal}}
+      <ExecTerminal @terminal={{terminal}} />
     `);
 
     await settled();
@@ -75,7 +75,7 @@ module('Integration | Utility | exec-socket-xterm-adapter', function(hooks) {
     this.set('terminal', terminal);
 
     await render(hbs`
-      {{exec-terminal terminal=terminal}}
+      <ExecTerminal @terminal={{terminal}} />
     `);
 
     await settled();
@@ -104,7 +104,7 @@ module('Integration | Utility | exec-socket-xterm-adapter', function(hooks) {
     this.set('terminal', terminal);
 
     await render(hbs`
-      {{exec-terminal terminal=terminal}}
+      <ExecTerminal @terminal={{terminal}} />
     `);
 
     await settled();
@@ -127,7 +127,7 @@ module('Integration | Utility | exec-socket-xterm-adapter', function(hooks) {
     this.set('terminal', terminal);
 
     await render(hbs`
-      {{exec-terminal terminal=terminal}}
+      <ExecTerminal @terminal={{terminal}} />
     `);
 
     await settled();
@@ -149,7 +149,7 @@ module('Integration | Utility | exec-socket-xterm-adapter', function(hooks) {
     await settled();
 
     assert.equal(
-      terminal.buffer
+      terminal.buffer.active
         .getLine(0)
         .translateToString()
         .trim(),

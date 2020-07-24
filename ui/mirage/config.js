@@ -44,7 +44,7 @@ export default function() {
 
       // Annotate the response with the index
       if (response instanceof Response) {
-        response.headers['X-Nomad-Index'] = index;
+        response.headers['x-nomad-index'] = index;
         return response;
       }
       return new Response(200, { 'x-nomad-index': index }, response);
@@ -170,6 +170,10 @@ export default function() {
     });
 
     return okEmpty();
+  });
+
+  this.post('/job/:id/scale', function({ jobs }, { params }) {
+    return this.serialize(jobs.find(params.id));
   });
 
   this.delete('/job/:id', function(schema, { params }) {
@@ -311,12 +315,30 @@ export default function() {
     };
   });
 
+  this.get('/agent/monitor', function({ agents, nodes }, { queryParams }) {
+    const serverId = queryParams.server_id;
+    const clientId = queryParams.client_id;
+
+    if (serverId && clientId)
+      return new Response(400, {}, 'specify a client or a server, not both');
+    if (serverId && !agents.findBy({ name: serverId }))
+      return new Response(400, {}, 'specified server does not exist');
+    if (clientId && !nodes.find(clientId))
+      return new Response(400, {}, 'specified client does not exist');
+
+    if (queryParams.plain) {
+      return logFrames.join('');
+    }
+
+    return logEncode(logFrames, logFrames.length - 1);
+  });
+
   this.get('/status/leader', function(schema) {
     return JSON.stringify(findLeader(schema));
   });
 
   this.get('/acl/token/self', function({ tokens }, req) {
-    const secret = req.requestHeaders['X-Nomad-Token'];
+    const secret = req.requestHeaders['x-nomad-token'];
     const tokenForSecret = tokens.findBy({ secretId: secret });
 
     // Return the token if it exists
@@ -330,7 +352,7 @@ export default function() {
 
   this.get('/acl/token/:id', function({ tokens }, req) {
     const token = tokens.find(req.params.id);
-    const secret = req.requestHeaders['X-Nomad-Token'];
+    const secret = req.requestHeaders['x-nomad-token'];
     const tokenForSecret = tokens.findBy({ secretId: secret });
 
     // Return the token only if the request header matches the token
@@ -345,7 +367,7 @@ export default function() {
 
   this.get('/acl/policy/:id', function({ policies, tokens }, req) {
     const policy = policies.find(req.params.id);
-    const secret = req.requestHeaders['X-Nomad-Token'];
+    const secret = req.requestHeaders['x-nomad-token'];
     const tokenForSecret = tokens.findBy({ secretId: secret });
 
     if (req.params.id === 'anonymous') {

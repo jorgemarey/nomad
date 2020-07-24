@@ -127,6 +127,46 @@ func TestHTTP_PrefixJobsList(t *testing.T) {
 	})
 }
 
+func TestHTTP_JobsList_AllNamespaces_OSS(t *testing.T) {
+	t.Parallel()
+	httpTest(t, nil, func(s *TestAgent) {
+		for i := 0; i < 3; i++ {
+			// Create the job
+			job := mock.Job()
+			args := structs.JobRegisterRequest{
+				Job: job,
+				WriteRequest: structs.WriteRequest{
+					Region:    "global",
+					Namespace: structs.DefaultNamespace,
+				},
+			}
+			var resp structs.JobRegisterResponse
+			err := s.Agent.RPC("Job.Register", &args, &resp)
+			require.NoError(t, err)
+		}
+
+		// Make the HTTP request
+		req, err := http.NewRequest("GET", "/v1/jobs?namespace=*", nil)
+		require.NoError(t, err)
+		respW := httptest.NewRecorder()
+
+		// Make the request
+		obj, err := s.Server.JobsRequest(respW, req)
+		require.NoError(t, err)
+
+		// Check for the index
+		require.NotEmpty(t, respW.HeaderMap.Get("X-Nomad-Index"), "missing index")
+		require.Equal(t, "true", respW.HeaderMap.Get("X-Nomad-KnownLeader"), "missing known leader")
+		require.NotEmpty(t, respW.HeaderMap.Get("X-Nomad-LastContact"), "missing last contact")
+
+		// Check the job
+		j := obj.([]*structs.JobListStub)
+		require.Len(t, j, 3)
+
+		require.Equal(t, "default", j[0].Namespace)
+	})
+}
+
 func TestHTTP_JobsRegister(t *testing.T) {
 	t.Parallel()
 	httpTest(t, nil, func(s *TestAgent) {
@@ -1470,6 +1510,249 @@ func TestHTTP_JobStable(t *testing.T) {
 	})
 }
 
+func TestJobs_ParsingWriteRequest(t *testing.T) {
+	t.Parallel()
+
+	// defaults
+	agentRegion := "agentRegion"
+
+	cases := []struct {
+		name                  string
+		jobRegion             string
+		multiregion           *api.Multiregion
+		queryRegion           string
+		queryNamespace        string
+		queryToken            string
+		apiRegion             string
+		apiNamespace          string
+		apiToken              string
+		expectedRequestRegion string
+		expectedJobRegion     string
+		expectedToken         string
+		expectedNamespace     string
+	}{
+		{
+			name:                  "no region provided at all",
+			jobRegion:             "",
+			multiregion:           nil,
+			queryRegion:           "",
+			expectedRequestRegion: agentRegion,
+			expectedJobRegion:     agentRegion,
+			expectedToken:         "",
+			expectedNamespace:     "default",
+		},
+		{
+			name:                  "no region provided but multiregion safe",
+			jobRegion:             "",
+			multiregion:           &api.Multiregion{},
+			queryRegion:           "",
+			expectedRequestRegion: agentRegion,
+			expectedJobRegion:     api.GlobalRegion,
+			expectedToken:         "",
+			expectedNamespace:     "default",
+		},
+		{
+			name:                  "region flag provided",
+			jobRegion:             "",
+			multiregion:           nil,
+			queryRegion:           "west",
+			expectedRequestRegion: "west",
+			expectedJobRegion:     "west",
+			expectedToken:         "",
+			expectedNamespace:     "default",
+		},
+		{
+			name:                  "job region provided",
+			jobRegion:             "west",
+			multiregion:           nil,
+			queryRegion:           "",
+			expectedRequestRegion: "west",
+			expectedJobRegion:     "west",
+			expectedToken:         "",
+			expectedNamespace:     "default",
+		},
+		{
+			name:                  "job region overridden by region flag",
+			jobRegion:             "west",
+			multiregion:           nil,
+			queryRegion:           "east",
+			expectedRequestRegion: "east",
+			expectedJobRegion:     "east",
+			expectedToken:         "",
+			expectedNamespace:     "default",
+		},
+		{
+			name:      "multiregion to valid region",
+			jobRegion: "",
+			multiregion: &api.Multiregion{Regions: []*api.MultiregionRegion{
+				{Name: "west"},
+				{Name: "east"},
+			}},
+			queryRegion:           "east",
+			expectedRequestRegion: "east",
+			expectedJobRegion:     api.GlobalRegion,
+			expectedToken:         "",
+			expectedNamespace:     "default",
+		},
+		{
+			name:      "multiregion sent to wrong region",
+			jobRegion: "",
+			multiregion: &api.Multiregion{Regions: []*api.MultiregionRegion{
+				{Name: "west"},
+				{Name: "east"},
+			}},
+			queryRegion:           "north",
+			expectedRequestRegion: "west",
+			expectedJobRegion:     api.GlobalRegion,
+			expectedToken:         "",
+			expectedNamespace:     "default",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+
+			// we need a valid agent config but we don't want to start up
+			// a real server for this
+			srv := &HTTPServer{}
+			srv.agent = &Agent{config: &Config{Region: agentRegion}}
+
+			job := &api.Job{
+				Region:      helper.StringToPtr(tc.jobRegion),
+				Multiregion: tc.multiregion,
+			}
+
+			req, _ := http.NewRequest("POST", "/", nil)
+			if tc.queryToken != "" {
+				req.Header.Set("X-Nomad-Token", tc.queryToken)
+			}
+			q := req.URL.Query()
+			if tc.queryNamespace != "" {
+				q.Add("namespace", tc.queryNamespace)
+			}
+			if tc.queryRegion != "" {
+				q.Add("region", tc.queryRegion)
+			}
+			req.URL.RawQuery = q.Encode()
+
+			apiReq := api.WriteRequest{
+				Region:    tc.apiRegion,
+				Namespace: tc.apiNamespace,
+				SecretID:  tc.apiToken,
+			}
+
+			sJob, sWriteReq := srv.apiJobAndRequestToStructs(job, req, apiReq)
+			require.Equal(t, tc.expectedJobRegion, sJob.Region)
+			require.Equal(t, tc.expectedNamespace, sJob.Namespace)
+			require.Equal(t, tc.expectedNamespace, sWriteReq.Namespace)
+			require.Equal(t, tc.expectedRequestRegion, sWriteReq.Region)
+			require.Equal(t, tc.expectedToken, sWriteReq.AuthToken)
+		})
+	}
+}
+
+func TestJobs_RegionForJob(t *testing.T) {
+	t.Parallel()
+
+	// defaults
+	agentRegion := "agentRegion"
+
+	cases := []struct {
+		name                  string
+		jobRegion             string
+		multiregion           *api.Multiregion
+		queryRegion           string
+		apiRegion             string
+		agentRegion           string
+		expectedRequestRegion string
+		expectedJobRegion     string
+	}{
+		{
+			name:                  "no region provided",
+			jobRegion:             "",
+			multiregion:           nil,
+			queryRegion:           "",
+			expectedRequestRegion: agentRegion,
+			expectedJobRegion:     agentRegion,
+		},
+		{
+			name:                  "no region provided but multiregion safe",
+			jobRegion:             "",
+			multiregion:           &api.Multiregion{},
+			queryRegion:           "",
+			expectedRequestRegion: agentRegion,
+			expectedJobRegion:     api.GlobalRegion,
+		},
+		{
+			name:                  "region flag provided",
+			jobRegion:             "",
+			multiregion:           nil,
+			queryRegion:           "west",
+			expectedRequestRegion: "west",
+			expectedJobRegion:     "west",
+		},
+		{
+			name:                  "job region provided",
+			jobRegion:             "west",
+			multiregion:           nil,
+			queryRegion:           "",
+			expectedRequestRegion: "west",
+			expectedJobRegion:     "west",
+		},
+		{
+			name:                  "job region overridden by region flag",
+			jobRegion:             "west",
+			multiregion:           nil,
+			queryRegion:           "east",
+			expectedRequestRegion: "east",
+			expectedJobRegion:     "east",
+		},
+		{
+			name:                  "job region overridden by api body",
+			jobRegion:             "west",
+			multiregion:           nil,
+			apiRegion:             "east",
+			expectedRequestRegion: "east",
+			expectedJobRegion:     "east",
+		},
+		{
+			name:      "multiregion to valid region",
+			jobRegion: "",
+			multiregion: &api.Multiregion{Regions: []*api.MultiregionRegion{
+				{Name: "west"},
+				{Name: "east"},
+			}},
+			queryRegion:           "east",
+			expectedRequestRegion: "east",
+			expectedJobRegion:     api.GlobalRegion,
+		},
+		{
+			name:      "multiregion sent to wrong region",
+			jobRegion: "",
+			multiregion: &api.Multiregion{Regions: []*api.MultiregionRegion{
+				{Name: "west"},
+				{Name: "east"},
+			}},
+			queryRegion:           "north",
+			expectedRequestRegion: "west",
+			expectedJobRegion:     api.GlobalRegion,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			job := &api.Job{
+				Region:      helper.StringToPtr(tc.jobRegion),
+				Multiregion: tc.multiregion,
+			}
+			requestRegion, jobRegion := regionForJob(
+				job, tc.queryRegion, tc.apiRegion, agentRegion)
+			require.Equal(t, tc.expectedRequestRegion, requestRegion)
+			require.Equal(t, tc.expectedJobRegion, jobRegion)
+		})
+	}
+}
+
 func TestJobs_ApiJobToStructsJob(t *testing.T) {
 	apiJob := &api.Job{
 		Stop:        helper.BoolToPtr(true),
@@ -1534,6 +1817,20 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 		Payload: []byte("payload"),
 		Meta: map[string]string{
 			"foo": "bar",
+		},
+		Multiregion: &api.Multiregion{
+			Strategy: &api.MultiregionStrategy{
+				MaxParallel: helper.IntToPtr(2),
+				OnFailure:   helper.StringToPtr("fail_all"),
+			},
+			Regions: []*api.MultiregionRegion{
+				{
+					Name:        "west",
+					Count:       helper.IntToPtr(1),
+					Datacenters: []string{"dc1", "dc2"},
+					Meta:        map[string]string{"region_code": "W"},
+				},
+			},
 		},
 		TaskGroups: []*api.TaskGroup{
 			{
@@ -1889,6 +2186,20 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 		Payload: []byte("payload"),
 		Meta: map[string]string{
 			"foo": "bar",
+		},
+		Multiregion: &structs.Multiregion{
+			Strategy: &structs.MultiregionStrategy{
+				MaxParallel: 2,
+				OnFailure:   "fail_all",
+			},
+			Regions: []*structs.MultiregionRegion{
+				{
+					Name:        "west",
+					Count:       1,
+					Datacenters: []string{"dc1", "dc2"},
+					Meta:        map[string]string{"region_code": "W"},
+				},
+			},
 		},
 		TaskGroups: []*structs.TaskGroup{
 			{
@@ -2699,7 +3010,7 @@ func TestConversion_apiConnectSidecarServiceToStructs(t *testing.T) {
 	}))
 }
 
-func TestConversion_ApiConsulConnectToStructs(t *testing.T) {
+func TestConversion_ApiConsulConnectToStructs_legacy(t *testing.T) {
 	t.Parallel()
 	require.Nil(t, ApiConsulConnectToStructs(nil))
 	require.Equal(t, &structs.ConsulConnect{
@@ -2710,5 +3021,15 @@ func TestConversion_ApiConsulConnectToStructs(t *testing.T) {
 		Native:         false,
 		SidecarService: &api.ConsulSidecarService{Port: "myPort"},
 		SidecarTask:    &api.SidecarTask{Name: "task"},
+	}))
+}
+
+func TestConversion_ApiConsulConnectToStructs_native(t *testing.T) {
+	t.Parallel()
+	require.Nil(t, ApiConsulConnectToStructs(nil))
+	require.Equal(t, &structs.ConsulConnect{
+		Native: true,
+	}, ApiConsulConnectToStructs(&api.ConsulConnect{
+		Native: true,
 	}))
 }

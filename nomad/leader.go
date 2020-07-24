@@ -46,6 +46,8 @@ var minSchedulerConfigVersion = version.Must(version.NewVersion("0.9.0"))
 
 var minClusterIDVersion = version.Must(version.NewVersion("0.10.4"))
 
+var minJobRegisterAtomicEvalVersion = version.Must(version.NewVersion("0.12.1"))
+
 // monitorLeadership is used to monitor if we acquire or lose our role
 // as the leader in the Raft cluster. There is some work the leader is
 // expected to do, so we must react to changes
@@ -189,6 +191,26 @@ WAIT:
 			goto RECONCILE
 		case member := <-reconcileCh:
 			s.reconcileMember(member)
+		case errCh := <-s.reassertLeaderCh:
+			// Recompute leader state, by asserting leadership and
+			// repopulating leader states.
+
+			// Check first if we are indeed the leaders first. We
+			// can get into this state when the initial
+			// establishLeadership has failed.
+			// Afterwards we will be waiting for the interval to
+			// trigger a reconciliation and can potentially end up
+			// here. There is no point to reassert because this
+			// agent was never leader in the first place.
+			if !establishedLeader {
+				errCh <- fmt.Errorf("leadership has not been established")
+				continue
+			}
+
+			// refresh leadership state
+			s.revokeLeadership()
+			err := s.establishLeadership(stopCh)
+			errCh <- err
 		}
 	}
 }

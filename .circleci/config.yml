@@ -10,13 +10,14 @@ jobs:
     working_directory: ~/go/src/github.com/hashicorp/nomad
     environment:
     - GIT_PAGER: cat
-    - GOLANG_VERSION: 1.14.3
+    - GOLANG_VERSION: 1.14.6
     - GOMAXPROCS: 1
     - GOPATH: /home/circleci/go
     - GOTESTSUM_JSONFILE: /tmp/test-reports/testjsonfile.json
     - GOTESTSUM_JUNITFILE: /tmp/test-reports/results.xml
     - NOMAD_SLOW_TEST: 1
     - PAGER: cat
+    - GOTEST_MOD: ''
     - GOTEST_PKGS: ./nomad/...
     - GOTEST_PKGS_EXCLUDE: ''
     - GOTESTARCH: amd64
@@ -109,7 +110,12 @@ jobs:
 
           mkdir -p /tmp/test-reports
           sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make generate-structs
-          sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+
+          if [ ! -z $GOTEST_MOD ]; then
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad-module
+          else
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+          fi
         name: Running Nomad Tests
         no_output_timeout: 20m
     - store_test_results:
@@ -122,14 +128,15 @@ jobs:
     working_directory: ~/go/src/github.com/hashicorp/nomad
     environment:
     - GIT_PAGER: cat
-    - GOLANG_VERSION: 1.14.3
+    - GOLANG_VERSION: 1.14.6
     - GOMAXPROCS: 1
     - GOPATH: /home/circleci/go
     - GOTESTSUM_JSONFILE: /tmp/test-reports/testjsonfile.json
     - GOTESTSUM_JUNITFILE: /tmp/test-reports/results.xml
     - NOMAD_SLOW_TEST: 1
     - PAGER: cat
-    - GOTEST_PKGS: ./api/...
+    - GOTEST_MOD: api
+    - GOTEST_PKGS: ''
     - GOTEST_PKGS_EXCLUDE: ''
     - GOTESTARCH: amd64
     steps:
@@ -221,7 +228,12 @@ jobs:
 
           mkdir -p /tmp/test-reports
           sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make generate-structs
-          sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+
+          if [ ! -z $GOTEST_MOD ]; then
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad-module
+          else
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+          fi
         name: Running Nomad Tests
         no_output_timeout: 20m
     - store_test_results:
@@ -234,13 +246,14 @@ jobs:
     working_directory: ~/go/src/github.com/hashicorp/nomad
     environment:
     - GIT_PAGER: cat
-    - GOLANG_VERSION: 1.14.3
+    - GOLANG_VERSION: 1.14.6
     - GOMAXPROCS: 1
     - GOPATH: /home/circleci/go
     - GOTESTSUM_JSONFILE: /tmp/test-reports/testjsonfile.json
     - GOTESTSUM_JUNITFILE: /tmp/test-reports/results.xml
     - NOMAD_SLOW_TEST: 1
     - PAGER: cat
+    - GOTEST_MOD: ''
     - GOTEST_PKGS: ./drivers/exec
     - GOTEST_PKGS_EXCLUDE: ''
     - GOTESTARCH: amd64
@@ -333,7 +346,12 @@ jobs:
 
           mkdir -p /tmp/test-reports
           sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make generate-structs
-          sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+
+          if [ ! -z $GOTEST_MOD ]; then
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad-module
+          else
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+          fi
         name: Running Nomad Tests
         no_output_timeout: 20m
     - store_test_results:
@@ -346,13 +364,14 @@ jobs:
     working_directory: ~/go/src/github.com/hashicorp/nomad
     environment:
     - GIT_PAGER: cat
-    - GOLANG_VERSION: 1.14.3
+    - GOLANG_VERSION: 1.14.6
     - GOMAXPROCS: 1
     - GOPATH: /home/circleci/go
     - GOTESTSUM_JSONFILE: /tmp/test-reports/testjsonfile.json
     - GOTESTSUM_JUNITFILE: /tmp/test-reports/results.xml
     - NOMAD_SLOW_TEST: 1
     - PAGER: cat
+    - GOTEST_MOD: ''
     - GOTEST_PKGS: ./client/...
     - GOTEST_PKGS_EXCLUDE: ''
     - GOTESTARCH: amd64
@@ -445,7 +464,12 @@ jobs:
 
           mkdir -p /tmp/test-reports
           sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make generate-structs
-          sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+
+          if [ ! -z $GOTEST_MOD ]; then
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad-module
+          else
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+          fi
         name: Running Nomad Tests
         no_output_timeout: 20m
     - store_test_results:
@@ -550,7 +574,7 @@ jobs:
         path: c:\tmp\test-reports
     environment:
     - GOBIN: c:\gopath\bin
-    - GOLANG_VERSION: 1.14.3
+    - GOLANG_VERSION: 1.14.6
     - GOPATH: c:\gopath
     - GOTESTSUM_PATH: c:\tmp\test-reports
     - GOTESTSUM_VERSION: 0.4.2
@@ -563,13 +587,14 @@ jobs:
     working_directory: ~/go/src/github.com/hashicorp/nomad
     environment:
     - GIT_PAGER: cat
-    - GOLANG_VERSION: 1.14.3
+    - GOLANG_VERSION: 1.14.6
     - GOMAXPROCS: 1
     - GOPATH: /home/circleci/go
     - GOTESTSUM_JSONFILE: /tmp/test-reports/testjsonfile.json
     - GOTESTSUM_JUNITFILE: /tmp/test-reports/results.xml
     - NOMAD_SLOW_TEST: 1
     - PAGER: cat
+    - GOTEST_MOD: ''
     - GOTEST_PKGS: ./drivers/shared/executor
     - GOTEST_PKGS_EXCLUDE: ''
     - GOTESTARCH: amd64
@@ -662,7 +687,12 @@ jobs:
 
           mkdir -p /tmp/test-reports
           sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make generate-structs
-          sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+
+          if [ ! -z $GOTEST_MOD ]; then
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad-module
+          else
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+          fi
         name: Running Nomad Tests
         no_output_timeout: 20m
     - store_test_results:
@@ -678,13 +708,13 @@ jobs:
     - checkout
     - restore_cache:
         keys:
-        - v1-deps-{{ checksum "ui/yarn.lock" }}
-        - v1-deps-
+        - v2-deps-{{ checksum "ui/yarn.lock" }}
+        - v2-deps-
     - run:
         command: cd ui && yarn install
         name: yarn install
     - save_cache:
-        key: v1-deps-{{ checksum "ui/yarn.lock" }}
+        key: v2-deps-{{ checksum "ui/yarn.lock" }}
         paths:
         - ./ui/node_modules
     - run:
@@ -702,7 +732,7 @@ jobs:
         path: /tmp/test-reports
   lint-go:
     docker:
-    - image: golang:1.14.3
+    - image: golang:1.14.6
     working_directory: /go/src/github.com/hashicorp/nomad
     steps:
     - checkout
@@ -722,6 +752,8 @@ jobs:
         command: make check
     - run:
         command: make checkscripts
+    - run:
+        command: mkdir -p ui/dist && make generate-all static-assets
     - run:
         command: make -C .circleci CIRCLECI="circleci-local-cli --skip-update-check" ci-verify
         name: check .circleci/config.yml is up-to-date
@@ -766,13 +798,14 @@ jobs:
     working_directory: ~/go/src/github.com/hashicorp/nomad
     environment:
     - GIT_PAGER: cat
-    - GOLANG_VERSION: 1.14.3
+    - GOLANG_VERSION: 1.14.6
     - GOMAXPROCS: 1
     - GOPATH: /home/circleci/go
     - GOTESTSUM_JSONFILE: /tmp/test-reports/testjsonfile.json
     - GOTESTSUM_JUNITFILE: /tmp/test-reports/results.xml
     - NOMAD_SLOW_TEST: 1
     - PAGER: cat
+    - GOTEST_MOD: ''
     - GOTEST_PKGS: ''
     - GOTEST_PKGS_EXCLUDE: ./api|./client|./drivers/docker|./drivers/exec|./drivers/shared/executor|./nomad|./devices
     - GOTESTARCH: amd64
@@ -865,7 +898,12 @@ jobs:
 
           mkdir -p /tmp/test-reports
           sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make generate-structs
-          sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+
+          if [ ! -z $GOTEST_MOD ]; then
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad-module
+          else
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+          fi
         name: Running Nomad Tests
         no_output_timeout: 20m
     - store_test_results:
@@ -874,7 +912,7 @@ jobs:
         path: /tmp/test-reports
   test-devices:
     docker:
-    - image: golang:1.14.3
+    - image: golang:1.14.6
     working_directory: /go/src/github.com/hashicorp/nomad
     environment:
     - GIT_PAGER: cat
@@ -941,7 +979,12 @@ jobs:
 
           mkdir -p /tmp/test-reports
           sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make generate-structs
-          sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+
+          if [ ! -z $GOTEST_MOD ]; then
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad-module
+          else
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+          fi
         name: Running Nomad Tests
         no_output_timeout: 20m
     - store_test_results:
@@ -990,7 +1033,7 @@ jobs:
     - run:
         command: brew install protobuf
     - run:
-        command: sudo -E PATH="$GOPATH/bin:${HOME}/goinstall/go/bin:$PATH" make generate-structs
+        command: PATH="$GOPATH/bin:${HOME}/goinstall/go/bin:$PATH" make generate-structs
     - run:
         command: source ${BASH_ENV} && make pkg/darwin_amd64.zip
     - store_artifacts:
@@ -998,26 +1041,43 @@ jobs:
         path: pkg/darwin_amd64.zip
     environment:
     - GIT_PAGER: cat
-    - GOLANG_VERSION: 1.14.3
+    - GOLANG_VERSION: 1.14.6
     - GOMAXPROCS: 1
     - GOPATH: /Users/distiller/go
     - GOTESTSUM_JSONFILE: /tmp/test-reports/testjsonfile.json
     - GOTESTSUM_JUNITFILE: /tmp/test-reports/results.xml
     - NOMAD_SLOW_TEST: 1
     - PAGER: cat
+  algolia_index:
+    docker:
+    - image: node:12
+    steps:
+    - checkout
+    - run:
+        command: |
+          if  [ "$CIRCLE_REPOSITORY_URL" != "git@github.com:hashicorp/nomad.git" ]; then
+            echo "Not Nomad OSS Repo, not indexing Algolia"
+            exit 0
+          fi
+
+          cd website/
+          npm install
+          node scripts/index_search_content.js
+        name: Push content to Algolia Index
   test-docker:
     machine:
       image: circleci/classic:201808-01
     working_directory: ~/go/src/github.com/hashicorp/nomad
     environment:
     - GIT_PAGER: cat
-    - GOLANG_VERSION: 1.14.3
+    - GOLANG_VERSION: 1.14.6
     - GOMAXPROCS: 1
     - GOPATH: /home/circleci/go
     - GOTESTSUM_JSONFILE: /tmp/test-reports/testjsonfile.json
     - GOTESTSUM_JUNITFILE: /tmp/test-reports/results.xml
     - NOMAD_SLOW_TEST: 1
     - PAGER: cat
+    - GOTEST_MOD: ''
     - GOTEST_PKGS: ./drivers/docker
     - GOTEST_PKGS_EXCLUDE: ''
     - GOTESTARCH: amd64
@@ -1110,7 +1170,12 @@ jobs:
 
           mkdir -p /tmp/test-reports
           sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make generate-structs
-          sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+
+          if [ ! -z $GOTEST_MOD ]; then
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad-module
+          else
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+          fi
         name: Running Nomad Tests
         no_output_timeout: 20m
     - store_test_results:
@@ -1119,7 +1184,7 @@ jobs:
         path: /tmp/test-reports
   build-binaries:
     docker:
-    - image: golang:1.14.3
+    - image: golang:1.14.6
     working_directory: /go/src/github.com/hashicorp/nomad
     environment:
     - GIT_PAGER: cat
@@ -1153,7 +1218,7 @@ jobs:
         path: pkg/linux_amd64.zip
   test-e2e:
     docker:
-    - image: golang:1.14.3
+    - image: golang:1.14.6
     working_directory: /go/src/github.com/hashicorp/nomad
     steps:
     - checkout
@@ -1185,13 +1250,14 @@ jobs:
     working_directory: ~/go/src/github.com/hashicorp/nomad
     environment:
     - GIT_PAGER: cat
-    - GOLANG_VERSION: 1.14.3
+    - GOLANG_VERSION: 1.14.6
     - GOMAXPROCS: 1
     - GOPATH: /home/circleci/go
     - GOTESTSUM_JSONFILE: /tmp/test-reports/testjsonfile.json
     - GOTESTSUM_JUNITFILE: /tmp/test-reports/results.xml
     - NOMAD_SLOW_TEST: 1
     - PAGER: cat
+    - GOTEST_MOD: ''
     - GOTEST_PKGS: ./client/fingerprint
     - GOTEST_PKGS_EXCLUDE: ''
     - GOTESTARCH: '386'
@@ -1284,7 +1350,12 @@ jobs:
 
           mkdir -p /tmp/test-reports
           sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make generate-structs
-          sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+
+          if [ ! -z $GOTEST_MOD ]; then
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad-module
+          else
+            sudo -E PATH="$GOPATH/bin:/usr/local/go/bin:$PATH" make test-nomad
+          fi
         name: Running Nomad Tests
         no_output_timeout: 20m
     - store_test_results:
@@ -1404,5 +1475,11 @@ workflows:
           branches:
             only:
             - master
+        context: static-sites
+    - algolia_index:
+        filters:
+          branches:
+            only:
+            - stable-website
         context: static-sites
   version: 2

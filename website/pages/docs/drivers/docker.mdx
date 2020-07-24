@@ -627,6 +627,18 @@ Some networking modes like `container` or `none` will require coordination
 outside of Nomad. First-class support for these options may be improved later
 through Nomad plugins or dynamic job configuration.
 
+## Capabilities
+
+The `docker` driver implements the following [capabilities](/docs/internals/plugins/task-drivers#capabilities-capabilities-error).
+
+| Feature | Implementation |
+| --- | --- |
+| `nomad alloc signal` | true |
+| `nomad alloc exec` | true |
+| filesystem isolation | image |
+| network isolation | host, group, task |
+| volume mounting | all |
+
 ## Client Requirements
 
 Nomad requires Docker to be installed and running on the host alongside the
@@ -637,11 +649,11 @@ socket. Nomad will need to be able to read/write to this socket. If you do not
 run Nomad as root, make sure you add the Nomad user to the Docker group so
 Nomad can communicate with the Docker daemon.
 
-For example, on Ubuntu you can use the `usermod` command to add the `vagrant`
+For example, on Ubuntu you can use the `usermod` command to add the `nomad`
 user to the `docker` group so you can run Nomad without root:
 
 ```shell-session
-$ sudo usermod -G docker -a vagrant
+$ sudo usermod -G docker -a nomad
 ```
 
 For the best performance and security features you should use recent versions
@@ -780,7 +792,7 @@ plugin "docker" {
 
 - `volumes` stanza:
 
-  - `enabled` - Defaults to `true`. Allows tasks to bind host paths
+  - `enabled` - Defaults to `false`. Allows tasks to bind host paths
     (`volumes`) inside their container and use volume drivers
     (`volume_driver`). Binding relative paths is always allowed and will be
     resolved relative to the allocation's directory.
@@ -844,7 +856,7 @@ options](/docs/configuration/client#options):
   deleting it. If a tasks is received that uses the same image within the delay,
   the image will be reused.
 
-- `docker.volumes.enabled`: Defaults to `true`. Allows tasks to bind host paths
+- `docker.volumes.enabled`: Defaults to `false`. Allows tasks to bind host paths
   (`volumes`) inside their container and use volume drivers (`volume_driver`).
   Binding relative paths is always allowed and will be resolved relative to the
   allocation's directory.
