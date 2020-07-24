@@ -607,12 +607,16 @@ func (g *TaskGroup) AddSpread(s *Spread) *TaskGroup {
 type LogConfig struct {
 	MaxFiles      *int `mapstructure:"max_files"`
 	MaxFileSizeMB *int `mapstructure:"max_file_size"`
+	Driver        *string
+	Config        map[string]interface{}
 }
 
 func DefaultLogConfig() *LogConfig {
 	return &LogConfig{
 		MaxFiles:      intToPtr(10),
 		MaxFileSizeMB: intToPtr(10),
+		Driver:        stringToPtr(""),
+		Config:        make(map[string]interface{}),
 	}
 }
 
@@ -622,6 +626,12 @@ func (l *LogConfig) Canonicalize() {
 	}
 	if l.MaxFileSizeMB == nil {
 		l.MaxFileSizeMB = intToPtr(10)
+	}
+	if l.Driver == nil {
+		l.Driver = stringToPtr("")
+	}
+	if l.Config == nil {
+		l.Config = make(map[string]interface{})
 	}
 }
 
