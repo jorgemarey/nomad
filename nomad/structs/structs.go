@@ -100,10 +100,16 @@ const (
 )
 
 const (
-	NamespaceUpsertRequestType MessageType = (64 + iota)
-	NamespaceDeleteRequestType
-	SentinelPolicyUpsertRequestType
-	SentinelPolicyDeleteRequestType
+	NamespaceUpsertRequestType      MessageType = (64 + iota)
+	NamespaceDeleteRequestType                  // 65
+	SentinelPolicyUpsertRequestType             // 66
+	SentinelPolicyDeleteRequestType             // 67
+	// Quota1                              // 68
+	// Quota2                              // 69
+	// ??                                  // 70
+	// ??                                  // 71
+	// ??                                  // 72
+	// nomad_nomad_fsm_apply_tmp_license_meta_upsert -> this is a new fsm operation
 )
 
 const (
@@ -1300,6 +1306,7 @@ type JobScaleStatusResponse struct {
 
 type JobScaleStatus struct {
 	JobID          string
+	Namespace      string
 	JobCreateIndex uint64
 	JobModifyIndex uint64
 	JobStopped     bool
@@ -3812,6 +3819,9 @@ type Job struct {
 	// transfer the token and is not stored after Job submission.
 	VaultToken string
 
+	// VaultNamespace is the Vault namepace
+	VaultNamespace string
+
 	// NomadTokenID is the Accessor ID of the ACL token (if any)
 	// used to register this version of the job. Used by deploymentwatcher.
 	NomadTokenID string
@@ -4192,6 +4202,28 @@ func (j *Job) IsParameterized() bool {
 // IsMultiregion returns whether a job is multiregion
 func (j *Job) IsMultiregion() bool {
 	return j.Multiregion != nil && j.Multiregion.Regions != nil && len(j.Multiregion.Regions) > 0
+}
+
+func (j *Job) IsMultiregionStarter() bool {
+	if !j.IsMultiregion() {
+		return true
+	}
+	if j.Type == "system" || j.Type == "batch" {
+		return true
+	}
+	if j.Multiregion.Strategy == nil || j.Multiregion.Strategy.MaxParallel == 0 {
+		return true
+	}
+	for i, region := range j.Multiregion.Regions {
+		if j.Region == region.Name {
+			if i < j.Multiregion.Strategy.MaxParallel {
+				return true
+			} else {
+				break
+			}
+		}
+	}
+	return false
 }
 
 // VaultPolicies returns the set of Vault policies per task group, per task
@@ -7982,6 +8014,9 @@ const (
 type Vault struct {
 	// Policies is the set of policies that the task needs access to
 	Policies []string
+
+	// Namespace is the vault namespace that should be used.
+	Namespace string
 
 	// Env marks whether the Vault Token should be exposed as an environment
 	// variable

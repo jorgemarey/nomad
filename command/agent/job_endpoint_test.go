@@ -448,6 +448,36 @@ func TestHTTP_JobQuery_Payload(t *testing.T) {
 	})
 }
 
+func TestHTTP_jobUpdate_systemScaling(t *testing.T) {
+	t.Parallel()
+	httpTest(t, nil, func(s *TestAgent) {
+		// Create the job
+		job := MockJob()
+		job.Type = helper.StringToPtr("system")
+		job.TaskGroups[0].Scaling = &api.ScalingPolicy{Enabled: helper.BoolToPtr(true)}
+		args := api.JobRegisterRequest{
+			Job: job,
+			WriteRequest: api.WriteRequest{
+				Region:    "global",
+				Namespace: api.DefaultNamespace,
+			},
+		}
+		buf := encodeReq(args)
+
+		// Make the HTTP request
+		req, err := http.NewRequest("PUT", "/v1/job/"+*job.ID, buf)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		respW := httptest.NewRecorder()
+
+		// Make the request
+		obj, err := s.Server.JobSpecificRequest(respW, req)
+		assert.Nil(t, obj)
+		assert.Equal(t, CodedError(400, "Task groups with job type system do not support scaling stanzas"), err)
+	})
+}
+
 func TestHTTP_JobUpdate(t *testing.T) {
 	t.Parallel()
 	httpTest(t, nil, func(s *TestAgent) {
@@ -1994,20 +2024,22 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 								},
 								Checks: []api.ServiceCheck{
 									{
-										Id:            "hello",
-										Name:          "bar",
-										Type:          "http",
-										Command:       "foo",
-										Args:          []string{"a", "b"},
-										Path:          "/check",
-										Protocol:      "http",
-										PortLabel:     "foo",
-										AddressMode:   "driver",
-										GRPCService:   "foo.Bar",
-										GRPCUseTLS:    true,
-										Interval:      4 * time.Second,
-										Timeout:       2 * time.Second,
-										InitialStatus: "ok",
+										Id:                     "hello",
+										Name:                   "bar",
+										Type:                   "http",
+										Command:                "foo",
+										Args:                   []string{"a", "b"},
+										Path:                   "/check",
+										Protocol:               "http",
+										PortLabel:              "foo",
+										AddressMode:            "driver",
+										GRPCService:            "foo.Bar",
+										GRPCUseTLS:             true,
+										Interval:               4 * time.Second,
+										Timeout:                2 * time.Second,
+										InitialStatus:          "ok",
+										SuccessBeforePassing:   3,
+										FailuresBeforeCritical: 4,
 										CheckRestart: &api.CheckRestart{
 											Limit:          3,
 											IgnoreWarnings: true,
@@ -2093,6 +2125,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 							},
 						},
 						Vault: &api.Vault{
+							Namespace:    helper.StringToPtr("ns1"),
 							Policies:     []string{"a", "b", "c"},
 							Env:          helper.BoolToPtr(true),
 							ChangeMode:   helper.StringToPtr("c"),
@@ -2121,6 +2154,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 		},
 		ConsulToken:       helper.StringToPtr("abc123"),
 		VaultToken:        helper.StringToPtr("def456"),
+		VaultNamespace:    helper.StringToPtr("ghi789"),
 		Status:            helper.StringToPtr("status"),
 		StatusDescription: helper.StringToPtr("status_desc"),
 		Version:           helper.Uint64ToPtr(10),
@@ -2130,16 +2164,17 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 	}
 
 	expected := &structs.Job{
-		Stop:        true,
-		Region:      "global",
-		Namespace:   "foo",
-		ID:          "foo",
-		ParentID:    "lol",
-		Name:        "name",
-		Type:        "service",
-		Priority:    50,
-		AllAtOnce:   true,
-		Datacenters: []string{"dc1", "dc2"},
+		Stop:           true,
+		Region:         "global",
+		Namespace:      "foo",
+		VaultNamespace: "ghi789",
+		ID:             "foo",
+		ParentID:       "lol",
+		Name:           "name",
+		Type:           "service",
+		Priority:       50,
+		AllAtOnce:      true,
+		Datacenters:    []string{"dc1", "dc2"},
 		Constraints: []*structs.Constraint{
 			{
 				LTarget: "a",
@@ -2360,19 +2395,21 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 								},
 								Checks: []*structs.ServiceCheck{
 									{
-										Name:          "bar",
-										Type:          "http",
-										Command:       "foo",
-										Args:          []string{"a", "b"},
-										Path:          "/check",
-										Protocol:      "http",
-										PortLabel:     "foo",
-										AddressMode:   "driver",
-										Interval:      4 * time.Second,
-										Timeout:       2 * time.Second,
-										InitialStatus: "ok",
-										GRPCService:   "foo.Bar",
-										GRPCUseTLS:    true,
+										Name:                   "bar",
+										Type:                   "http",
+										Command:                "foo",
+										Args:                   []string{"a", "b"},
+										Path:                   "/check",
+										Protocol:               "http",
+										PortLabel:              "foo",
+										AddressMode:            "driver",
+										Interval:               4 * time.Second,
+										Timeout:                2 * time.Second,
+										InitialStatus:          "ok",
+										GRPCService:            "foo.Bar",
+										GRPCUseTLS:             true,
+										SuccessBeforePassing:   3,
+										FailuresBeforeCritical: 4,
 										CheckRestart: &structs.CheckRestart{
 											Limit:          3,
 											Grace:          11 * time.Second,
@@ -2462,6 +2499,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 							},
 						},
 						Vault: &structs.Vault{
+							Namespace:    "ns1",
 							Policies:     []string{"a", "b", "c"},
 							Env:          true,
 							ChangeMode:   "c",

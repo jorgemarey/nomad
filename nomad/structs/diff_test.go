@@ -2593,15 +2593,17 @@ func TestTaskGroupDiff(t *testing.T) {
 						EnableTagOverride: false,
 						Checks: []*ServiceCheck{
 							{
-								Name:     "foo",
-								Type:     "http",
-								Command:  "foo",
-								Args:     []string{"foo"},
-								Path:     "foo",
-								Protocol: "http",
-								Expose:   true,
-								Interval: 1 * time.Second,
-								Timeout:  1 * time.Second,
+								Name:                   "foo",
+								Type:                   "http",
+								Command:                "foo",
+								Args:                   []string{"foo"},
+								Path:                   "foo",
+								Protocol:               "http",
+								Expose:                 true,
+								Interval:               1 * time.Second,
+								Timeout:                1 * time.Second,
+								SuccessBeforePassing:   3,
+								FailuresBeforeCritical: 4,
 							},
 						},
 						Connect: &ConsulConnect{
@@ -2640,6 +2642,8 @@ func TestTaskGroupDiff(t *testing.T) {
 								Header: map[string][]string{
 									"Foo": {"baz"},
 								},
+								SuccessBeforePassing:   5,
+								FailuresBeforeCritical: 6,
 							},
 						},
 						Connect: &ConsulConnect{
@@ -2727,6 +2731,12 @@ func TestTaskGroupDiff(t *testing.T) {
 										New:  "false",
 									},
 									{
+										Type: DiffTypeEdited,
+										Name: "FailuresBeforeCritical",
+										Old:  "4",
+										New:  "6",
+									},
+									{
 										Type: DiffTypeNone,
 										Name: "GRPCService",
 										Old:  "",
@@ -2780,7 +2790,12 @@ func TestTaskGroupDiff(t *testing.T) {
 										Old:  "http",
 										New:  "tcp",
 									},
-
+									{
+										Type: DiffTypeEdited,
+										Name: "SuccessBeforePassing",
+										Old:  "3",
+										New:  "5",
+									},
 									{
 										Type: DiffTypeNone,
 										Name: "TLSSkipVerify",
@@ -5126,16 +5141,20 @@ func TestTaskDiff(t *testing.T) {
 								Header: map[string][]string{
 									"Foo": {"bar"},
 								},
+								SuccessBeforePassing:   1,
+								FailuresBeforeCritical: 1,
 							},
 							{
-								Name:     "bar",
-								Type:     "http",
-								Command:  "foo",
-								Args:     []string{"foo"},
-								Path:     "foo",
-								Protocol: "http",
-								Interval: 1 * time.Second,
-								Timeout:  1 * time.Second,
+								Name:                   "bar",
+								Type:                   "http",
+								Command:                "foo",
+								Args:                   []string{"foo"},
+								Path:                   "foo",
+								Protocol:               "http",
+								Interval:               1 * time.Second,
+								Timeout:                1 * time.Second,
+								SuccessBeforePassing:   7,
+								FailuresBeforeCritical: 7,
 							},
 							{
 								Name:     "baz",
@@ -5157,14 +5176,16 @@ func TestTaskDiff(t *testing.T) {
 						Name: "foo",
 						Checks: []*ServiceCheck{
 							{
-								Name:     "bar",
-								Type:     "http",
-								Command:  "foo",
-								Args:     []string{"foo"},
-								Path:     "foo",
-								Protocol: "http",
-								Interval: 1 * time.Second,
-								Timeout:  1 * time.Second,
+								Name:                   "bar",
+								Type:                   "http",
+								Command:                "foo",
+								Args:                   []string{"foo"},
+								Path:                   "foo",
+								Protocol:               "http",
+								Interval:               1 * time.Second,
+								Timeout:                1 * time.Second,
+								SuccessBeforePassing:   7,
+								FailuresBeforeCritical: 7,
 							},
 							{
 								Name:     "baz",
@@ -5180,14 +5201,16 @@ func TestTaskDiff(t *testing.T) {
 								},
 							},
 							{
-								Name:     "bam",
-								Type:     "http",
-								Command:  "foo",
-								Args:     []string{"foo"},
-								Path:     "foo",
-								Protocol: "http",
-								Interval: 1 * time.Second,
-								Timeout:  1 * time.Second,
+								Name:                   "bam",
+								Type:                   "http",
+								Command:                "foo",
+								Args:                   []string{"foo"},
+								Path:                   "foo",
+								Protocol:               "http",
+								Interval:               1 * time.Second,
+								Timeout:                1 * time.Second,
+								SuccessBeforePassing:   2,
+								FailuresBeforeCritical: 2,
 							},
 						},
 					},
@@ -5244,6 +5267,12 @@ func TestTaskDiff(t *testing.T) {
 									},
 									{
 										Type: DiffTypeAdded,
+										Name: "FailuresBeforeCritical",
+										Old:  "",
+										New:  "2",
+									},
+									{
+										Type: DiffTypeAdded,
 										Name: "GRPCUseTLS",
 										Old:  "",
 										New:  "false",
@@ -5271,6 +5300,12 @@ func TestTaskDiff(t *testing.T) {
 										Name: "Protocol",
 										Old:  "",
 										New:  "http",
+									},
+									{
+										Type: DiffTypeAdded,
+										Name: "SuccessBeforePassing",
+										Old:  "",
+										New:  "2",
 									},
 									{
 										Type: DiffTypeAdded,
@@ -5310,6 +5345,12 @@ func TestTaskDiff(t *testing.T) {
 									},
 									{
 										Type: DiffTypeDeleted,
+										Name: "FailuresBeforeCritical",
+										Old:  "1",
+										New:  "",
+									},
+									{
+										Type: DiffTypeDeleted,
 										Name: "GRPCUseTLS",
 										Old:  "false",
 										New:  "",
@@ -5336,6 +5377,12 @@ func TestTaskDiff(t *testing.T) {
 										Type: DiffTypeDeleted,
 										Name: "Protocol",
 										Old:  "http",
+										New:  "",
+									},
+									{
+										Type: DiffTypeDeleted,
+										Name: "SuccessBeforePassing",
+										Old:  "1",
 										New:  "",
 									},
 									{
@@ -5397,6 +5444,8 @@ func TestTaskDiff(t *testing.T) {
 								Header: map[string][]string{
 									"Foo": {"bar"},
 								},
+								SuccessBeforePassing:   4,
+								FailuresBeforeCritical: 5,
 							},
 						},
 					},
@@ -5422,6 +5471,7 @@ func TestTaskDiff(t *testing.T) {
 									"Foo":  {"bar", "baz"},
 									"Eggs": {"spam"},
 								},
+								SuccessBeforePassing: 4,
 							},
 						},
 					},
@@ -5489,6 +5539,12 @@ func TestTaskDiff(t *testing.T) {
 										New:  "false",
 									},
 									{
+										Type: DiffTypeEdited,
+										Name: "FailuresBeforeCritical",
+										Old:  "5",
+										New:  "0",
+									},
+									{
 										Type: DiffTypeNone,
 										Name: "GRPCService",
 										Old:  "",
@@ -5541,6 +5597,12 @@ func TestTaskDiff(t *testing.T) {
 										Name: "Protocol",
 										Old:  "http",
 										New:  "http",
+									},
+									{
+										Type: DiffTypeNone,
+										Name: "SuccessBeforePassing",
+										Old:  "4",
+										New:  "4",
 									},
 									{
 										Type: DiffTypeNone,
@@ -5911,6 +5973,7 @@ func TestTaskDiff(t *testing.T) {
 			Name: "Vault edited",
 			Old: &Task{
 				Vault: &Vault{
+					Namespace:    "ns1",
 					Policies:     []string{"foo", "bar"},
 					Env:          true,
 					ChangeMode:   "signal",
@@ -5919,6 +5982,7 @@ func TestTaskDiff(t *testing.T) {
 			},
 			New: &Task{
 				Vault: &Vault{
+					Namespace:    "ns2",
 					Policies:     []string{"bar", "baz"},
 					Env:          false,
 					ChangeMode:   "restart",
@@ -5950,6 +6014,12 @@ func TestTaskDiff(t *testing.T) {
 								Old:  "true",
 								New:  "false",
 							},
+							{
+								Type: DiffTypeEdited,
+								Name: "Namespace",
+								Old:  "ns1",
+								New:  "ns2",
+							},
 						},
 						Objects: []*ObjectDiff{
 							{
@@ -5980,6 +6050,7 @@ func TestTaskDiff(t *testing.T) {
 			Contextual: true,
 			Old: &Task{
 				Vault: &Vault{
+					Namespace:    "ns1",
 					Policies:     []string{"foo", "bar"},
 					Env:          true,
 					ChangeMode:   "signal",
@@ -5988,6 +6059,7 @@ func TestTaskDiff(t *testing.T) {
 			},
 			New: &Task{
 				Vault: &Vault{
+					Namespace:    "ns1",
 					Policies:     []string{"bar", "baz"},
 					Env:          true,
 					ChangeMode:   "signal",
@@ -6018,6 +6090,12 @@ func TestTaskDiff(t *testing.T) {
 								Name: "Env",
 								Old:  "true",
 								New:  "true",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "Namespace",
+								Old:  "ns1",
+								New:  "ns1",
 							},
 						},
 						Objects: []*ObjectDiff{

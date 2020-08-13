@@ -296,7 +296,8 @@ job "binstore-storagelocker" {
       }
 
       vault {
-        policies = ["foo", "bar"]
+        namespace = "ns1"
+        policies  = ["foo", "bar"]
       }
 
       template {

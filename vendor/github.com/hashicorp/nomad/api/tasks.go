@@ -822,6 +822,7 @@ func (tmpl *Template) Canonicalize() {
 
 type Vault struct {
 	Policies     []string
+	Namespace    *string `mapstructure:"namespace"`
 	Env          *bool
 	ChangeMode   *string `mapstructure:"change_mode"`
 	ChangeSignal *string `mapstructure:"change_signal"`
@@ -830,6 +831,9 @@ type Vault struct {
 func (v *Vault) Canonicalize() {
 	if v.Env == nil {
 		v.Env = boolToPtr(true)
+	}
+	if v.Namespace == nil {
+		v.Namespace = stringToPtr("")
 	}
 	if v.ChangeMode == nil {
 		v.ChangeMode = stringToPtr("restart")
@@ -931,6 +935,7 @@ type TaskEvent struct {
 	Time           int64
 	DisplayMessage string
 	Details        map[string]string
+	Message        string
 	// DEPRECATION NOTICE: The following fields are all deprecated. see TaskEvent struct in structs.go for details.
 	FailsTask        bool
 	RestartReason    string
@@ -939,7 +944,6 @@ type TaskEvent struct {
 	DriverMessage    string
 	ExitCode         int
 	Signal           int
-	Message          string
 	KillReason       string
 	KillTimeout      time.Duration
 	KillError        string

@@ -391,6 +391,18 @@ func (s *HTTPServer) jobUpdate(resp http.ResponseWriter, req *http.Request,
 		}
 	}
 
+	// GH-8481. Jobs of type system can only have a count of 1 and therefore do
+	// not support scaling. Even though this returns an error on the first
+	// occurrence, the error is generic but detailed enough that an operator
+	// can fix the problem across multiple task groups.
+	if args.Job.Type != nil && *args.Job.Type == api.JobTypeSystem {
+		for _, tg := range args.Job.TaskGroups {
+			if tg.Scaling != nil {
+				return nil, CodedError(400, "Task groups with job type system do not support scaling stanzas")
+			}
+		}
+	}
+
 	sJob, writeReq := s.apiJobAndRequestToStructs(args.Job, req, args.WriteRequest)
 	regReq := structs.JobRegisterRequest{
 		Job:            sJob,
@@ -761,22 +773,23 @@ func ApiJobToStructJob(job *api.Job) *structs.Job {
 	job.Canonicalize()
 
 	j := &structs.Job{
-		Stop:        *job.Stop,
-		Region:      *job.Region,
-		Namespace:   *job.Namespace,
-		ID:          *job.ID,
-		ParentID:    *job.ParentID,
-		Name:        *job.Name,
-		Type:        *job.Type,
-		Priority:    *job.Priority,
-		AllAtOnce:   *job.AllAtOnce,
-		Datacenters: job.Datacenters,
-		Payload:     job.Payload,
-		Meta:        job.Meta,
-		ConsulToken: *job.ConsulToken,
-		VaultToken:  *job.VaultToken,
-		Constraints: ApiConstraintsToStructs(job.Constraints),
-		Affinities:  ApiAffinitiesToStructs(job.Affinities),
+		Stop:           *job.Stop,
+		Region:         *job.Region,
+		Namespace:      *job.Namespace,
+		ID:             *job.ID,
+		ParentID:       *job.ParentID,
+		Name:           *job.Name,
+		Type:           *job.Type,
+		Priority:       *job.Priority,
+		AllAtOnce:      *job.AllAtOnce,
+		Datacenters:    job.Datacenters,
+		Payload:        job.Payload,
+		Meta:           job.Meta,
+		ConsulToken:    *job.ConsulToken,
+		VaultToken:     *job.VaultToken,
+		VaultNamespace: *job.VaultNamespace,
+		Constraints:    ApiConstraintsToStructs(job.Constraints),
+		Affinities:     ApiAffinitiesToStructs(job.Affinities),
 	}
 
 	// Update has been pushed into the task groups. stagger and max_parallel are
@@ -964,6 +977,12 @@ func ApiTgToStructsTG(job *structs.Job, taskGroup *api.TaskGroup, tg *structs.Ta
 		for l, task := range taskGroup.Tasks {
 			t := &structs.Task{}
 			ApiTaskToStructsTask(task, t)
+
+			// Set the tasks vault namespace from Job if it was not
+			// specified by the task or group
+			if t.Vault != nil && t.Vault.Namespace == "" && job.VaultNamespace != "" {
+				t.Vault.Namespace = job.VaultNamespace
+			}
 			tg.Tasks[l] = t
 		}
 	}
@@ -1026,22 +1045,24 @@ func ApiTaskToStructsTask(apiTask *api.Task, structsTask *structs.Task) {
 				structsTask.Services[i].Checks = make([]*structs.ServiceCheck, l)
 				for j, check := range service.Checks {
 					structsTask.Services[i].Checks[j] = &structs.ServiceCheck{
-						Name:          check.Name,
-						Type:          check.Type,
-						Command:       check.Command,
-						Args:          check.Args,
-						Path:          check.Path,
-						Protocol:      check.Protocol,
-						PortLabel:     check.PortLabel,
-						AddressMode:   check.AddressMode,
-						Interval:      check.Interval,
-						Timeout:       check.Timeout,
-						InitialStatus: check.InitialStatus,
-						TLSSkipVerify: check.TLSSkipVerify,
-						Header:        check.Header,
-						Method:        check.Method,
-						GRPCService:   check.GRPCService,
-						GRPCUseTLS:    check.GRPCUseTLS,
+						Name:                   check.Name,
+						Type:                   check.Type,
+						Command:                check.Command,
+						Args:                   check.Args,
+						Path:                   check.Path,
+						Protocol:               check.Protocol,
+						PortLabel:              check.PortLabel,
+						AddressMode:            check.AddressMode,
+						Interval:               check.Interval,
+						Timeout:                check.Timeout,
+						InitialStatus:          check.InitialStatus,
+						TLSSkipVerify:          check.TLSSkipVerify,
+						Header:                 check.Header,
+						Method:                 check.Method,
+						GRPCService:            check.GRPCService,
+						GRPCUseTLS:             check.GRPCUseTLS,
+						SuccessBeforePassing:   check.SuccessBeforePassing,
+						FailuresBeforeCritical: check.FailuresBeforeCritical,
 					}
 					if check.CheckRestart != nil {
 						structsTask.Services[i].Checks[j].CheckRestart = &structs.CheckRestart{
@@ -1060,8 +1081,6 @@ func ApiTaskToStructsTask(apiTask *api.Task, structsTask *structs.Task) {
 	structsTask.LogConfig = &structs.LogConfig{
 		MaxFiles:      *apiTask.LogConfig.MaxFiles,
 		MaxFileSizeMB: *apiTask.LogConfig.MaxFileSizeMB,
-		Driver:        *apiTask.LogConfig.Driver,
-		Config:        apiTask.LogConfig.Config,
 	}
 
 	if l := len(apiTask.Artifacts); l != 0 {
@@ -1079,6 +1098,7 @@ func ApiTaskToStructsTask(apiTask *api.Task, structsTask *structs.Task) {
 	if apiTask.Vault != nil {
 		structsTask.Vault = &structs.Vault{
 			Policies:     apiTask.Vault.Policies,
+			Namespace:    *apiTask.Vault.Namespace,
 			Env:          *apiTask.Vault.Env,
 			ChangeMode:   *apiTask.Vault.ChangeMode,
 			ChangeSignal: *apiTask.Vault.ChangeSignal,

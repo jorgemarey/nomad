@@ -381,8 +381,8 @@ func (j *Jobs) Revert(jobID string, version uint64, enforcePriorVersion *uint64,
 		JobID:               jobID,
 		JobVersion:          version,
 		EnforcePriorVersion: enforcePriorVersion,
-		// ConsulToken:         consulToken, // TODO(shoenig) enable!
-		VaultToken: vaultToken,
+		ConsulToken:         consulToken,
+		VaultToken:          vaultToken,
 	}
 	wm, err := j.client.write("/v1/job/"+url.PathEscape(jobID)+"/revert", req, &resp, q)
 	if err != nil {
@@ -787,6 +787,7 @@ type Job struct {
 	Meta              map[string]string
 	ConsulToken       *string `mapstructure:"consul_token"`
 	VaultToken        *string `mapstructure:"vault_token"`
+	VaultNamespace    *string `mapstructure:"vault_namespace"`
 	NomadTokenID      *string `mapstructure:"nomad_token_id"`
 	Status            *string
 	StatusDescription *string
@@ -849,6 +850,9 @@ func (j *Job) Canonicalize() {
 	}
 	if j.VaultToken == nil {
 		j.VaultToken = stringToPtr("")
+	}
+	if j.VaultNamespace == nil {
+		j.VaultNamespace = stringToPtr("")
 	}
 	if j.NomadTokenID == nil {
 		j.NomadTokenID = stringToPtr("")
