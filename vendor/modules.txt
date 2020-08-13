@@ -342,7 +342,7 @@ github.com/grpc-ecosystem/go-grpc-middleware/util/metautils
 github.com/grpc-ecosystem/grpc-gateway/internal
 github.com/grpc-ecosystem/grpc-gateway/runtime
 github.com/grpc-ecosystem/grpc-gateway/utilities
-# github.com/hashicorp/consul v1.7.1-0.20200213195527-b137060630b4
+# github.com/hashicorp/consul v1.7.1
 ## explicit
 github.com/hashicorp/consul/agent/consul/autopilot
 github.com/hashicorp/consul/command/flags
@@ -521,6 +521,12 @@ github.com/hpcloud/tail/winfile
 github.com/ishidawataru/sctp
 # github.com/jmespath/go-jmespath v0.0.0-20180206201540-c2b33e8439af
 github.com/jmespath/go-jmespath
+# github.com/jorgemarey/autopilot v0.2.1
+## explicit
+github.com/jorgemarey/autopilot
+# github.com/jorgemarey/sentinel v0.1.1
+## explicit
+github.com/jorgemarey/sentinel
 # github.com/joyent/triton-go v0.0.0-20190112182421-51ffac552869
 ## explicit
 github.com/joyent/triton-go
