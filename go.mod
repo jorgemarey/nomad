@@ -53,7 +53,7 @@ require (
 	github.com/gorilla/websocket v1.4.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.2.1-0.20200228141219-3ce3d519df39
 	github.com/grpc-ecosystem/grpc-gateway v1.9.0 // indirect
-	github.com/hashicorp/consul v1.7.1-0.20200213195527-b137060630b4
+	github.com/hashicorp/consul v1.7.1
 	github.com/hashicorp/consul-template v0.24.1
 	github.com/hashicorp/consul/api v1.4.1-0.20200730220852-12f574c9de39
 	github.com/hashicorp/consul/sdk v0.5.0
@@ -89,6 +89,8 @@ require (
 	github.com/hashicorp/yamux v0.0.0-20181012175058-2f1d1f20f75d
 	github.com/hpcloud/tail v1.0.1-0.20170814160653-37f427138745
 	github.com/ishidawataru/sctp v0.0.0-20191218070446-00ab2ac2db07 // indirect
+	github.com/jorgemarey/autopilot v0.2.1
+	github.com/jorgemarey/sentinel v0.1.1
 	github.com/joyent/triton-go v0.0.0-20190112182421-51ffac552869 // indirect
 	github.com/kr/pretty v0.2.0
 	github.com/kr/pty v1.1.5
