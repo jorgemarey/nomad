@@ -694,6 +694,12 @@ func (c *ServiceClient) sync(reason syncReason) error {
 			continue
 		}
 
+		if _, ok := c.services[check.ServiceID]; !ok {
+			c.logger.Warn("trying to add a check to service we don't know", "service_id", check.ServiceID, "check_id", check.CheckID, "check_name", check.Name)
+			// Do not continue with the check register, as it would fail in any case, and we won't be able to register any other check later
+			continue
+		}
+
 		if err := c.client.CheckRegister(check); err != nil {
 			metrics.IncrCounter([]string{"client", "consul", "sync_failure"}, 1)
 			return err
