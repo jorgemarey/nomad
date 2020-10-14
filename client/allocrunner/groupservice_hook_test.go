@@ -204,7 +204,7 @@ func TestGroupServiceHook_getWorkloadServices(t *testing.T) {
 // MEIGAS: this test will fail due to code modifications on command/agent/consul/client.go
 func TestGroupServiceHook_Update08Alloc(t *testing.T) {
 	// Create an embedded Consul server
-	testconsul, err := ctestutil.NewTestServerConfig(func(c *ctestutil.TestServerConfig) {
+	testconsul, err := ctestutil.NewTestServerConfigT(t, func(c *ctestutil.TestServerConfig) {
 		// If -v wasn't specified squelch consul logging
 		if !testing.Verbose() {
 			c.Stdout = ioutil.Discard
