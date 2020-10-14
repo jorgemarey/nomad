@@ -4024,12 +4024,6 @@ func TestTaskDiff(t *testing.T) {
 						Name: "LogConfig",
 						Fields: []*FieldDiff{
 							{
-								Type: DiffTypeNone,
-								Name: "Driver",
-								Old:  "",
-								New:  "",
-							},
-							{
 								Type: DiffTypeEdited,
 								Name: "MaxFileSizeMB",
 								Old:  "10",
@@ -4040,56 +4034,6 @@ func TestTaskDiff(t *testing.T) {
 								Name: "MaxFiles",
 								Old:  "1",
 								New:  "1",
-							},
-						},
-					},
-				},
-			},
-		},
-		{
-			Name: "LogConfig added with driver",
-			Old: &Task{
-				LogConfig: &LogConfig{
-					MaxFiles:      1,
-					MaxFileSizeMB: 10,
-				},
-			},
-			New: &Task{
-				LogConfig: &LogConfig{
-					MaxFiles:      1,
-					MaxFileSizeMB: 10,
-					Driver:        "test-driver",
-					Config: map[string]interface{}{
-						"namespace": "test",
-					},
-				},
-			},
-			Expected: &TaskDiff{
-				Type: DiffTypeEdited,
-				Objects: []*ObjectDiff{
-					{
-						Type: DiffTypeAdded,
-						Name: "LogConfig",
-						Fields: []*FieldDiff{
-							{
-								Type: DiffTypeAdded,
-								Name: "Driver",
-								Old:  "",
-								New:  "test-driver",
-							},
-						},
-						Objects: []*ObjectDiff{
-							{
-								Type: DiffTypeAdded,
-								Name: "Config",
-								Fields: []*FieldDiff{
-									{
-										Type: DiffTypeAdded,
-										Name: "namespace",
-										Old:  "",
-										New:  "test",
-									},
-								},
 							},
 						},
 					},
