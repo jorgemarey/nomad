@@ -1233,9 +1233,31 @@ func (c *ServiceClient) Shutdown() error {
 			c.logger.Error("failed deregistering agent service", "service_id", id, "error", err)
 		}
 	}
+
+	remainingChecks, err := c.client.Checks()
+	if err != nil {
+		c.logger.Error("failed listing remaining checks after deregistering services", "error", err)
+	}
+
+	checkRemains := func(id string) bool {
+		if remainingChecks == nil {
+			return true
+		}
+		for _, c := range remainingChecks {
+			if c.CheckID == id {
+				return true
+			}
+		}
+		return false
+	}
+
 	for id := range c.agentChecks {
-		if err := c.client.CheckDeregister(id); err != nil {
-			c.logger.Error("failed deregistering agent check", "check_id", id, "error", err)
+		// if we couldn't populate remainingChecks it is unlikely that CheckDeregister will work, but try anyway
+		// if we could list the remaining checks, verify that the check we store still exists before removing it.
+		if checkRemains(id) {
+			if err := c.client.CheckDeregister(id); err != nil {
+				c.logger.Error("failed deregistering agent check", "check_id", id, "error", err)
+			}
 		}
 	}
 
