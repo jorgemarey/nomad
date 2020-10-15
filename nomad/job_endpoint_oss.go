@@ -21,7 +21,7 @@ func (j *Job) enforceSubmitJob(override bool, job *structs.Job) (error, error) {
 }
 
 // multiregionRegister is used to send a job across multiple regions
-func (j *Job) multiregionRegister(args *structs.JobRegisterRequest, reply *structs.JobRegisterResponse, existingVersion uint64) (bool, error) {
+func (j *Job) multiregionRegister(args *structs.JobRegisterRequest, reply *structs.JobRegisterResponse, newVersion uint64) (bool, error) {
 
 	// GetJob on all other regions (what for?) Check versions and set the higher one?
 

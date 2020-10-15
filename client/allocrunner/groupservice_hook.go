@@ -98,7 +98,7 @@ func (h *groupServiceHook) Update(req *interfaces.RunnerUpdateRequest) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// If we already run the PreKill don't do this
+	// MEIGAS: If we already run the PreKill don't do this (Is this OK?)
 	if h.deregistered {
 		return nil
 	}
