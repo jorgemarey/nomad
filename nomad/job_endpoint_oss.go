@@ -47,6 +47,7 @@ func (j *Job) multiregionStart(args *structs.JobRegisterRequest, reply *structs.
 // multiregionDrop is used to deregister regions from a previous version of the
 // job that are no longer in use
 func (j *Job) multiregionDrop(args *structs.JobRegisterRequest, reply *structs.JobRegisterResponse) error {
+	// this should remove the job from those regions that has it running but were removed from the multiregion stanza
 	return nil
 }
 

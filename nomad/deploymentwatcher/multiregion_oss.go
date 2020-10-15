@@ -19,7 +19,7 @@ type JobRPC interface {
 
 func (w *deploymentWatcher) nextRegion(status string) error {
 
-	var token string
+	// var token string
 	// w.state.
 	// ACLTokenByAccessorID(nil, w.j.NomadTokenID)
 
@@ -32,26 +32,26 @@ func (w *deploymentWatcher) nextRegion(status string) error {
 	// DeploymentStatusBlocked    = "blocked"
 	// DeploymentStatusUnblocking = "unblocking"
 
-	for _, r := range w.j.Multiregion.Regions {
-		req := &structs.JobSpecificRequest{
-			JobID: w.d.JobID,
-			QueryOptions: structs.QueryOptions{
-				AuthToken: token,
-				Namespace: w.j.Namespace,
-				Region:    r.Name,
-			},
-		}
-		var resp structs.DeploymentListResponse
-		if err := w.JobRPC.Deployments(req, &resp); err != nil {
+	// for _, r := range w.j.Multiregion.Regions {
+	// 	req := &structs.JobSpecificRequest{
+	// 		JobID: w.d.JobID,
+	// 		QueryOptions: structs.QueryOptions{
+	// 			AuthToken: token,
+	// 			Namespace: w.j.Namespace,
+	// 			Region:    r.Name,
+	// 		},
+	// 	}
+	// 	var resp structs.DeploymentListResponse
+	// 	if err := w.JobRPC.Deployments(req, &resp); err != nil {
 
-		}
+	// 	}
 
-		// for _, dep := range resp.Deployments {
-		// 	if dep.JobVersion == d.JobVersion {
-		// 		// return dep, nil
-		// 	}
-		// }
-	}
+	// 	// for _, dep := range resp.Deployments {
+	// 	// 	if dep.JobVersion == d.JobVersion {
+	// 	// 		// return dep, nil
+	// 	// 	}
+	// 	// }
+	// }
 
 	// RunDeployment
 
