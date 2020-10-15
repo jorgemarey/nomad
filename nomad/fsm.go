@@ -1001,7 +1001,7 @@ func (n *nomadFSM) applyDeploymentStatusUpdate(buf []byte, index uint64) interfa
 		n.logger.Error("UpsertDeploymentStatusUpdate failed", "error", err)
 		return err
 	}
-	n.logger.Error("UpsertDeploymentStatusUpdate info", "DeploymentID", req.DeploymentUpdate.DeploymentID, "Status", req.DeploymentUpdate.Status)
+	// n.logger.Error("UpsertDeploymentStatusUpdate info", "DeploymentID", req.DeploymentUpdate.DeploymentID, "Status", req.DeploymentUpdate.Status)
 
 	n.handleUpsertedEval(req.Eval)
 	return nil
