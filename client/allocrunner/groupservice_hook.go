@@ -98,6 +98,11 @@ func (h *groupServiceHook) Update(req *interfaces.RunnerUpdateRequest) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	// If we already run the PreKill don't do this
+	if h.deregistered {
+		return nil
+	}
+
 	oldWorkloadServices := h.getWorkloadServices()
 
 	// Store new updated values out of request
