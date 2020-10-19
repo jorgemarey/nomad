@@ -296,17 +296,6 @@ func (n *nomadFSM) Apply(log *raft.Log) interface{} {
 		return nil
 	}
 
-	// if msgType == 72 {
-	// 	return nil
-	// }
-
-	// fmt.Printf("Message not found %v\n", msgType)
-	// var req map[string]interface{}
-	// if err := structs.Decode(buf[1:], &req); err != nil {
-	// 	panic(fmt.Errorf("failed to decode request: %v", err))
-	// }
-	// fmt.Printf("Message not found data %+v\n", req)
-
 	panic(fmt.Errorf("failed to apply request: %#v", buf))
 }
 
@@ -1001,7 +990,6 @@ func (n *nomadFSM) applyDeploymentStatusUpdate(buf []byte, index uint64) interfa
 		n.logger.Error("UpsertDeploymentStatusUpdate failed", "error", err)
 		return err
 	}
-	// n.logger.Error("UpsertDeploymentStatusUpdate info", "DeploymentID", req.DeploymentUpdate.DeploymentID, "Status", req.DeploymentUpdate.Status)
 
 	n.handleUpsertedEval(req.Eval)
 	return nil
