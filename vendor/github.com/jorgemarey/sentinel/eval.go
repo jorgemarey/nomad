@@ -184,8 +184,8 @@ func Eval(ctx context.Context, policy *Policy, opts *EvalOpts) (*EvalPolicyResul
 	}
 
 	args := []string{"apply", "-color=false"}
-	if _, err := os.Stat("/etc/sentinel.d/config.hcl"); err != nil {
-		args = append(args, "-config ", "/etc/sentinel.d/config.hcl")
+	if _, err := os.Stat("/etc/sentinel.d/config.hcl"); err == nil {
+		args = append(args, "-config", "/etc/sentinel.d/config.hcl")
 	}
 	for k, v := range opts.Data {
 		b, _ := json.Marshal(v)
