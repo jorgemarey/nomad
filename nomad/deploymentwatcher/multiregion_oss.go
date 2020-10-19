@@ -2,7 +2,9 @@
 
 package deploymentwatcher
 
-import "github.com/hashicorp/nomad/nomad/structs"
+import (
+	"github.com/hashicorp/nomad/nomad/structs"
+)
 
 // DeploymentRPC and JobRPC hold methods for interacting with peer regions
 // in enterprise edition.
@@ -18,6 +20,8 @@ type JobRPC interface {
 }
 
 func (w *deploymentWatcher) nextRegion(status string) error {
+	//1) check every other region deployment status
+	//2) find my place in the ordered list of regions and do .run on max_paralel
 
 	// var token string
 	// w.state.
@@ -69,6 +73,7 @@ func (w *deploymentWatcher) nextRegion(status string) error {
 // RunDeployment is used to run a pending multiregion deployment.  In
 // single-region deployments, the pending state is unused.
 func (w *deploymentWatcher) RunDeployment(req *structs.DeploymentRunRequest, resp *structs.DeploymentUpdateResponse) error {
+	// TODO: check state before upsert?
 	status, desc := structs.DeploymentStatusRunning, structs.DeploymentStatusDescriptionRunning
 	update := w.getDeploymentStatusUpdate(status, desc)
 	eval := w.getEval()
@@ -98,9 +103,3 @@ func (w *deploymentWatcher) UnblockDeployment(req *structs.DeploymentUnblockRequ
 func (w *deploymentWatcher) CancelDeployment(req *structs.DeploymentCancelRequest, resp *structs.DeploymentUpdateResponse) error {
 	return nil
 }
-
-// JobRegister on all regions
-
-// JobRun on regions when needed
-
-// - single RPC between regions to deploy (hand off) // they tried to minimize calls https://youtu.be/tw9xeSBe7HI?t=2651
