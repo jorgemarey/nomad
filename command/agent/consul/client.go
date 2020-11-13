@@ -625,6 +625,7 @@ func (c *ServiceClient) sync(reason syncReason) error {
 				// Don't hard-fail on old entries. See #3620
 				continue
 			}
+			// if sidecar do not print?
 
 			metrics.IncrCounter([]string{"client", "consul", "sync_failure"}, 1)
 			return err
@@ -1435,6 +1436,7 @@ func isNomadSidecar(id string, services map[string]*api.AgentServiceRegistration
 		return false
 	}
 
+	// consul deregisters the sidecar when deregistering the service so maybe we don't need to check it here
 	// Make sure the Nomad managed service for this proxy still exists.
 	_, ok := services[id[:len(id)-len(sidecarSuffix)]]
 	return ok

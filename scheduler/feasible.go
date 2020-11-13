@@ -343,8 +343,13 @@ func (c *NetworkChecker) SetNetwork(network *structs.NetworkResource) {
 
 func (c *NetworkChecker) Feasible(option *structs.Node) bool {
 	if !c.hasNetwork(option) {
-		c.ctx.Metrics().FilterNode(option, "missing network")
-		return false
+		// TODO: MEIGAS / Remove at 1.0
+		cstr, _ := version.NewConstraint("< 0.12")
+		nodeVersion, err := version.NewVersion(option.Attributes["nomad.version"])
+		if !cstr.Check(nodeVersion) || err != nil {
+			c.ctx.Metrics().FilterNode(option, "missing network")
+			return false
+		}
 	}
 
 	if c.ports != nil {
