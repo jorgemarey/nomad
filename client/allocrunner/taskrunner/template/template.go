@@ -63,6 +63,11 @@ type TaskTemplateManager struct {
 	// shutdown marks whether the manager has been shutdown
 	shutdown     bool
 	shutdownLock sync.Mutex
+
+	noopLookup map[string][]*structs.Template
+	noopRunner *manager.Runner
+
+	allTemplates []*structs.Template
 }
 
 // TaskTemplateManagerConfig is used to configure an instance of the
@@ -155,6 +160,38 @@ func NewTaskTemplateManager(config *TaskTemplateManagerConfig) (*TaskTemplateMan
 		tm.signals[tmpl.ChangeSignal] = sig
 	}
 
+	noopConfig := &TaskTemplateManagerConfig{
+		UnblockCh:            config.UnblockCh,
+		Lifecycle:            config.Lifecycle,
+		Events:               config.Events,
+		ClientConfig:         config.ClientConfig,
+		VaultToken:           config.VaultToken,
+		VaultNamespace:       config.VaultNamespace,
+		TaskDir:              config.TaskDir,
+		EnvBuilder:           config.EnvBuilder,
+		MaxTemplateEventRate: config.MaxTemplateEventRate,
+		retryRate:            config.retryRate,
+		Templates:            []*structs.Template{},
+	}
+	nonNoopTemplates := make([]*structs.Template, 0)
+	tm.allTemplates = make([]*structs.Template, 0, len(tm.config.Templates))
+	for _, t := range tm.config.Templates {
+		if t.ChangeMode == structs.TemplateChangeModeNoop {
+			noopConfig.Templates = append(noopConfig.Templates, t)
+		} else {
+			nonNoopTemplates = append(nonNoopTemplates, t)
+		}
+		tm.allTemplates = append(tm.allTemplates, t)
+	}
+	tm.config.Templates = nonNoopTemplates
+
+	noopRunner, noopLookup, err := templateRunner(noopConfig)
+	if err != nil {
+		return nil, err
+	}
+	tm.noopRunner = noopRunner
+	tm.noopLookup = noopLookup
+
 	// Build the consul-template runner
 	runner, lookup, err := templateRunner(config)
 	if err != nil {
@@ -180,6 +217,9 @@ func (tm *TaskTemplateManager) Stop() {
 	tm.shutdown = true
 
 	// Stop the consul-template runner
+	if tm.noopRunner != nil {
+		tm.noopRunner.Stop()
+	}
 	if tm.runner != nil {
 		tm.runner.Stop()
 	}
@@ -188,17 +228,26 @@ func (tm *TaskTemplateManager) Stop() {
 // run is the long lived loop that handles errors and templates being rendered
 func (tm *TaskTemplateManager) run() {
 	// Runner is nil if there is no templates
-	if tm.runner == nil {
+	if tm.noopRunner == nil && tm.runner == nil {
 		// Unblock the start if there is nothing to do
 		close(tm.config.UnblockCh)
 		return
 	}
 
 	// Start the runner
-	go tm.runner.Start()
+	if tm.noopRunner != nil {
+		go tm.noopRunner.Start()
+	}
+	if tm.runner != nil {
+		go tm.runner.Start()
+	}
 
 	// Block till all the templates have been rendered
 	tm.handleFirstRender()
+
+	if tm.noopRunner != nil {
+		tm.noopRunner.Stop()
+	}
 
 	// Detect if there was a shutdown.
 	select {
@@ -208,7 +257,7 @@ func (tm *TaskTemplateManager) run() {
 	}
 
 	// Read environment variables from env templates before we unblock
-	envMap, err := loadTemplateEnv(tm.config.Templates, tm.config.TaskDir, tm.config.EnvBuilder.Build())
+	envMap, err := loadTemplateEnv(tm.allTemplates, tm.config.TaskDir, tm.config.EnvBuilder.Build())
 	if err != nil {
 		tm.config.Lifecycle.Kill(context.Background(),
 			structs.NewTaskEvent(structs.TaskKilling).
@@ -246,13 +295,38 @@ func (tm *TaskTemplateManager) handleFirstRender() {
 	// be fired.
 	outstandingEvent := false
 
+	var runnerFinish, noopRunnerFinish bool
+	emptyCh := make(<-chan struct{})
+
+	runnerTempalteRenderedCh := emptyCh
+	runnerRenderEventCh := emptyCh
+	runnerErrCh := make(chan error)
+	runnerFinish = true
+	if tm.runner != nil {
+		runnerTempalteRenderedCh = tm.runner.TemplateRenderedCh()
+		runnerRenderEventCh = tm.runner.RenderEventCh()
+		runnerErrCh = tm.runner.ErrCh
+		runnerFinish = false
+	}
+	noopRunnerTempalteRenderedCh := emptyCh
+	noopRunnerRenderEventCh := emptyCh
+	noopRunnerErrCh := make(chan error)
+	noopRunnerFinish = true
+	if tm.noopRunner != nil {
+		noopRunnerTempalteRenderedCh = tm.noopRunner.TemplateRenderedCh()
+		noopRunnerRenderEventCh = tm.noopRunner.RenderEventCh()
+		noopRunnerErrCh = tm.noopRunner.ErrCh
+		noopRunnerFinish = false
+	}
+
 	// Wait till all the templates have been rendered
 WAIT:
 	for {
+
 		select {
 		case <-tm.shutdownCh:
 			return
-		case err, ok := <-tm.runner.ErrCh:
+		case err, ok := <-runnerErrCh:
 			if !ok {
 				continue
 			}
@@ -261,7 +335,16 @@ WAIT:
 				structs.NewTaskEvent(structs.TaskKilling).
 					SetFailsTask().
 					SetDisplayMessage(fmt.Sprintf("Template failed: %v", err)))
-		case <-tm.runner.TemplateRenderedCh():
+		case err, ok := <-noopRunnerErrCh:
+			if !ok {
+				continue
+			}
+
+			tm.config.Lifecycle.Kill(context.Background(),
+				structs.NewTaskEvent(structs.TaskKilling).
+					SetFailsTask().
+					SetDisplayMessage(fmt.Sprintf("Template failed: %v", err)))
+		case <-runnerTempalteRenderedCh:
 			// A template has been rendered, figure out what to do
 			events := tm.runner.RenderEvents()
 
@@ -277,9 +360,75 @@ WAIT:
 				}
 			}
 
+			runnerFinish = true
+			if !noopRunnerFinish {
+				continue
+			}
+
 			break WAIT
-		case <-tm.runner.RenderEventCh():
+		case <-noopRunnerTempalteRenderedCh:
+			// A template has been rendered, figure out what to do
+			events := tm.noopRunner.RenderEvents()
+
+			// Not all templates have been rendered yet
+			if len(events) < len(tm.noopLookup) {
+				continue
+			}
+
+			for _, event := range events {
+				// This template hasn't been rendered
+				if event.LastWouldRender.IsZero() {
+					continue WAIT
+				}
+			}
+
+			noopRunnerFinish = true
+			if !runnerFinish {
+				continue
+			}
+
+			break WAIT
+		case <-runnerRenderEventCh:
 			events := tm.runner.RenderEvents()
+			joinedSet := make(map[string]struct{})
+			for _, event := range events {
+				missing := event.MissingDeps
+				if missing == nil {
+					continue
+				}
+
+				for _, dep := range missing.List() {
+					joinedSet[dep.String()] = struct{}{}
+				}
+			}
+
+			// Check to see if the new joined set is the same as the old
+			different := len(joinedSet) != len(missingDependencies)
+			if !different {
+				for k := range joinedSet {
+					if _, ok := missingDependencies[k]; !ok {
+						different = true
+						break
+					}
+				}
+			}
+
+			// Nothing to do
+			if !different {
+				continue
+			}
+
+			// Update the missing set
+			missingDependencies = joinedSet
+
+			// Update the event timer channel
+			if !outstandingEvent {
+				// We got new data so reset
+				outstandingEvent = true
+				eventTimer.Reset(tm.config.MaxTemplateEventRate)
+			}
+		case <-noopRunnerRenderEventCh:
+			events := tm.noopRunner.RenderEvents()
 			joinedSet := make(map[string]struct{})
 			for _, event := range events {
 				missing := event.MissingDeps
@@ -396,7 +545,7 @@ func (tm *TaskTemplateManager) handleTemplateRerenders(allRenderedTime time.Time
 				}
 
 				// Read environment variables from templates
-				envMap, err := loadTemplateEnv(tm.config.Templates, tm.config.TaskDir, tm.config.EnvBuilder.Build())
+				envMap, err := loadTemplateEnv(tm.allTemplates, tm.config.TaskDir, tm.config.EnvBuilder.Build())
 				if err != nil {
 					tm.config.Lifecycle.Kill(context.Background(),
 						structs.NewTaskEvent(structs.TaskKilling).
