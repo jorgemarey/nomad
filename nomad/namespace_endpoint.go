@@ -16,24 +16,24 @@ type Namespace struct {
 	srv *Server
 }
 
-// UpsertNamespaces is used to create or update a namespace
+// UpsertNamespaces is used to upsert a set of namespaces
 func (n *Namespace) UpsertNamespaces(args *structs.NamespaceUpsertRequest, reply *structs.GenericResponse) error {
-	// Validate there is at least one namespace
-	if len(args.Namespaces) == 0 {
-		return fmt.Errorf("must specify at least one namespace")
-	}
-
 	args.Region = n.srv.config.AuthoritativeRegion
 	if done, err := n.srv.forward("Namespace.UpsertNamespaces", args, args, reply); done {
 		return err
 	}
-	defer metrics.MeasureSince([]string{"nomad", "namespace", "upsert"}, time.Now())
+	defer metrics.MeasureSince([]string{"nomad", "namespace", "upsert_namespaces"}, time.Now())
 
-	// Check management level permissions
+	// Check management permissions
 	if aclObj, err := n.srv.ResolveToken(args.AuthToken); err != nil {
 		return err
 	} else if aclObj != nil && !aclObj.IsManagement() {
 		return structs.ErrPermissionDenied
+	}
+
+	// Validate there is at least one namespace
+	if len(args.Namespaces) == 0 {
+		return fmt.Errorf("must specify at least one namespace")
 	}
 
 	// Validate the namespaces and set the hash
@@ -60,24 +60,24 @@ func (n *Namespace) UpsertNamespaces(args *structs.NamespaceUpsertRequest, reply
 	return nil
 }
 
-// DeleteNamespaces is used to delete namespaces
+// DeleteNamespaces is used to delete a namespace
 func (n *Namespace) DeleteNamespaces(args *structs.NamespaceDeleteRequest, reply *structs.GenericResponse) error {
-	// Validate at least one namespace
-	if len(args.Namespaces) == 0 {
-		return fmt.Errorf("must specify at least one namespace to delete")
-	}
-
 	args.Region = n.srv.config.AuthoritativeRegion
 	if done, err := n.srv.forward("Namespace.DeleteNamespaces", args, args, reply); done {
 		return err
 	}
-	defer metrics.MeasureSince([]string{"nomad", "namespace", "delete"}, time.Now())
+	defer metrics.MeasureSince([]string{"nomad", "namespace", "delete_namespaces"}, time.Now())
 
 	// Check management permissions
 	if aclObj, err := n.srv.ResolveToken(args.AuthToken); err != nil {
 		return err
 	} else if aclObj != nil && !aclObj.IsManagement() {
 		return structs.ErrPermissionDenied
+	}
+
+	// Validate at least one namespace
+	if len(args.Namespaces) == 0 {
+		return fmt.Errorf("must specify at least one namespace to delete")
 	}
 
 	for _, ns := range args.Namespaces {
@@ -209,17 +209,12 @@ func (n *Namespace) namespaceTerminalInRegion(authToken, namespace, region strin
 	return true, nil
 }
 
-//
-//
-//
-//
-
 // ListNamespaces is used to list the namespaces
 func (n *Namespace) ListNamespaces(args *structs.NamespaceListRequest, reply *structs.NamespaceListResponse) error {
 	if done, err := n.srv.forward("Namespace.ListNamespaces", args, args, reply); done {
 		return err
 	}
-	defer metrics.MeasureSince([]string{"nomad", "namespace", "list"}, time.Now())
+	defer metrics.MeasureSince([]string{"nomad", "namespace", "list_namespace"}, time.Now())
 
 	// Resolve token to acl to filter namespace list
 	aclObj, err := n.srv.ResolveToken(args.AuthToken)
@@ -250,16 +245,16 @@ func (n *Namespace) ListNamespaces(args *structs.NamespaceListRequest, reply *st
 				if raw == nil {
 					break
 				}
-				namespace := raw.(*structs.Namespace)
+				ns := raw.(*structs.Namespace)
 
 				// Only return namespaces allowed by acl
-				if aclObj == nil || aclObj.AllowNamespace(namespace.Name) {
-					reply.Namespaces = append(reply.Namespaces, namespace)
+				if aclObj == nil || aclObj.AllowNamespace(ns.Name) {
+					reply.Namespaces = append(reply.Namespaces, ns)
 				}
 			}
 
-			// Use the last index that affected the policy table
-			index, err := s.Index(state.TableNamespace)
+			// Use the last index that affected the namespace table
+			index, err := s.Index(state.TableNamespaces)
 			if err != nil {
 				return err
 			}
@@ -280,9 +275,9 @@ func (n *Namespace) GetNamespace(args *structs.NamespaceSpecificRequest, reply *
 	if done, err := n.srv.forward("Namespace.GetNamespace", args, args, reply); done {
 		return err
 	}
-	defer metrics.MeasureSince([]string{"nomad", "namespace", "get"}, time.Now())
+	defer metrics.MeasureSince([]string{"nomad", "namespace", "get_namespace"}, time.Now())
 
-	// Check permission on the namespace
+	// Check capabilities for the given namespace permissions
 	if aclObj, err := n.srv.ResolveToken(args.AuthToken); err != nil {
 		return err
 	} else if aclObj != nil && !aclObj.AllowNamespace(args.Name) {
@@ -306,7 +301,7 @@ func (n *Namespace) GetNamespace(args *structs.NamespaceSpecificRequest, reply *
 				reply.Index = out.ModifyIndex
 			} else {
 				// Use the last index that affected the namespace table
-				index, err := s.Index(state.TableNamespace)
+				index, err := s.Index(state.TableNamespaces)
 				if err != nil {
 					return err
 				}
@@ -357,7 +352,7 @@ func (n *Namespace) GetNamespaces(args *structs.NamespaceSetRequest, reply *stru
 			}
 
 			// Use the last index that affected the policy table
-			index, err := s.Index(state.TableNamespace)
+			index, err := s.Index(state.TableNamespaces)
 			if err != nil {
 				return err
 			}

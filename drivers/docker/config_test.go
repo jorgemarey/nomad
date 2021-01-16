@@ -24,6 +24,7 @@ func TestConfig_ParseHCL(t *testing.T) {
 				Image:            "redis:3.2",
 				Devices:          []DockerDevice{},
 				Mounts:           []DockerMount{},
+				MountsList:       []DockerMount{},
 				CPUCFSPeriod:     100000,
 				ImagePullTimeout: "5m",
 			},
@@ -56,6 +57,7 @@ func TestConfig_ParseJSON(t *testing.T) {
 			expected: TaskConfig{
 				Image:            "bash:3",
 				Mounts:           []DockerMount{},
+				MountsList:       []DockerMount{},
 				Devices:          []DockerDevice{},
 				CPUCFSPeriod:     100000,
 				ImagePullTimeout: "5m",
@@ -67,6 +69,7 @@ func TestConfig_ParseJSON(t *testing.T) {
 			expected: TaskConfig{
 				Image:            "bash:3",
 				Mounts:           []DockerMount{},
+				MountsList:       []DockerMount{},
 				Devices:          []DockerDevice{},
 				CPUCFSPeriod:     100000,
 				ImagePullTimeout: "5m",
@@ -78,6 +81,7 @@ func TestConfig_ParseJSON(t *testing.T) {
 			expected: TaskConfig{
 				Image:            "bash:3",
 				Mounts:           []DockerMount{},
+				MountsList:       []DockerMount{},
 				Devices:          []DockerDevice{},
 				CPUCFSPeriod:     100000,
 				ImagePullTimeout: "5m",
@@ -89,6 +93,7 @@ func TestConfig_ParseJSON(t *testing.T) {
 			expected: TaskConfig{
 				Image:            "bash:3",
 				Mounts:           []DockerMount{},
+				MountsList:       []DockerMount{},
 				Devices:          []DockerDevice{},
 				CPUCFSPeriod:     100000,
 				ImagePullTimeout: "5m",
@@ -229,6 +234,27 @@ config {
   }
   mac_address = "02:42:ac:11:00:02"
   memory_hard_limit = 512
+
+  mount {
+    type = "bind"
+    target ="/mount-bind-target"
+    source = "/bind-source-mount"
+    readonly = true
+    bind_options {
+      propagation = "rshared"
+    }
+  }
+
+  mount {
+    type = "tmpfs"
+    target ="/mount-tmpfs-target"
+    readonly = true
+    tmpfs_options {
+      size = 30000
+      mode = 0777
+    }
+  }
+
   mounts = [
     {
       type = "bind"
@@ -363,6 +389,27 @@ config {
 		Mounts: []DockerMount{
 			{
 				Type:     "bind",
+				Target:   "/mount-bind-target",
+				Source:   "/bind-source-mount",
+				ReadOnly: true,
+				BindOptions: DockerBindOptions{
+					Propagation: "rshared",
+				},
+			},
+			{
+				Type:     "tmpfs",
+				Target:   "/mount-tmpfs-target",
+				Source:   "",
+				ReadOnly: true,
+				TmpfsOptions: DockerTmpfsOptions{
+					SizeBytes: 30000,
+					Mode:      511,
+				},
+			},
+		},
+		MountsList: []DockerMount{
+			{
+				Type:     "bind",
 				Target:   "/bind-target",
 				Source:   "/bind-source",
 				ReadOnly: true,
@@ -443,52 +490,99 @@ config {
 	require.EqualValues(t, expected, tc)
 }
 
-// TestConfig_DriverConfig_DanglingContainers asserts that dangling_containers is parsed
+// TestConfig_DriverConfig_GC asserts that gc is parsed
 // and populated with defaults as expected
-func TestConfig_DriverConfig_DanglingContainers(t *testing.T) {
+func TestConfig_DriverConfig_GC(t *testing.T) {
 	cases := []struct {
 		name     string
 		config   string
-		expected ContainerGCConfig
+		expected GCConfig
 	}{
 		{
-			name:     "pure default",
-			config:   `{}`,
-			expected: ContainerGCConfig{Enabled: true, PeriodStr: "5m", CreationGraceStr: "5m"},
+			name:   "pure default",
+			config: `{}`,
+			expected: GCConfig{
+				Image: true, ImageDelay: "3m", Container: true,
+				DanglingContainers: ContainerGCConfig{
+					Enabled: true, PeriodStr: "5m", CreationGraceStr: "5m"},
+			},
 		},
 		{
-			name:     "partial gc",
-			config:   `{ gc { } }`,
-			expected: ContainerGCConfig{Enabled: true, PeriodStr: "5m", CreationGraceStr: "5m"},
+			name:   "partial gc",
+			config: `{ gc { } }`,
+			expected: GCConfig{
+				Image: true, ImageDelay: "3m", Container: true,
+				DanglingContainers: ContainerGCConfig{
+					Enabled: true, PeriodStr: "5m", CreationGraceStr: "5m"},
+			},
 		},
 		{
-			name:     "partial gc",
-			config:   `{ gc { dangling_containers { } } }`,
-			expected: ContainerGCConfig{Enabled: true, PeriodStr: "5m", CreationGraceStr: "5m"},
+			name:   "partial gc",
+			config: `{ gc { dangling_containers { } } }`,
+			expected: GCConfig{
+				Image: true, ImageDelay: "3m", Container: true,
+				DanglingContainers: ContainerGCConfig{
+					Enabled: true, PeriodStr: "5m", CreationGraceStr: "5m"},
+			},
 		},
 		{
-			name:     "partial dangling_containers",
-			config:   `{ gc { dangling_containers { enabled = false } } }`,
-			expected: ContainerGCConfig{Enabled: false, PeriodStr: "5m", CreationGraceStr: "5m"},
+			name:   "partial image",
+			config: `{ gc { image = false } }`,
+			expected: GCConfig{
+				Image: false, ImageDelay: "3m", Container: true,
+				DanglingContainers: ContainerGCConfig{
+					Enabled: true, PeriodStr: "5m", CreationGraceStr: "5m"},
+			},
 		},
 		{
-			name:     "incomplete dangling_containers 2",
-			config:   `{ gc { dangling_containers { period = "10m" } } }`,
-			expected: ContainerGCConfig{Enabled: true, PeriodStr: "10m", CreationGraceStr: "5m"},
+			name:   "partial image_delay",
+			config: `{ gc { image_delay = "1d"} }`,
+			expected: GCConfig{
+				Image: true, ImageDelay: "1d", Container: true,
+				DanglingContainers: ContainerGCConfig{
+					Enabled: true, PeriodStr: "5m", CreationGraceStr: "5m"},
+			},
+		},
+		{
+			name:   "partial dangling_containers",
+			config: `{ gc { dangling_containers { enabled = false } } }`,
+			expected: GCConfig{
+				Image: true, ImageDelay: "3m", Container: true,
+				DanglingContainers: ContainerGCConfig{
+					Enabled: false, PeriodStr: "5m", CreationGraceStr: "5m"},
+			},
+		},
+		{
+			name:   "incomplete dangling_containers 2",
+			config: `{ gc { dangling_containers { period = "10m" } } }`,
+			expected: GCConfig{
+				Image: true, ImageDelay: "3m", Container: true,
+				DanglingContainers: ContainerGCConfig{
+					Enabled: true, PeriodStr: "10m", CreationGraceStr: "5m"},
+			},
 		},
 		{
 			name: "full default",
-			config: `{ gc { dangling_containers {
+			config: `{ gc {
+			image = false
+			image_delay = "5m"
+			container = false
+			dangling_containers {
 			     enabled = false
 			     dry_run = true
 			     period = "10m"
 			     creation_grace = "20m"
 			}}}`,
-			expected: ContainerGCConfig{
-				Enabled:          false,
-				DryRun:           true,
-				PeriodStr:        "10m",
-				CreationGraceStr: "20m",
+			expected: GCConfig{
+				Image:      false,
+				ImageDelay: "5m",
+				Container:  false,
+				DanglingContainers: ContainerGCConfig{
+					Enabled:          false,
+					DryRun:           true,
+					PeriodStr:        "10m",
+					CreationGraceStr: "20m",
+				},
 			},
 		},
 	}
@@ -497,7 +591,7 @@ func TestConfig_DriverConfig_DanglingContainers(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			var tc DriverConfig
 			hclutils.NewConfigParser(configSpec).ParseHCL(t, "config "+c.config, &tc)
-			require.EqualValues(t, c.expected, tc.GC.DanglingContainers)
+			require.EqualValues(t, c.expected, tc.GC)
 
 		})
 	}

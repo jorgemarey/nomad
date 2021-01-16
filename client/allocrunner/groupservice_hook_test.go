@@ -201,7 +201,6 @@ func TestGroupServiceHook_getWorkloadServices(t *testing.T) {
 // 0.8 alloc works.
 //
 // COMPAT(0.11) Only valid for upgrades from 0.8.
-// MEIGAS: this test will fail due to code modifications on command/agent/consul/client.go
 func TestGroupServiceHook_Update08Alloc(t *testing.T) {
 	// Create an embedded Consul server
 	testconsul, err := ctestutil.NewTestServerConfigT(t, func(c *ctestutil.TestServerConfig) {

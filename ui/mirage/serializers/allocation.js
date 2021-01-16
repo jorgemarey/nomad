@@ -18,5 +18,14 @@ export default ApplicationSerializer.extend({
 
 function serializeAllocation(allocation) {
   allocation.TaskStates = allocation.TaskStates.reduce(arrToObj('Name'), {});
-  allocation.TaskResources = allocation.TaskResources.reduce(arrToObj('Name', 'Resources'), {});
+  const { Ports, Networks } = allocation.TaskResources[0]
+    ? allocation.TaskResources[0].Resources
+    : {};
+  allocation.AllocatedResources = {
+    Shared: { Ports, Networks },
+    Tasks: allocation.TaskResources.map(({ Name, Resources }) => ({ Name, ...Resources })).reduce(
+      arrToObj('Name'),
+      {}
+    ),
+  };
 }

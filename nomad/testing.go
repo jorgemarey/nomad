@@ -34,7 +34,7 @@ func TestACLServer(t testing.T, cb func(*Config)) (*Server, *structs.ACLToken, f
 		}
 	})
 	token := mock.ACLManagementToken()
-	err := server.State().BootstrapACLTokens(1, 0, token)
+	err := server.State().BootstrapACLTokens(structs.MsgTypeTestSetup, 1, 0, token)
 	if err != nil {
 		t.Fatalf("failed to bootstrap ACL token: %v", err)
 	}
@@ -47,6 +47,7 @@ func TestServer(t testing.T, cb func(*Config)) (*Server, func()) {
 	config.Logger = testlog.HCLogger(t)
 	config.Build = version.Version + "+unittest"
 	config.DevMode = true
+	config.EnableEventBroker = true
 	config.BootstrapExpect = 1
 	nodeNum := atomic.AddUint32(&nodeNumber, 1)
 	config.NodeName = fmt.Sprintf("nomad-%03d", nodeNum)

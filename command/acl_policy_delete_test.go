@@ -34,9 +34,9 @@ func TestACLPolicyDeleteCommand(t *testing.T) {
 		Rules: acl.PolicyWrite,
 	}
 	policy.SetHash()
-	assert.Nil(state.UpsertACLPolicies(1000, []*structs.ACLPolicy{policy}))
+	assert.Nil(state.UpsertACLPolicies(structs.MsgTypeTestSetup, 1000, []*structs.ACLPolicy{policy}))
 
-	ui := new(cli.MockUi)
+	ui := cli.NewMockUi()
 	cmd := &ACLPolicyDeleteCommand{Meta: Meta{Ui: ui, flagAddress: url}}
 
 	// Delete the policy without a valid token fails

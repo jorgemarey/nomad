@@ -34,6 +34,9 @@ const (
 	DispatchPayloadSizeLimit = 16 * 1024
 )
 
+// ErrMultipleNamespaces is send when multiple namespaces are used in the OSS setup
+var ErrMultipleNamespaces = errors.New("multiple Vault namespaces requires Nomad Enterprise")
+
 var (
 	// allowRescheduleTransition is the transition that allows failed
 	// allocations to be force rescheduled. We create a one off
@@ -448,16 +451,16 @@ func propagateScalingPolicyIDs(old, new *structs.Job) error {
 
 	oldIDs := make(map[string]string)
 	if old != nil {
-		// jobs currently only have scaling policies on task groups, so we can
-		// find correspondences using task group names
+		// use the job-scoped key (includes type, group, and task) to uniquely
+		// identify policies in a job
 		for _, p := range old.GetScalingPolicies() {
-			oldIDs[p.Target[structs.ScalingTargetGroup]] = p.ID
+			oldIDs[p.JobKey()] = p.ID
 		}
 	}
 
 	// ignore any existing ID in the policy, they should be empty
 	for _, p := range new.GetScalingPolicies() {
-		if id, ok := oldIDs[p.Target[structs.ScalingTargetGroup]]; ok {
+		if id, ok := oldIDs[p.JobKey()]; ok {
 			p.ID = id
 		} else {
 			p.ID = uuid.Generate()
@@ -1037,6 +1040,20 @@ func (j *Job) Scale(args *structs.JobScaleRequest, reply *structs.JobRegisterRes
 	prevCount := found.Count
 	if args.Count != nil {
 
+		// if there is a scaling policy, check that the new count is within bounds
+		if found.Scaling != nil {
+			if *args.Count < found.Scaling.Min {
+				return structs.NewErrRPCCoded(400,
+					fmt.Sprintf("group count was less than scaling policy minimum: %d < %d",
+						*args.Count, found.Scaling.Min))
+			}
+			if found.Scaling.Max < *args.Count {
+				return structs.NewErrRPCCoded(400,
+					fmt.Sprintf("group count was greater than scaling policy maximum: %d > %d",
+						*args.Count, found.Scaling.Max))
+			}
+		}
+
 		// Lookup the latest deployment, to see whether this scaling event should be blocked
 		d, err := snap.LatestDeploymentByJobID(ws, namespace, args.JobID)
 		if err != nil {
@@ -1263,7 +1280,7 @@ func (j *Job) GetJobVersions(args *structs.JobVersionsRequest,
 // allowedNSes returns a set (as map of ns->true) of the namespaces a token has access to.
 // Returns `nil` set if the token has access to all namespaces
 // and ErrPermissionDenied if the token has no capabilities on any namespace.
-func allowedNSes(aclObj *acl.ACL, state *state.StateStore) (map[string]bool, error) {
+func allowedNSes(aclObj *acl.ACL, state *state.StateStore, allow func(ns string) bool) (map[string]bool, error) {
 	if aclObj == nil || aclObj.IsManagement() {
 		return nil, nil
 	}
@@ -1277,7 +1294,7 @@ func allowedNSes(aclObj *acl.ACL, state *state.StateStore) (map[string]bool, err
 	r := make(map[string]bool, len(nses))
 
 	for _, ns := range nses {
-		if aclObj.AllowNsOp(ns, acl.NamespaceCapabilityListJobs) {
+		if allow(ns) {
 			r[ns] = true
 		}
 	}
@@ -1365,6 +1382,9 @@ func (j *Job) listAllNamespaces(args *structs.JobListRequest, reply *structs.Job
 		return err
 	}
 	prefix := args.QueryOptions.Prefix
+	allow := func(ns string) bool {
+		return aclObj.AllowNsOp(ns, acl.NamespaceCapabilityListJobs)
+	}
 
 	// Setup the blocking query
 	opts := blockingOptions{
@@ -1372,7 +1392,7 @@ func (j *Job) listAllNamespaces(args *structs.JobListRequest, reply *structs.Job
 		queryMeta: &reply.QueryMeta,
 		run: func(ws memdb.WatchSet, state *state.StateStore) error {
 			// check if user has permission to all namespaces
-			allowedNSes, err := allowedNSes(aclObj, state)
+			allowedNSes, err := allowedNSes(aclObj, state, allow)
 			if err == structs.ErrPermissionDenied {
 				// return empty jobs if token isn't authorized for any
 				// namespace, matching other endpoints
@@ -1469,7 +1489,7 @@ func (j *Job) Allocations(args *structs.JobSpecificRequest,
 			if len(allocs) > 0 {
 				reply.Allocations = make([]*structs.AllocListStub, 0, len(allocs))
 				for _, alloc := range allocs {
-					reply.Allocations = append(reply.Allocations, alloc.Stub())
+					reply.Allocations = append(reply.Allocations, alloc.Stub(nil))
 				}
 			}
 
@@ -1702,13 +1722,13 @@ func (j *Job) Plan(args *structs.JobPlanRequest, reply *structs.JobPlanResponse)
 		if oldJob.SpecChanged(args.Job) {
 			// Insert the updated Job into the snapshot
 			updatedIndex = oldJob.JobModifyIndex + 1
-			if err := snap.UpsertJob(updatedIndex, args.Job); err != nil {
+			if err := snap.UpsertJob(structs.IgnoreUnknownTypeFlag, updatedIndex, args.Job); err != nil {
 				return err
 			}
 		}
 	} else if oldJob == nil {
 		// Insert the updated Job into the snapshot
-		err := snap.UpsertJob(100, args.Job)
+		err := snap.UpsertJob(structs.IgnoreUnknownTypeFlag, 100, args.Job)
 		if err != nil {
 			return err
 		}
@@ -1731,7 +1751,8 @@ func (j *Job) Plan(args *structs.JobPlanRequest, reply *structs.JobPlanResponse)
 		ModifyTime: now,
 	}
 
-	snap.UpsertEvals(100, []*structs.Evaluation{eval})
+	// Ignore eval event creation during snapshot eval creation
+	snap.UpsertEvals(structs.IgnoreUnknownTypeFlag, 100, []*structs.Evaluation{eval})
 
 	// Create an in-memory Planner that returns no errors and stores the
 	// submitted plan and created evals.

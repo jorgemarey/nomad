@@ -412,7 +412,7 @@ func (w *deploymentWatcher) watch() {
 			<-deadlineTimer.C
 		}
 	} else {
-		deadlineTimer = time.NewTimer(currentDeadline.Sub(time.Now()))
+		deadlineTimer = time.NewTimer(time.Until(currentDeadline))
 	}
 
 	allocIndex := uint64(1)
@@ -474,7 +474,7 @@ FAIL:
 				// rollout, the next progress deadline becomes zero, so we want
 				// to avoid resetting, causing a deployment failure.
 				if !next.IsZero() {
-					deadlineTimer.Reset(next.Sub(time.Now()))
+					deadlineTimer.Reset(time.Until(next))
 				}
 			}
 
@@ -899,7 +899,7 @@ func (w *deploymentWatcher) getAllocsImpl(ws memdb.WatchSet, state *state.StateS
 	maxIndex := uint64(0)
 	stubs := make([]*structs.AllocListStub, 0, len(allocs))
 	for _, alloc := range allocs {
-		stubs = append(stubs, alloc.Stub())
+		stubs = append(stubs, alloc.Stub(nil))
 
 		if maxIndex < alloc.ModifyIndex {
 			maxIndex = alloc.ModifyIndex

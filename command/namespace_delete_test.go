@@ -17,7 +17,7 @@ func TestNamespaceDeleteCommand_Implements(t *testing.T) {
 
 func TestNamespaceDeleteCommand_Fails(t *testing.T) {
 	t.Parallel()
-	ui := new(cli.MockUi)
+	ui := cli.NewMockUi()
 	cmd := &NamespaceDeleteCommand{Meta: Meta{Ui: ui}}
 
 	// Fails on misuse
@@ -45,7 +45,7 @@ func TestNamespaceDeleteCommand_Good(t *testing.T) {
 	srv, client, url := testServer(t, true, nil)
 	defer srv.Shutdown()
 
-	ui := new(cli.MockUi)
+	ui := cli.NewMockUi()
 	cmd := &NamespaceDeleteCommand{Meta: Meta{Ui: ui}}
 
 	// Create a namespace to delete
@@ -72,7 +72,7 @@ func TestNamespaceDeleteCommand_AutocompleteArgs(t *testing.T) {
 	srv, client, url := testServer(t, true, nil)
 	defer srv.Shutdown()
 
-	ui := new(cli.MockUi)
+	ui := cli.NewMockUi()
 	cmd := &NamespaceDeleteCommand{Meta: Meta{Ui: ui, flagAddress: url}}
 
 	// Create a namespace other than default

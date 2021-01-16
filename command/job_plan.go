@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/nomad/api"
+	flaghelper "github.com/hashicorp/nomad/helper/flags"
 	"github.com/hashicorp/nomad/scheduler"
 	"github.com/posener/complete"
 )
@@ -62,9 +63,12 @@ Alias: nomad plan
     * 1: Allocations created or destroyed.
     * 255: Error determining plan results.
 
+  When ACLs are enabled, this command requires a token with the 'submit-job'
+  capability for the job's namespace.
+
 General Options:
 
-  ` + generalOptionsUsage() + `
+  ` + generalOptionsUsage(usageOptsDefault) + `
 
 Plan Options:
 
@@ -72,8 +76,17 @@ Plan Options:
     Determines whether the diff between the remote job and planned job is shown.
     Defaults to true.
 
+  -hcl1
+    Parses the job file as HCLv1.
+
   -policy-override
     Sets the flag to force override any soft mandatory Sentinel policies.
+
+  -var 'key=value'
+    Variable for template, can be used multiple times.
+
+  -var-file=path
+    Path to HCL2 file containing user variables.
 
   -verbose
     Increase diff verbosity.
@@ -91,6 +104,9 @@ func (c *JobPlanCommand) AutocompleteFlags() complete.Flags {
 			"-diff":            complete.PredictNothing,
 			"-policy-override": complete.PredictNothing,
 			"-verbose":         complete.PredictNothing,
+			"-hcl1":            complete.PredictNothing,
+			"-var":             complete.PredictAnything,
+			"-var-file":        complete.PredictFiles("*.var"),
 		})
 }
 
@@ -101,19 +117,23 @@ func (c *JobPlanCommand) AutocompleteArgs() complete.Predictor {
 func (c *JobPlanCommand) Name() string { return "job plan" }
 func (c *JobPlanCommand) Run(args []string) int {
 	var diff, policyOverride, verbose bool
+	var varArgs, varFiles flaghelper.StringFlag
 
-	flags := c.Meta.FlagSet(c.Name(), FlagSetClient)
-	flags.Usage = func() { c.Ui.Output(c.Help()) }
-	flags.BoolVar(&diff, "diff", true, "")
-	flags.BoolVar(&policyOverride, "policy-override", false, "")
-	flags.BoolVar(&verbose, "verbose", false, "")
+	flagSet := c.Meta.FlagSet(c.Name(), FlagSetClient)
+	flagSet.Usage = func() { c.Ui.Output(c.Help()) }
+	flagSet.BoolVar(&diff, "diff", true, "")
+	flagSet.BoolVar(&policyOverride, "policy-override", false, "")
+	flagSet.BoolVar(&verbose, "verbose", false, "")
+	flagSet.BoolVar(&c.JobGetter.hcl1, "hcl1", false, "")
+	flagSet.Var(&varArgs, "var", "")
+	flagSet.Var(&varFiles, "var-file", "")
 
-	if err := flags.Parse(args); err != nil {
+	if err := flagSet.Parse(args); err != nil {
 		return 255
 	}
 
 	// Check that we got exactly one job
-	args = flags.Args()
+	args = flagSet.Args()
 	if len(args) != 1 {
 		c.Ui.Error("This command takes one argument: <path>")
 		c.Ui.Error(commandErrorText(c))
@@ -122,7 +142,7 @@ func (c *JobPlanCommand) Run(args []string) int {
 
 	path := args[0]
 	// Get Job struct from Jobfile
-	job, err := c.JobGetter.ApiJob(args[0])
+	job, err := c.JobGetter.ApiJobWithArgs(args[0], varArgs, varFiles)
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("Error getting job struct: %s", err))
 		return 255
@@ -235,7 +255,7 @@ func (c *JobPlanCommand) addPreemptions(resp *api.JobPlanResponse) {
 	c.Ui.Output(c.Colorize().Color("[bold][yellow]Preemptions:\n[reset]"))
 	if len(resp.Annotations.PreemptedAllocs) < preemptionDisplayThreshold {
 		var allocs []string
-		allocs = append(allocs, fmt.Sprintf("Alloc ID|Job ID|Task Group"))
+		allocs = append(allocs, "Alloc ID|Job ID|Task Group")
 		for _, alloc := range resp.Annotations.PreemptedAllocs {
 			allocs = append(allocs, fmt.Sprintf("%s|%s|%s", alloc.ID, alloc.JobID, alloc.TaskGroup))
 		}
@@ -264,7 +284,7 @@ func (c *JobPlanCommand) addPreemptions(resp *api.JobPlanResponse) {
 	// Show counts grouped by job ID if its less than a threshold
 	var output []string
 	if numJobs < preemptionDisplayThreshold {
-		output = append(output, fmt.Sprintf("Job ID|Namespace|Job Type|Preemptions"))
+		output = append(output, "Job ID|Namespace|Job Type|Preemptions")
 		for jobType, jobCounts := range allocDetails {
 			for jobId, count := range jobCounts {
 				output = append(output, fmt.Sprintf("%s|%s|%s|%d", jobId.id, jobId.namespace, jobType, count))
@@ -272,7 +292,7 @@ func (c *JobPlanCommand) addPreemptions(resp *api.JobPlanResponse) {
 		}
 	} else {
 		// Show counts grouped by job type
-		output = append(output, fmt.Sprintf("Job Type|Preemptions"))
+		output = append(output, "Job Type|Preemptions")
 		for jobType, jobCounts := range allocDetails {
 			total := 0
 			for _, count := range jobCounts {

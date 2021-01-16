@@ -40,16 +40,19 @@ export default Factory.extend({
   withTaskWithPorts: trait({
     afterCreate(allocation, server) {
       const taskGroup = server.db.taskGroups.findBy({ name: allocation.taskGroup });
-      const resources = taskGroup.taskIds.map(id =>
-        server.create(
-          'task-resource',
-          {
-            allocation,
-            name: server.db.tasks.find(id).name,
-          },
-          'withReservedPorts'
-        )
-      );
+      const resources = taskGroup.taskIds.map(id => {
+        const task = server.db.tasks.find(id);
+        return server.create('task-resource', {
+          allocation,
+          name: task.name,
+          resources: generateResources({
+            CPU: task.resources.CPU,
+            MemoryMB: task.resources.MemoryMB,
+            DiskMB: task.resources.DiskMB,
+            networks: { minPorts: 1 },
+          }),
+        });
+      });
 
       allocation.update({ taskResourceIds: resources.mapBy('id') });
     },
@@ -58,26 +61,21 @@ export default Factory.extend({
   withoutTaskWithPorts: trait({
     afterCreate(allocation, server) {
       const taskGroup = server.db.taskGroups.findBy({ name: allocation.taskGroup });
-      const resources = taskGroup.taskIds.map(id =>
-        server.create(
-          'task-resource',
-          {
-            allocation,
-            name: server.db.tasks.find(id).name,
-          },
-          'withoutReservedPorts'
-        )
-      );
+      const resources = taskGroup.taskIds.map(id => {
+        const task = server.db.tasks.find(id);
+        return server.create('task-resource', {
+          allocation,
+          name: task.name,
+          resources: generateResources({
+            CPU: task.resources.CPU,
+            MemoryMB: task.resources.MemoryMB,
+            DiskMB: task.resources.DiskMB,
+            networks: { minPorts: 0, maxPorts: 0 },
+          }),
+        });
+      });
 
       allocation.update({ taskResourceIds: resources.mapBy('id') });
-    },
-  }),
-
-  withAllocatedResources: trait({
-    allocatedResources: () => {
-      return {
-        Shared: generateResources({ networks: { minPorts: 2 } }),
-      };
     },
   }),
 
@@ -191,16 +189,18 @@ export default Factory.extend({
         })
       );
 
-      const resources = taskGroup.taskIds.map(id =>
-        server.create('task-resource', {
+      const resources = taskGroup.taskIds.map(id => {
+        const task = server.db.tasks.find(id);
+        return server.create('task-resource', {
           allocation,
-          name: server.db.tasks.find(id).name,
-        })
-      );
+          name: task.name,
+          resources: task.originalResources,
+        });
+      });
 
       allocation.update({
         taskStateIds: allocation.clientStatus === 'pending' ? [] : states.mapBy('id'),
-        taskResourceIds: allocation.clientStatus === 'pending' ? [] : resources.mapBy('id'),
+        taskResourceIds: resources.mapBy('id'),
       });
 
       // Each allocation has a corresponding allocation stats running on some client.

@@ -172,7 +172,7 @@ func (o *CSIMountOptions) Merge(p *CSIMountOptions) {
 	}
 }
 
-// VolumeMountOptions implements the Stringer and GoStringer interfaces to prevent
+// CSIMountOptions implements the Stringer and GoStringer interfaces to prevent
 // accidental leakage of sensitive mount flags via logs.
 var _ fmt.Stringer = &CSIMountOptions{}
 var _ fmt.GoStringer = &CSIMountOptions{}
@@ -226,6 +226,7 @@ const (
 	CSIVolumeClaimStateNodeDetached
 	CSIVolumeClaimStateControllerDetached
 	CSIVolumeClaimStateReadyToFree
+	CSIVolumeClaimStateUnpublishing
 )
 
 // CSIVolume is the full representation of a CSI Volume
@@ -305,22 +306,14 @@ func NewCSIVolume(volumeID string, index uint64) *CSIVolume {
 }
 
 func (v *CSIVolume) newStructs() {
-	if v.Topologies == nil {
-		v.Topologies = []*CSITopology{}
-	}
-	if v.Context == nil {
-		v.Context = map[string]string{}
-	}
-	if v.Parameters == nil {
-		v.Parameters = map[string]string{}
-	}
-	if v.Secrets == nil {
-		v.Secrets = CSISecrets{}
-	}
+	v.Topologies = []*CSITopology{}
+	v.MountOptions = new(CSIMountOptions)
+	v.Secrets = CSISecrets{}
+	v.Parameters = map[string]string{}
+	v.Context = map[string]string{}
 
 	v.ReadAllocs = map[string]*Allocation{}
 	v.WriteAllocs = map[string]*Allocation{}
-
 	v.ReadClaims = map[string]*CSIVolumeClaim{}
 	v.WriteClaims = map[string]*CSIVolumeClaim{}
 	v.PastClaims = map[string]*CSIVolumeClaim{}
@@ -384,8 +377,13 @@ func (v *CSIVolume) WriteSchedulable() bool {
 // WriteFreeClaims determines if there are any free write claims available
 func (v *CSIVolume) WriteFreeClaims() bool {
 	switch v.AccessMode {
-	case CSIVolumeAccessModeSingleNodeWriter, CSIVolumeAccessModeMultiNodeSingleWriter, CSIVolumeAccessModeMultiNodeMultiWriter:
-		return len(v.WriteAllocs) == 0
+	case CSIVolumeAccessModeSingleNodeWriter, CSIVolumeAccessModeMultiNodeSingleWriter:
+		return len(v.WriteClaims) == 0
+	case CSIVolumeAccessModeMultiNodeMultiWriter:
+		// the CSI spec doesn't allow for setting a max number of writers.
+		// we track node resource exhaustion through v.ResourceExhausted
+		// which is checked in WriteSchedulable
+		return true
 	default:
 		return false
 	}
@@ -399,25 +397,31 @@ func (v *CSIVolume) InUse() bool {
 
 // Copy returns a copy of the volume, which shares only the Topologies slice
 func (v *CSIVolume) Copy() *CSIVolume {
-	copy := *v
-	out := &copy
-	out.newStructs()
+	out := new(CSIVolume)
+	*out = *v
+	out.newStructs() // zero-out the non-primitive structs
+
+	for _, t := range v.Topologies {
+		out.Topologies = append(out.Topologies, t.Copy())
+	}
+	if v.MountOptions != nil {
+		*out.MountOptions = *v.MountOptions
+	}
+	for k, v := range v.Secrets {
+		out.Secrets[k] = v
+	}
 	for k, v := range v.Parameters {
 		out.Parameters[k] = v
 	}
 	for k, v := range v.Context {
 		out.Context[k] = v
 	}
-	for k, v := range v.Secrets {
-		out.Secrets[k] = v
-	}
 
-	for k, v := range v.ReadAllocs {
-		out.ReadAllocs[k] = v
+	for k, alloc := range v.ReadAllocs {
+		out.ReadAllocs[k] = alloc.Copy()
 	}
-
-	for k, v := range v.WriteAllocs {
-		out.WriteAllocs[k] = v
+	for k, alloc := range v.WriteAllocs {
+		out.WriteAllocs[k] = alloc.Copy()
 	}
 
 	for k, v := range v.ReadClaims {
@@ -438,15 +442,17 @@ func (v *CSIVolume) Copy() *CSIVolume {
 
 // Claim updates the allocations and changes the volume state
 func (v *CSIVolume) Claim(claim *CSIVolumeClaim, alloc *Allocation) error {
-	switch claim.Mode {
-	case CSIVolumeClaimRead:
-		return v.ClaimRead(claim, alloc)
-	case CSIVolumeClaimWrite:
-		return v.ClaimWrite(claim, alloc)
-	case CSIVolumeClaimRelease:
-		return v.ClaimRelease(claim)
+
+	if claim.State == CSIVolumeClaimStateTaken {
+		switch claim.Mode {
+		case CSIVolumeClaimRead:
+			return v.ClaimRead(claim, alloc)
+		case CSIVolumeClaimWrite:
+			return v.ClaimWrite(claim, alloc)
+		}
 	}
-	return nil
+	// either GC or a Unpublish checkpoint
+	return v.ClaimRelease(claim)
 }
 
 // ClaimRead marks an allocation as using a volume read-only
@@ -490,7 +496,7 @@ func (v *CSIVolume) ClaimWrite(claim *CSIVolumeClaim, alloc *Allocation) error {
 	if !v.WriteFreeClaims() {
 		// Check the blocking allocations to see if they belong to this job
 		for _, a := range v.WriteAllocs {
-			if a.Namespace != alloc.Namespace || a.JobID != alloc.JobID {
+			if a != nil && (a.Namespace != alloc.Namespace || a.JobID != alloc.JobID) {
 				return fmt.Errorf("volume max claim reached")
 			}
 		}
@@ -573,6 +579,16 @@ func (v *CSIVolume) Validate() error {
 	if v.AttachmentMode == "" {
 		errs = append(errs, "missing attachment mode")
 	}
+	if v.AttachmentMode == CSIVolumeAttachmentModeBlockDevice {
+		if v.MountOptions != nil {
+			if v.MountOptions.FSType != "" {
+				errs = append(errs, "mount options not allowed for block-device")
+			}
+			if v.MountOptions.MountFlags != nil && len(v.MountOptions.MountFlags) != 0 {
+				errs = append(errs, "mount options not allowed for block-device")
+			}
+		}
+	}
 
 	// TODO: Volume Topologies are optional - We should check to see if the plugin
 	//       the volume is being registered with requires them.
@@ -618,7 +634,11 @@ type CSIVolumeClaimMode int
 const (
 	CSIVolumeClaimRead CSIVolumeClaimMode = iota
 	CSIVolumeClaimWrite
-	CSIVolumeClaimRelease
+
+	// for GC we don't have a specific claim to set the state on, so instead we
+	// create a new claim for GC in order to bump the ModifyIndex and trigger
+	// volumewatcher
+	CSIVolumeClaimGC
 )
 
 type CSIVolumeClaimBatchRequest struct {
@@ -753,19 +773,19 @@ func (p *CSIPlugin) Copy() *CSIPlugin {
 	out.newStructs()
 
 	for k, v := range p.Controllers {
-		out.Controllers[k] = v
+		out.Controllers[k] = v.Copy()
 	}
 
 	for k, v := range p.Nodes {
-		out.Nodes[k] = v
+		out.Nodes[k] = v.Copy()
 	}
 
 	for k, v := range p.ControllerJobs {
-		out.ControllerJobs[k] = v
+		out.ControllerJobs[k] = v.Copy()
 	}
 
 	for k, v := range p.NodeJobs {
-		out.NodeJobs[k] = v
+		out.NodeJobs[k] = v.Copy()
 	}
 
 	return out
@@ -966,6 +986,14 @@ type JobDescription struct {
 
 // JobNamespacedDescriptions maps Job.ID to JobDescription
 type JobNamespacedDescriptions map[string]JobDescription
+
+func (j JobNamespacedDescriptions) Copy() JobNamespacedDescriptions {
+	copy := JobNamespacedDescriptions{}
+	for k, v := range j {
+		copy[k] = v
+	}
+	return copy
+}
 
 // JobDescriptions maps Namespace to a mapping of Job.ID to JobDescription
 type JobDescriptions map[string]JobNamespacedDescriptions

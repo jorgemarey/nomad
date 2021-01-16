@@ -35,7 +35,10 @@ func TestVolumeWatch_EnableDisable(t *testing.T) {
 	err := srv.State().CSIVolumeRegister(index, []*structs.CSIVolume{vol})
 	require.NoError(err)
 
-	claim := &structs.CSIVolumeClaim{Mode: structs.CSIVolumeClaimRelease}
+	claim := &structs.CSIVolumeClaim{
+		Mode:  structs.CSIVolumeClaimGC,
+		State: structs.CSIVolumeClaimStateNodeDetached,
+	}
 	index++
 	err = srv.State().CSIVolumeClaim(index, vol.Namespace, vol.ID, claim)
 	require.NoError(err)
@@ -111,10 +114,10 @@ func TestVolumeWatch_StartStop(t *testing.T) {
 	alloc2.Job = alloc1.Job
 	alloc2.ClientStatus = structs.AllocClientStatusRunning
 	index++
-	err := srv.State().UpsertJob(index, alloc1.Job)
+	err := srv.State().UpsertJob(structs.MsgTypeTestSetup, index, alloc1.Job)
 	require.NoError(err)
 	index++
-	err = srv.State().UpsertAllocs(index, []*structs.Allocation{alloc1, alloc2})
+	err = srv.State().UpsertAllocs(structs.MsgTypeTestSetup, index, []*structs.Allocation{alloc1, alloc2})
 	require.NoError(err)
 
 	// register a volume
@@ -147,7 +150,6 @@ func TestVolumeWatch_StartStop(t *testing.T) {
 	claim = &structs.CSIVolumeClaim{
 		AllocationID: alloc1.ID,
 		NodeID:       node.ID,
-		Mode:         structs.CSIVolumeClaimRelease,
 	}
 	index++
 	err = srv.State().CSIVolumeClaim(index, vol.Namespace, vol.ID, claim)
@@ -160,7 +162,7 @@ func TestVolumeWatch_StartStop(t *testing.T) {
 	// alloc becomes terminal
 	alloc1.ClientStatus = structs.AllocClientStatusComplete
 	index++
-	err = srv.State().UpsertAllocs(index, []*structs.Allocation{alloc1})
+	err = srv.State().UpsertAllocs(structs.MsgTypeTestSetup, index, []*structs.Allocation{alloc1})
 	require.NoError(err)
 	index++
 	claim.State = structs.CSIVolumeClaimStateReadyToFree

@@ -11,6 +11,7 @@ import (
 
 	"github.com/hashicorp/nomad/api"
 	"github.com/hashicorp/nomad/helper"
+	flaghelper "github.com/hashicorp/nomad/helper/flags"
 	"github.com/posener/complete"
 )
 
@@ -60,9 +61,15 @@ Alias: nomad run
   precedence, going from highest to lowest: the -vault-token flag, the
   $VAULT_TOKEN environment variable and finally the value in the job file.
 
+  When ACLs are enabled, this command requires a token with the 'submit-job'
+  capability for the job's namespace. Jobs that mount CSI volumes require a
+  token with the 'csi-mount-volume' capability for the volume's
+  namespace. Jobs that mount host volumes require a token with the
+  'host_volume' capability for that volume.
+
 General Options:
 
-  ` + generalOptionsUsage() + `
+  ` + generalOptionsUsage(usageOptsDefault) + `
 
 Run Options:
 
@@ -79,6 +86,9 @@ Run Options:
     the evaluation ID will be printed to the screen, which can be used to
     examine the evaluation using the eval-status command.
 
+  -hcl1
+    Parses the job file as HCLv1.
+
   -output
     Output the JSON that would be submitted to the HTTP API without submitting
     the job.
@@ -88,7 +98,7 @@ Run Options:
 
   -preserve-counts
     If set, the existing task group counts will be preserved when updating a job.
- 
+
   -consul-token
     If set, the passed Consul token is stored in the job before sending to the
     Nomad servers. This allows passing the Consul token without storing it in
@@ -104,6 +114,12 @@ Run Options:
   -vault-namespace
     If set, the passed Vault namespace is stored in the job before sending to the
     Nomad servers.
+
+  -var 'key=value'
+    Variable for template, can be used multiple times.
+
+  -var-file=path
+    Path to HCL2 file containing user variables.
 
   -verbose
     Display full information.
@@ -127,6 +143,9 @@ func (c *JobRunCommand) AutocompleteFlags() complete.Flags {
 			"-output":          complete.PredictNothing,
 			"-policy-override": complete.PredictNothing,
 			"-preserve-counts": complete.PredictNothing,
+			"-hcl1":            complete.PredictNothing,
+			"-var":             complete.PredictAnything,
+			"-var-file":        complete.PredictFiles("*.var"),
 		})
 }
 
@@ -139,20 +158,24 @@ func (c *JobRunCommand) Name() string { return "job run" }
 func (c *JobRunCommand) Run(args []string) int {
 	var detach, verbose, output, override, preserveCounts bool
 	var checkIndexStr, consulToken, vaultToken, vaultNamespace string
+	var varArgs, varFiles flaghelper.StringFlag
 
-	flags := c.Meta.FlagSet(c.Name(), FlagSetClient)
-	flags.Usage = func() { c.Ui.Output(c.Help()) }
-	flags.BoolVar(&detach, "detach", false, "")
-	flags.BoolVar(&verbose, "verbose", false, "")
-	flags.BoolVar(&output, "output", false, "")
-	flags.BoolVar(&override, "policy-override", false, "")
-	flags.BoolVar(&preserveCounts, "preserve-counts", false, "")
-	flags.StringVar(&checkIndexStr, "check-index", "", "")
-	flags.StringVar(&consulToken, "consul-token", "", "")
-	flags.StringVar(&vaultToken, "vault-token", "", "")
-	flags.StringVar(&vaultNamespace, "vault-namespace", "", "")
+	flagSet := c.Meta.FlagSet(c.Name(), FlagSetClient)
+	flagSet.Usage = func() { c.Ui.Output(c.Help()) }
+	flagSet.BoolVar(&detach, "detach", false, "")
+	flagSet.BoolVar(&verbose, "verbose", false, "")
+	flagSet.BoolVar(&output, "output", false, "")
+	flagSet.BoolVar(&override, "policy-override", false, "")
+	flagSet.BoolVar(&preserveCounts, "preserve-counts", false, "")
+	flagSet.BoolVar(&c.JobGetter.hcl1, "hcl1", false, "")
+	flagSet.StringVar(&checkIndexStr, "check-index", "", "")
+	flagSet.StringVar(&consulToken, "consul-token", "", "")
+	flagSet.StringVar(&vaultToken, "vault-token", "", "")
+	flagSet.StringVar(&vaultNamespace, "vault-namespace", "", "")
+	flagSet.Var(&varArgs, "var", "")
+	flagSet.Var(&varFiles, "var-file", "")
 
-	if err := flags.Parse(args); err != nil {
+	if err := flagSet.Parse(args); err != nil {
 		return 1
 	}
 
@@ -163,7 +186,7 @@ func (c *JobRunCommand) Run(args []string) int {
 	}
 
 	// Check that we got exactly one argument
-	args = flags.Args()
+	args = flagSet.Args()
 	if len(args) != 1 {
 		c.Ui.Error("This command takes one argument: <path>")
 		c.Ui.Error(commandErrorText(c))
@@ -171,7 +194,7 @@ func (c *JobRunCommand) Run(args []string) int {
 	}
 
 	// Get Job struct from Jobfile
-	job, err := c.JobGetter.ApiJob(args[0])
+	job, err := c.JobGetter.ApiJobWithArgs(args[0], varArgs, varFiles)
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("Error getting job struct: %s", err))
 		return 1
@@ -305,7 +328,7 @@ func (c *JobRunCommand) Run(args []string) int {
 
 	// Detach was not specified, so start monitoring
 	mon := newMonitor(c.Ui, client, length)
-	return mon.monitor(evalID, false)
+	return mon.monitor(evalID)
 
 }
 

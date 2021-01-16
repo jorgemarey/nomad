@@ -18,9 +18,13 @@ Usage: nomad volume detach [options] <vol id> <node id>
 
   Detach a volume from a Nomad client.
 
+  When ACLs are enabled, this command requires a token with the
+  'csi-write-volume' and 'csi-read-volume' capabilities for the volume's
+  namespace.
+
 General Options:
 
-  ` + generalOptionsUsage() + `
+  ` + generalOptionsUsage(usageOptsDefault) + `
 
 `
 	return strings.TrimSpace(helpText)
@@ -48,9 +52,7 @@ func (c *VolumeDetachCommand) AutocompleteArgs() complete.Predictor {
 		if err != nil {
 			return []string{}
 		}
-		for _, match := range resp.Matches[contexts.Nodes] {
-			matches = append(matches, match)
-		}
+		matches = append(matches, resp.Matches[contexts.Nodes]...)
 		return matches
 	})
 }
@@ -85,6 +87,49 @@ func (c *VolumeDetachCommand) Run(args []string) int {
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("Error initializing client: %s", err))
 		return 1
+	}
+
+	nodeID = sanitizeUUIDPrefix(nodeID)
+	nodes, _, err := client.Nodes().PrefixList(nodeID)
+	if err != nil {
+		c.Ui.Error(fmt.Sprintf("Error detaching volume: %s", err))
+		return 1
+	}
+
+	if len(nodes) > 1 {
+		c.Ui.Error(fmt.Sprintf("Prefix matched multiple nodes\n\n%s",
+			formatNodeStubList(nodes, true)))
+		return 1
+	}
+
+	if len(nodes) == 1 {
+		nodeID = nodes[0].ID
+	}
+
+	// If the Nodes.PrefixList doesn't return a node, the node may have been
+	// GC'd. The unpublish workflow gracefully handles this case so that we
+	// can free the claim. Make a best effort to find a node ID among the
+	// volume's claimed allocations, otherwise just use the node ID we've been
+	// given.
+	if len(nodes) == 0 {
+		vol, _, err := client.CSIVolumes().Info(volID, nil)
+		if err != nil {
+			c.Ui.Error(fmt.Sprintf("Error querying volume: %s", err))
+			return 1
+		}
+		nodeIDs := []string{}
+		for _, alloc := range vol.Allocations {
+			if strings.HasPrefix(alloc.NodeID, nodeID) {
+				nodeIDs = append(nodeIDs, alloc.NodeID)
+			}
+		}
+		if len(nodeIDs) > 1 {
+			c.Ui.Error(fmt.Sprintf("Prefix matched multiple node IDs\n\n%s",
+				formatList(nodeIDs)))
+		}
+		if len(nodeIDs) == 1 {
+			nodeID = nodeIDs[0]
+		}
 	}
 
 	err = client.CSIVolumes().Detach(volID, nodeID, nil)

@@ -288,6 +288,7 @@ func TestConnect_connectUpstreams(t *testing.T) {
 			}, {
 				DestinationName: "bar",
 				LocalBindPort:   9000,
+				Datacenter:      "dc2",
 			}},
 			connectUpstreams([]structs.ConsulUpstream{{
 				DestinationName: "foo",
@@ -295,6 +296,7 @@ func TestConnect_connectUpstreams(t *testing.T) {
 			}, {
 				DestinationName: "bar",
 				LocalBindPort:   9000,
+				Datacenter:      "dc2",
 			}}),
 		)
 	})
@@ -424,6 +426,17 @@ func TestConnect_newConnectGateway(t *testing.T) {
 			Config: map[string]interface{}{
 				"connect_timeout_ms": int64(1000),
 			},
+		}, result)
+	})
+
+	t.Run("proxy undefined", func(t *testing.T) {
+		result := newConnectGateway("s1", &structs.ConsulConnect{
+			Gateway: &structs.ConsulGateway{
+				Proxy: nil,
+			},
+		})
+		require.Equal(t, &api.AgentServiceConnectProxyConfig{
+			Config: nil,
 		}, result)
 	})
 

@@ -55,9 +55,9 @@ func (s *HTTPServer) NamespaceCreateRequest(resp http.ResponseWriter, req *http.
 }
 
 func (s *HTTPServer) namespaceQuery(resp http.ResponseWriter, req *http.Request,
-	name string) (interface{}, error) {
+	namespaceName string) (interface{}, error) {
 	args := structs.NamespaceSpecificRequest{
-		Name: name,
+		Name: namespaceName,
 	}
 	if s.parse(resp, req, &args.Region, &args.QueryOptions) {
 		return nil, nil
@@ -76,7 +76,7 @@ func (s *HTTPServer) namespaceQuery(resp http.ResponseWriter, req *http.Request,
 }
 
 func (s *HTTPServer) namespaceUpdate(resp http.ResponseWriter, req *http.Request,
-	name string) (interface{}, error) {
+	namespaceName string) (interface{}, error) {
 	// Parse the namespace
 	var namespace structs.Namespace
 	if err := decodeBody(req, &namespace); err != nil {
@@ -84,7 +84,7 @@ func (s *HTTPServer) namespaceUpdate(resp http.ResponseWriter, req *http.Request
 	}
 
 	// Ensure the namespace name matches
-	if name != "" && namespace.Name != name {
+	if namespaceName != "" && namespace.Name != namespaceName {
 		return nil, CodedError(400, "Namespace name does not match request path")
 	}
 
@@ -103,10 +103,10 @@ func (s *HTTPServer) namespaceUpdate(resp http.ResponseWriter, req *http.Request
 }
 
 func (s *HTTPServer) namespaceDelete(resp http.ResponseWriter, req *http.Request,
-	name string) (interface{}, error) {
+	namespaceName string) (interface{}, error) {
 
 	args := structs.NamespaceDeleteRequest{
-		Namespaces: []string{name},
+		Namespaces: []string{namespaceName},
 	}
 	s.parseWriteRequest(req, &args.WriteRequest)
 

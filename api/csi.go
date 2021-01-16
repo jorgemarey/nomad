@@ -41,9 +41,6 @@ func (v *CSIVolumes) Info(id string, q *QueryOptions) (*CSIVolume, *QueryMeta, e
 		return nil, nil, err
 	}
 
-	// Cleanup allocation representation for the ui
-	resp.allocs()
-
 	return &resp, qm, nil
 }
 
@@ -89,9 +86,9 @@ const (
 )
 
 type CSIMountOptions struct {
-	FSType       string   `hcl:"fs_type"`
-	MountFlags   []string `hcl:"mount_flags"`
-	ExtraKeysHCL []string `hcl:",unusedKeys" json:"-"` // report unexpected keys
+	FSType       string   `hcl:"fs_type,optional"`
+	MountFlags   []string `hcl:"mount_flags,optional"`
+	ExtraKeysHCL []string `hcl1:",unusedKeys" json:"-"` // report unexpected keys
 }
 
 type CSISecrets map[string]string
@@ -110,11 +107,17 @@ type CSIVolume struct {
 	Parameters     map[string]string       `hcl:"parameters"`
 	Context        map[string]string       `hcl:"context"`
 
-	// Allocations, tracking claim status
-	ReadAllocs  map[string]*Allocation
+	// ReadAllocs is a map of allocation IDs for tracking reader claim status.
+	// The Allocation value will always be nil; clients can populate this data
+	// by iterating over the Allocations field.
+	ReadAllocs map[string]*Allocation
+
+	// WriteAllocs is a map of allocation IDs for tracking writer claim
+	// status. The Allocation value will always be nil; clients can populate
+	// this data by iterating over the Allocations field.
 	WriteAllocs map[string]*Allocation
 
-	// Combine structs.{Read,Write}Allocs
+	// Allocations is a combined list of readers and writers
 	Allocations []*AllocationListStub
 
 	// Schedulable is true if all the denormalized plugin health fields are true
@@ -133,22 +136,7 @@ type CSIVolume struct {
 	ModifyIndex uint64
 
 	// ExtraKeysHCL is used by the hcl parser to report unexpected keys
-	ExtraKeysHCL []string `hcl:",unusedKeys" json:"-"`
-}
-
-// allocs is called after we query the volume (creating this CSIVolume struct) to collapse
-// allocations for the UI
-func (v *CSIVolume) allocs() {
-	for _, a := range v.WriteAllocs {
-		if a != nil {
-			v.Allocations = append(v.Allocations, a.Stub())
-		}
-	}
-	for _, a := range v.ReadAllocs {
-		if a != nil {
-			v.Allocations = append(v.Allocations, a.Stub())
-		}
-	}
+	ExtraKeysHCL []string `hcl1:",unusedKeys" json:"-"`
 }
 
 type CSIVolumeIndexSort []*CSIVolumeListStub

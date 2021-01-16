@@ -31,13 +31,6 @@ import (
 )
 
 const (
-	// maxQueryTime is used to bound the limit of a blocking query
-	maxQueryTime = 300 * time.Second
-
-	// defaultQueryTime is the amount of time we block waiting for a change
-	// if no time is specified. Previously we would wait the maxQueryTime.
-	defaultQueryTime = 300 * time.Second
-
 	// Warn if the Raft command is larger than this.
 	// If it's over 1MB something is probably being abusive.
 	raftWarnSize = 1024 * 1024
@@ -566,7 +559,7 @@ CHECK_LEADER:
 	if firstCheck.IsZero() {
 		firstCheck = time.Now()
 	}
-	if time.Now().Sub(firstCheck) < r.config.RPCHoldTimeout {
+	if time.Since(firstCheck) < r.config.RPCHoldTimeout {
 		jitter := lib.RandomStagger(r.config.RPCHoldTimeout / structs.JitterFraction)
 		select {
 		case <-time.After(jitter):
@@ -756,7 +749,7 @@ func (r *rpcHandler) setQueryMeta(m *structs.QueryMeta) {
 		m.LastContact = 0
 		m.KnownLeader = true
 	} else {
-		m.LastContact = time.Now().Sub(r.raft.LastContact())
+		m.LastContact = time.Since(r.raft.LastContact())
 		m.KnownLeader = (r.raft.Leader() != "")
 	}
 }
@@ -787,12 +780,7 @@ func (r *rpcHandler) blockingRPC(opts *blockingOptions) error {
 		goto RUN_QUERY
 	}
 
-	// Restrict the max query time, and ensure there is always one
-	if opts.queryOpts.MaxQueryTime > maxQueryTime {
-		opts.queryOpts.MaxQueryTime = maxQueryTime
-	} else if opts.queryOpts.MaxQueryTime <= 0 {
-		opts.queryOpts.MaxQueryTime = defaultQueryTime
-	}
+	opts.queryOpts.MaxQueryTime = opts.queryOpts.TimeToBlock()
 
 	// Apply a small amount of jitter to the request
 	opts.queryOpts.MaxQueryTime += lib.RandomStagger(opts.queryOpts.MaxQueryTime / structs.JitterFraction)

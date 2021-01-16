@@ -440,7 +440,11 @@ func (s *GenericScheduler) downgradedJobForPlacement(p placementResult) (string,
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to lookup job deployments: %v", err)
 	}
-	sort.Slice(deployments, func(i, j int) bool { return deployments[i].JobVersion > deployments[i].JobVersion })
+
+	sort.Slice(deployments, func(i, j int) bool {
+		return deployments[i].JobVersion > deployments[j].JobVersion
+	})
+
 	for _, d := range deployments {
 		// It's unexpected to have a recent deployment that doesn't contain the TaskGroup; as all allocations
 		// should be destroyed. In such cases, attempt to find the deployment for that TaskGroup and hopefully
@@ -701,7 +705,7 @@ func updateRescheduleTracker(alloc *structs.Allocation, prev *structs.Allocation
 
 // findPreferredNode finds the preferred node for an allocation
 func (s *GenericScheduler) findPreferredNode(place placementResult) (*structs.Node, error) {
-	if prev := place.PreviousAllocation(); prev != nil && place.TaskGroup().EphemeralDisk.Sticky == true {
+	if prev := place.PreviousAllocation(); prev != nil && place.TaskGroup().EphemeralDisk.Sticky {
 		var preferredNode *structs.Node
 		ws := memdb.NewWatchSet()
 		preferredNode, err := s.state.NodeByID(ws, prev.NodeID)
@@ -751,7 +755,7 @@ func (s *GenericScheduler) handlePreemptions(option *RankedNode, alloc *structs.
 		preemptedAllocIDs = append(preemptedAllocIDs, stop.ID)
 
 		if s.eval.AnnotatePlan && s.plan.Annotations != nil {
-			s.plan.Annotations.PreemptedAllocs = append(s.plan.Annotations.PreemptedAllocs, stop.Stub())
+			s.plan.Annotations.PreemptedAllocs = append(s.plan.Annotations.PreemptedAllocs, stop.Stub(nil))
 			if s.plan.Annotations.DesiredTGUpdates != nil {
 				desired := s.plan.Annotations.DesiredTGUpdates[missing.TaskGroup().Name]
 				desired.Preemptions += 1

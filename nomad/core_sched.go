@@ -723,7 +723,8 @@ func (c *CoreScheduler) csiVolumeClaimGC(eval *structs.Evaluation) error {
 	gcClaims := func(ns, volID string) error {
 		req := &structs.CSIVolumeClaimRequest{
 			VolumeID: volID,
-			Claim:    structs.CSIVolumeClaimRelease,
+			Claim:    structs.CSIVolumeClaimGC,
+			State:    structs.CSIVolumeClaimStateUnpublishing,
 			WriteRequest: structs.WriteRequest{
 				Namespace: ns,
 				Region:    c.srv.Region(),
@@ -860,7 +861,7 @@ func (c *CoreScheduler) csiPluginGC(eval *structs.Evaluation) error {
 			}}
 		err := c.srv.RPC("CSIPlugin.Delete", req, &structs.CSIPluginDeleteResponse{})
 		if err != nil {
-			if err.Error() == "plugin in use" {
+			if strings.Contains(err.Error(), "plugin in use") {
 				continue
 			}
 			c.logger.Error("failed to GC plugin", "plugin_id", plugin.ID, "error", err)

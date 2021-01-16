@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/hashicorp/nomad/helper/raftutil"
@@ -23,6 +22,8 @@ Usage: nomad operator raft _logs <path to nomad data dir>
 
   This is a low-level debugging tool and not subject to Nomad's usual backward
   compatibility guarantees.
+
+  If ACLs are enabled, this command requires a management token.
 `
 	return strings.TrimSpace(helpText)
 }
@@ -49,12 +50,13 @@ func (c *OperatorRaftLogsCommand) Run(args []string) int {
 		return 1
 	}
 
-	p := args[0]
-	if fi, err := os.Stat(p); err == nil && fi.IsDir() {
-		p = filepath.Join(args[0], "server", "raft", "raft.db")
+	raftPath, err := raftutil.FindRaftFile(args[0])
+	if err != nil {
+		c.Ui.Error(err.Error())
+		return 1
 	}
 
-	logs, warnings, err := raftutil.LogEntries(p)
+	logs, warnings, err := raftutil.LogEntries(raftPath)
 	if err != nil {
 		c.Ui.Error(err.Error())
 		return 1

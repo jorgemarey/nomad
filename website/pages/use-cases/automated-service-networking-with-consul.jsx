@@ -1,4 +1,4 @@
-import UseCasesLayout from 'layouts/use-cases'
+import UseCasesLayout from 'components/use-case-page'
 import TextSplitWithImage from '@hashicorp/react-text-split-with-image'
 import FeaturedSliderSection from 'components/featured-slider-section'
 
@@ -18,7 +18,7 @@ export default function AutomatedServiceNetworkingWithConsulPage() {
             {
               text: 'Read More',
               url:
-                'https://learn.hashicorp.com/nomad/operating-nomad/clustering#use-consul-to-automatically-cluster-nodes',
+                'https://learn.hashicorp.com/tutorials/nomad/clustering#use-consul-to-automatically-cluster-nodes',
               type: 'outbound',
             },
           ],

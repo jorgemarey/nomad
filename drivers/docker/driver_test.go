@@ -9,7 +9,9 @@ import (
 	"reflect"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -332,7 +334,7 @@ func TestDockerDriver_Start_StoppedContainer(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		imageID, err = d.Impl().(*Driver).loadImage(task, &taskCfg, client)
 	} else {
-		image, lErr := client.InspectImage("hashicorpnomad/busybox-windows:server2016-0.1")
+		image, lErr := client.InspectImage(taskCfg.Image)
 		err = lErr
 		if image != nil {
 			imageID = image.ID
@@ -1149,6 +1151,84 @@ func TestDockerDriver_CreateContainerConfig_Logging(t *testing.T) {
 	}
 }
 
+func TestDockerDriver_CreateContainerConfig_Mounts(t *testing.T) {
+	t.Parallel()
+
+	task, cfg, ports := dockerTask(t)
+	defer freeport.Return(ports)
+
+	cfg.Mounts = []DockerMount{
+		DockerMount{
+			Type:   "bind",
+			Target: "/map-bind-target",
+			Source: "/map-source",
+		},
+		DockerMount{
+			Type:   "tmpfs",
+			Target: "/map-tmpfs-target",
+		},
+	}
+	cfg.MountsList = []DockerMount{
+		{
+			Type:   "bind",
+			Target: "/list-bind-target",
+			Source: "/list-source",
+		},
+		{
+			Type:   "tmpfs",
+			Target: "/list-tmpfs-target",
+		},
+	}
+
+	expectedSrcPrefix := "/"
+	if runtime.GOOS == "windows" {
+		expectedSrcPrefix = "redis-demo\\"
+	}
+	expected := []docker.HostMount{
+		// from mount map
+		{
+			Type:        "bind",
+			Target:      "/map-bind-target",
+			Source:      expectedSrcPrefix + "map-source",
+			BindOptions: &docker.BindOptions{},
+		},
+		{
+			Type:          "tmpfs",
+			Target:        "/map-tmpfs-target",
+			TempfsOptions: &docker.TempfsOptions{},
+		},
+		// from mount list
+		{
+			Type:        "bind",
+			Target:      "/list-bind-target",
+			Source:      expectedSrcPrefix + "list-source",
+			BindOptions: &docker.BindOptions{},
+		},
+		{
+			Type:          "tmpfs",
+			Target:        "/list-tmpfs-target",
+			TempfsOptions: &docker.TempfsOptions{},
+		},
+	}
+
+	require.NoError(t, task.EncodeConcreteDriverConfig(cfg))
+
+	dh := dockerDriverHarness(t, nil)
+	driver := dh.Impl().(*Driver)
+	driver.config.Volumes.Enabled = true
+
+	cc, err := driver.createContainerConfig(task, cfg, "org/repo:0.1")
+	require.NoError(t, err)
+
+	found := cc.HostConfig.Mounts
+	sort.Slice(found, func(i, j int) bool { return strings.Compare(found[i].Target, found[j].Target) < 0 })
+	sort.Slice(expected, func(i, j int) bool {
+		return strings.Compare(expected[i].Target, expected[j].Target) < 0
+	})
+
+	require.Equal(t, expected, found)
+}
+
 func TestDockerDriver_CreateContainerConfigWithRuntimes(t *testing.T) {
 	if !tu.IsCI() {
 		t.Parallel()
@@ -1234,50 +1314,50 @@ func TestDockerDriver_Capabilities(t *testing.T) {
 		Name       string
 		CapAdd     []string
 		CapDrop    []string
-		Whitelist  string
+		Allowlist  string
 		StartError string
 	}{
 		{
-			Name:    "default-whitelist-add-allowed",
+			Name:    "default-allowlist-add-allowed",
 			CapAdd:  []string{"fowner", "mknod"},
 			CapDrop: []string{"all"},
 		},
 		{
-			Name:       "default-whitelist-add-forbidden",
+			Name:       "default-allowlist-add-forbidden",
 			CapAdd:     []string{"net_admin"},
 			StartError: "net_admin",
 		},
 		{
-			Name:    "default-whitelist-drop-existing",
+			Name:    "default-allowlist-drop-existing",
 			CapDrop: []string{"fowner", "mknod"},
 		},
 		{
-			Name:      "restrictive-whitelist-drop-all",
+			Name:      "restrictive-allowlist-drop-all",
 			CapDrop:   []string{"all"},
-			Whitelist: "fowner,mknod",
+			Allowlist: "fowner,mknod",
 		},
 		{
-			Name:      "restrictive-whitelist-add-allowed",
+			Name:      "restrictive-allowlist-add-allowed",
 			CapAdd:    []string{"fowner", "mknod"},
 			CapDrop:   []string{"all"},
-			Whitelist: "fowner,mknod",
+			Allowlist: "fowner,mknod",
 		},
 		{
-			Name:       "restrictive-whitelist-add-forbidden",
+			Name:       "restrictive-allowlist-add-forbidden",
 			CapAdd:     []string{"net_admin", "mknod"},
 			CapDrop:    []string{"all"},
-			Whitelist:  "fowner,mknod",
+			Allowlist:  "fowner,mknod",
 			StartError: "net_admin",
 		},
 		{
-			Name:      "permissive-whitelist",
+			Name:      "permissive-allowlist",
 			CapAdd:    []string{"net_admin", "mknod"},
-			Whitelist: "all",
+			Allowlist: "all",
 		},
 		{
-			Name:      "permissive-whitelist-add-all",
+			Name:      "permissive-allowlist-add-all",
 			CapAdd:    []string{"all"},
-			Whitelist: "all",
+			Allowlist: "all",
 		},
 	}
 
@@ -1298,8 +1378,8 @@ func TestDockerDriver_Capabilities(t *testing.T) {
 			d := dockerDriverHarness(t, nil)
 			dockerDriver, ok := d.Impl().(*Driver)
 			require.True(t, ok)
-			if tc.Whitelist != "" {
-				dockerDriver.config.AllowCaps = strings.Split(tc.Whitelist, ",")
+			if tc.Allowlist != "" {
+				dockerDriver.config.AllowCaps = strings.Split(tc.Allowlist, ",")
 			}
 
 			cleanup := d.MkAllocDir(task, true)
@@ -1378,6 +1458,53 @@ func TestDockerDriver_DNS(t *testing.T) {
 		dtestutil.TestTaskDNSConfig(t, d, task.ID, c.cfg)
 	}
 
+}
+
+func TestDockerDriver_CPUSetCPUs(t *testing.T) {
+	if !tu.IsCI() {
+		t.Parallel()
+	}
+	testutil.DockerCompatible(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not support CPUSetCPUs.")
+	}
+
+	testCases := []struct {
+		Name       string
+		CPUSetCPUs string
+	}{
+		{
+			Name:       "Single CPU",
+			CPUSetCPUs: "0",
+		},
+		{
+			Name:       "Comma separated list of CPUs",
+			CPUSetCPUs: "0,1",
+		},
+		{
+			Name:       "Range of CPUs",
+			CPUSetCPUs: "0-1",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.Name, func(t *testing.T) {
+			task, cfg, ports := dockerTask(t)
+			defer freeport.Return(ports)
+
+			cfg.CPUSetCPUs = testCase.CPUSetCPUs
+			require.NoError(t, task.EncodeConcreteDriverConfig(cfg))
+
+			client, d, handle, cleanup := dockerSetup(t, task, nil)
+			defer cleanup()
+			require.NoError(t, d.WaitUntilStarted(task.ID, 5*time.Second))
+
+			container, err := client.InspectContainer(handle.containerID)
+			require.NoError(t, err)
+
+			require.Equal(t, cfg.CPUSetCPUs, container.HostConfig.CPUSetCPUs)
+		})
+	}
 }
 
 func TestDockerDriver_MemoryHardLimit(t *testing.T) {
@@ -2021,6 +2148,15 @@ func TestDockerDriver_VolumesEnabled(t *testing.T) {
 	}
 	testutil.DockerCompatible(t)
 
+	cfg := map[string]interface{}{
+		"volumes": map[string]interface{}{
+			"enabled": true,
+		},
+		"gc": map[string]interface{}{
+			"image": false,
+		},
+	}
+
 	tmpvol, err := ioutil.TempDir("", "nomadtest_docker_volumesenabled")
 	require.NoError(t, err)
 
@@ -2028,7 +2164,7 @@ func TestDockerDriver_VolumesEnabled(t *testing.T) {
 	tmpvol, err = filepath.EvalSymlinks(tmpvol)
 	require.NoError(t, err)
 
-	task, driver, _, hostpath, cleanup := setupDockerVolumes(t, nil, tmpvol)
+	task, driver, _, hostpath, cleanup := setupDockerVolumes(t, cfg, tmpvol)
 	defer cleanup()
 
 	_, _, err = driver.StartTask(task)
@@ -2093,6 +2229,9 @@ func TestDockerDriver_Mounts(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {
 			d := dockerDriverHarness(t, nil)
+			driver := d.Impl().(*Driver)
+			driver.config.Volumes.Enabled = true
+
 			// Build the task
 			task, cfg, ports := dockerTask(t)
 			defer freeport.Return(ports)
@@ -2660,5 +2799,34 @@ func TestDockerDriver_memoryLimits(t *testing.T) {
 		memory, memoryReservation := new(Driver).memoryLimits(512, 256*1024*1024)
 		require.Equal(t, int64(512*1024*1024), memory)
 		require.Equal(t, int64(256*1024*1024), memoryReservation)
+	})
+}
+
+func TestDockerDriver_parseSignal(t *testing.T) {
+	t.Parallel()
+
+	d := new(Driver)
+
+	t.Run("default", func(t *testing.T) {
+		s, err := d.parseSignal(runtime.GOOS, "")
+		require.NoError(t, err)
+		require.Equal(t, syscall.SIGTERM, s)
+	})
+
+	t.Run("set", func(t *testing.T) {
+		s, err := d.parseSignal(runtime.GOOS, "SIGHUP")
+		require.NoError(t, err)
+		require.Equal(t, syscall.SIGHUP, s)
+	})
+
+	t.Run("windows conversion", func(t *testing.T) {
+		s, err := d.parseSignal("windows", "SIGINT")
+		require.NoError(t, err)
+		require.Equal(t, syscall.SIGTERM, s)
+	})
+
+	t.Run("not a signal", func(t *testing.T) {
+		_, err := d.parseSignal(runtime.GOOS, "SIGDOESNOTEXIST")
+		require.Error(t, err)
 	})
 }

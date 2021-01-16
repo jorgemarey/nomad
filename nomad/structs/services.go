@@ -246,7 +246,7 @@ func (sc *ServiceCheck) validate() error {
 
 	// Validate AddressMode
 	switch sc.AddressMode {
-	case "", AddressModeHost, AddressModeDriver:
+	case "", AddressModeHost, AddressModeDriver, AddressModeAlloc:
 		// Ok
 	case AddressModeAuto:
 		return fmt.Errorf("invalid address_mode %q - %s only valid for services", sc.AddressMode, AddressModeAuto)
@@ -378,6 +378,7 @@ const (
 	AddressModeAuto   = "auto"
 	AddressModeHost   = "host"
 	AddressModeDriver = "driver"
+	AddressModeAlloc  = "alloc"
 )
 
 // Service represents a Consul service definition
@@ -485,7 +486,7 @@ func (s *Service) Validate() error {
 	}
 
 	switch s.AddressMode {
-	case "", AddressModeAuto, AddressModeHost, AddressModeDriver:
+	case "", AddressModeAuto, AddressModeHost, AddressModeDriver, AddressModeAlloc:
 		// OK
 	default:
 		mErr.Errors = append(mErr.Errors, fmt.Errorf("Service address_mode must be %q, %q, or %q; not %q", AddressModeAuto, AddressModeHost, AddressModeDriver, s.AddressMode))
@@ -576,6 +577,7 @@ func hashConnect(h hash.Hash, connect *ConsulConnect) {
 			for _, upstream := range p.Upstreams {
 				hashString(h, upstream.DestinationName)
 				hashString(h, strconv.Itoa(upstream.LocalBindPort))
+				hashStringIfNonEmpty(h, upstream.Datacenter)
 			}
 		}
 	}
@@ -731,6 +733,7 @@ func (c *ConsulConnect) IsNative() bool {
 	return c != nil && c.Native
 }
 
+// IsGateway checks if the service is a Connect gateway.
 func (c *ConsulConnect) IsGateway() bool {
 	return c != nil && c.Gateway != nil
 }
@@ -1124,6 +1127,9 @@ type ConsulUpstream struct {
 	// LocalBindPort is the port the proxy will receive connections for the
 	// upstream on.
 	LocalBindPort int
+
+	// Datacenter is the datacenter in which to issue the discovery query to.
+	Datacenter string
 }
 
 func upstreamsEquals(a, b []ConsulUpstream) bool {
@@ -1152,6 +1158,7 @@ func (u *ConsulUpstream) Copy() *ConsulUpstream {
 	return &ConsulUpstream{
 		DestinationName: u.DestinationName,
 		LocalBindPort:   u.LocalBindPort,
+		Datacenter:      u.Datacenter,
 	}
 }
 

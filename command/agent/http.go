@@ -173,14 +173,12 @@ func makeConnState(isTLS bool, handshakeTimeout time.Duration, connLimit int) fu
 				MaxConnsPerClientIP: connLimit,
 			}).HTTPConnStateFunc()
 		}
-
 		return nil
 	}
 
 	if connLimit > 0 {
 		// Return conn state callback with connection limiting and a
 		// handshake timeout.
-
 		connLimiter := connlimit.NewLimiter(connlimit.Config{
 			MaxConnsPerClientIP: connLimit,
 		}).HTTPConnStateFunc()
@@ -326,6 +324,11 @@ func (s *HTTPServer) registerHandlers(enableDebug bool) {
 
 	s.mux.HandleFunc("/v1/operator/scheduler/configuration", s.wrap(s.OperatorSchedulerConfiguration))
 
+	s.mux.HandleFunc("/v1/event/stream", s.wrap(s.EventStream))
+	s.mux.HandleFunc("/v1/namespaces", s.wrap(s.NamespacesRequest))
+	s.mux.HandleFunc("/v1/namespace", s.wrap(s.NamespaceCreateRequest))
+	s.mux.HandleFunc("/v1/namespace/", s.wrap(s.NamespaceSpecificRequest))
+
 	if uiEnabled {
 		s.mux.Handle("/ui/", http.StripPrefix("/ui/", s.handleUI(http.FileServer(&UIAssetWrapper{FileSystem: assetFS()}))))
 	} else {
@@ -395,7 +398,6 @@ func (s *HTTPServer) handleUI(h http.Handler) http.Handler {
 		header := w.Header()
 		header.Add("Content-Security-Policy", "default-src 'none'; connect-src *; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'")
 		h.ServeHTTP(w, req)
-		return
 	})
 }
 
@@ -443,7 +445,7 @@ func (s *HTTPServer) wrap(handler func(resp http.ResponseWriter, req *http.Reque
 		reqURL := req.URL.String()
 		start := time.Now()
 		defer func() {
-			s.logger.Debug("request complete", "method", req.Method, "path", reqURL, "duration", time.Now().Sub(start))
+			s.logger.Debug("request complete", "method", req.Method, "path", reqURL, "duration", time.Since(start))
 		}()
 		obj, err := s.auditHandler(handler)(resp, req)
 
@@ -519,7 +521,7 @@ func (s *HTTPServer) wrapNonJSON(handler func(resp http.ResponseWriter, req *htt
 		reqURL := req.URL.String()
 		start := time.Now()
 		defer func() {
-			s.logger.Debug("request complete", "method", req.Method, "path", reqURL, "duration", time.Now().Sub(start))
+			s.logger.Debug("request complete", "method", req.Method, "path", reqURL, "duration", time.Since(start))
 		}()
 		obj, err := s.auditNonJSONHandler(handler)(resp, req)
 
@@ -590,7 +592,7 @@ func setMeta(resp http.ResponseWriter, m *structs.QueryMeta) {
 // setHeaders is used to set canonical response header fields
 func setHeaders(resp http.ResponseWriter, headers map[string]string) {
 	for field, value := range headers {
-		resp.Header().Set(http.CanonicalHeaderKey(field), value)
+		resp.Header().Set(field, value)
 	}
 }
 
@@ -651,6 +653,20 @@ func parseNamespace(req *http.Request, n *string) {
 	} else if *n == "" {
 		*n = structs.DefaultNamespace
 	}
+}
+
+// parseBool parses a query parameter to a boolean or returns (nil, nil) if the
+// parameter is not present.
+func parseBool(req *http.Request, field string) (*bool, error) {
+	if str := req.URL.Query().Get(field); str != "" {
+		param, err := strconv.ParseBool(str)
+		if err != nil {
+			return nil, fmt.Errorf("Failed to parse value of %q (%v) as a bool: %v", field, str, err)
+		}
+		return &param, nil
+	}
+
+	return nil, nil
 }
 
 // parseToken is used to parse the X-Nomad-Token param

@@ -5,6 +5,7 @@ import { setupMirage } from 'ember-cli-mirage/test-support';
 import a11yAudit from 'nomad-ui/tests/helpers/a11y-audit';
 import { formatBytes } from 'nomad-ui/helpers/format-bytes';
 import TaskGroup from 'nomad-ui/tests/pages/jobs/job/task-group';
+import Layout from 'nomad-ui/tests/pages/layout';
 import pageSizeSelect from './behaviors/page-size-select';
 import moment from 'moment';
 
@@ -74,8 +75,8 @@ module('Acceptance | task group detail', function(hooks) {
   });
 
   test('/jobs/:id/:task-group should list high-level metrics for the allocation', async function(assert) {
-    const totalCPU = tasks.mapBy('Resources.CPU').reduce(sum, 0);
-    const totalMemory = tasks.mapBy('Resources.MemoryMB').reduce(sum, 0);
+    const totalCPU = tasks.mapBy('resources.CPU').reduce(sum, 0);
+    const totalMemory = tasks.mapBy('resources.MemoryMB').reduce(sum, 0);
     const totalDisk = taskGroup.ephemeralDisk.SizeMB;
 
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
@@ -103,14 +104,14 @@ module('Acceptance | task group detail', function(hooks) {
   test('/jobs/:id/:task-group should have breadcrumbs for job and jobs', async function(assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
 
-    assert.equal(TaskGroup.breadcrumbFor('jobs.index').text, 'Jobs', 'First breadcrumb says jobs');
+    assert.equal(Layout.breadcrumbFor('jobs.index').text, 'Jobs', 'First breadcrumb says jobs');
     assert.equal(
-      TaskGroup.breadcrumbFor('jobs.job.index').text,
+      Layout.breadcrumbFor('jobs.job.index').text,
       job.name,
       'Second breadcrumb says the job name'
     );
     assert.equal(
-      TaskGroup.breadcrumbFor('jobs.job.task-group').text,
+      Layout.breadcrumbFor('jobs.job.task-group').text,
       taskGroup.name,
       'Third breadcrumb says the job name'
     );
@@ -119,14 +120,14 @@ module('Acceptance | task group detail', function(hooks) {
   test('/jobs/:id/:task-group first breadcrumb should link to jobs', async function(assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
 
-    await TaskGroup.breadcrumbFor('jobs.index').visit();
+    await Layout.breadcrumbFor('jobs.index').visit();
     assert.equal(currentURL(), '/jobs', 'First breadcrumb links back to jobs');
   });
 
   test('/jobs/:id/:task-group second breadcrumb should link to the job for the task group', async function(assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
 
-    await TaskGroup.breadcrumbFor('jobs.job.index').visit();
+    await Layout.breadcrumbFor('jobs.job.index').visit();
     assert.equal(
       currentURL(),
       `/jobs/${job.id}`,
@@ -199,8 +200,8 @@ module('Acceptance | task group detail', function(hooks) {
     const allocStats = server.db.clientAllocationStats.find(allocation.id);
     const tasks = taskGroup.taskIds.map(id => server.db.tasks.find(id));
 
-    const cpuUsed = tasks.reduce((sum, task) => sum + task.Resources.CPU, 0);
-    const memoryUsed = tasks.reduce((sum, task) => sum + task.Resources.MemoryMB, 0);
+    const cpuUsed = tasks.reduce((sum, task) => sum + task.resources.CPU, 0);
+    const memoryUsed = tasks.reduce((sum, task) => sum + task.resources.MemoryMB, 0);
 
     assert.equal(
       allocationRow.cpu,

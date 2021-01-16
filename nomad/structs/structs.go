@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"hash/crc32"
 	"math"
 	"net"
@@ -55,55 +56,60 @@ type MessageType uint8
 // note: new raft message types need to be added to the end of this
 // list of contents
 const (
-	NodeRegisterRequestType MessageType = iota
-	NodeDeregisterRequestType
-	NodeUpdateStatusRequestType
-	NodeUpdateDrainRequestType
-	JobRegisterRequestType
-	JobDeregisterRequestType
-	EvalUpdateRequestType
-	EvalDeleteRequestType
-	AllocUpdateRequestType
-	AllocClientUpdateRequestType
-	ReconcileJobSummariesRequestType
-	VaultAccessorRegisterRequestType
-	VaultAccessorDeregisterRequestType
-	ApplyPlanResultsRequestType
-	DeploymentStatusUpdateRequestType
-	DeploymentPromoteRequestType
-	DeploymentAllocHealthRequestType
-	DeploymentDeleteRequestType
-	JobStabilityRequestType
-	ACLPolicyUpsertRequestType
-	ACLPolicyDeleteRequestType
-	ACLTokenUpsertRequestType
-	ACLTokenDeleteRequestType
-	ACLTokenBootstrapRequestType
-	// Here were the namespace messageTypes
-	AutopilotRequestType
-	UpsertNodeEventsType
-	JobBatchDeregisterRequestType
-	AllocUpdateDesiredTransitionRequestType
-	NodeUpdateEligibilityRequestType
-	BatchNodeUpdateDrainRequestType
-	SchedulerConfigRequestType
-	NodeBatchDeregisterRequestType
-	ClusterMetadataRequestType
-	ServiceIdentityAccessorRegisterRequestType
-	ServiceIdentityAccessorDeregisterRequestType
-	CSIVolumeRegisterRequestType
-	CSIVolumeDeregisterRequestType
-	CSIVolumeClaimRequestType
-	ScalingEventRegisterRequestType
-	CSIVolumeClaimBatchRequestType
-	CSIPluginDeleteRequestType
+	NodeRegisterRequestType                      MessageType = 0
+	NodeDeregisterRequestType                    MessageType = 1
+	NodeUpdateStatusRequestType                  MessageType = 2
+	NodeUpdateDrainRequestType                   MessageType = 3
+	JobRegisterRequestType                       MessageType = 4
+	JobDeregisterRequestType                     MessageType = 5
+	EvalUpdateRequestType                        MessageType = 6
+	EvalDeleteRequestType                        MessageType = 7
+	AllocUpdateRequestType                       MessageType = 8
+	AllocClientUpdateRequestType                 MessageType = 9
+	ReconcileJobSummariesRequestType             MessageType = 10
+	VaultAccessorRegisterRequestType             MessageType = 11
+	VaultAccessorDeregisterRequestType           MessageType = 12
+	ApplyPlanResultsRequestType                  MessageType = 13
+	DeploymentStatusUpdateRequestType            MessageType = 14
+	DeploymentPromoteRequestType                 MessageType = 15
+	DeploymentAllocHealthRequestType             MessageType = 16
+	DeploymentDeleteRequestType                  MessageType = 17
+	JobStabilityRequestType                      MessageType = 18
+	ACLPolicyUpsertRequestType                   MessageType = 19
+	ACLPolicyDeleteRequestType                   MessageType = 20
+	ACLTokenUpsertRequestType                    MessageType = 21
+	ACLTokenDeleteRequestType                    MessageType = 22
+	ACLTokenBootstrapRequestType                 MessageType = 23
+	AutopilotRequestType                         MessageType = 24
+	UpsertNodeEventsType                         MessageType = 25
+	JobBatchDeregisterRequestType                MessageType = 26
+	AllocUpdateDesiredTransitionRequestType      MessageType = 27
+	NodeUpdateEligibilityRequestType             MessageType = 28
+	BatchNodeUpdateDrainRequestType              MessageType = 29
+	SchedulerConfigRequestType                   MessageType = 30
+	NodeBatchDeregisterRequestType               MessageType = 31
+	ClusterMetadataRequestType                   MessageType = 32
+	ServiceIdentityAccessorRegisterRequestType   MessageType = 33
+	ServiceIdentityAccessorDeregisterRequestType MessageType = 34
+	CSIVolumeRegisterRequestType                 MessageType = 35
+	CSIVolumeDeregisterRequestType               MessageType = 36
+	CSIVolumeClaimRequestType                    MessageType = 37
+	ScalingEventRegisterRequestType              MessageType = 38
+	CSIVolumeClaimBatchRequestType               MessageType = 39
+	CSIPluginDeleteRequestType                   MessageType = 40
+	EventSinkUpsertRequestType                   MessageType = 41
+	EventSinkDeleteRequestType                   MessageType = 42
+	BatchEventSinkUpdateProgressType             MessageType = 43
+
+	// Namespace types were moved from enterprise and therefore start at 64
+	// MEIGAS: When we made the initial code we set them at 24 and 25
+	NamespaceUpsertRequestType MessageType = 64
+	NamespaceDeleteRequestType MessageType = 65
 )
 
 const (
-	NamespaceUpsertRequestType      MessageType = (64 + iota)
-	NamespaceDeleteRequestType                  // 65
-	SentinelPolicyUpsertRequestType             // 66
-	SentinelPolicyDeleteRequestType             // 67
+	SentinelPolicyUpsertRequestType MessageType = 66
+	SentinelPolicyDeleteRequestType MessageType = 67
 	// Quota1                              // 68
 	// Quota2                              // 69
 	// ??                                  // 70
@@ -119,6 +125,10 @@ const (
 	// that new commands can be added in a way that won't cause
 	// old servers to crash when the FSM attempts to process them.
 	IgnoreUnknownTypeFlag MessageType = 128
+
+	// MsgTypeTestSetup is used during testing when calling state store
+	// methods directly that require an FSM MessageType
+	MsgTypeTestSetup MessageType = IgnoreUnknownTypeFlag
 
 	// ApiMajorVersion is returned as part of the Status.Version request.
 	// It should be incremented anytime the APIs are changed in a way
@@ -157,6 +167,9 @@ const (
 	// to indicate that endpoints must search in all namespaces
 	AllNamespacesSentinel = "*"
 
+	// maxNamespaceDescriptionLength limits a namespace description length
+	maxNamespaceDescriptionLength = 256
+
 	// JitterFraction is a the limit to the amount of jitter we apply
 	// to a user specified MaxQueryTime. We divide the specified time by
 	// the fraction. So 16 == 6.25% limit of jitter. This jitter is also
@@ -173,6 +186,18 @@ const (
 
 	// Normalized scorer name
 	NormScorerName = "normalized-score"
+
+	// MaxBlockingRPCQueryTime is used to bound the limit of a blocking query
+	MaxBlockingRPCQueryTime = 300 * time.Second
+
+	// DefaultBlockingRPCQueryTime is the amount of time we block waiting for a change
+	// if no time is specified. Previously we would wait the MaxBlockingRPCQueryTime.
+	DefaultBlockingRPCQueryTime = 300 * time.Second
+)
+
+var (
+	// validNamespaceName is used to validate a namespace name
+	validNamespaceName = regexp.MustCompile("^[a-zA-Z0-9-]{1,128}$")
 )
 
 // Context defines the scope in which a search for Nomad object operates, and
@@ -180,16 +205,17 @@ const (
 type Context string
 
 const (
-	Allocs      Context = "allocs"
-	Deployments Context = "deployment"
-	Evals       Context = "evals"
-	Jobs        Context = "jobs"
-	Nodes       Context = "nodes"
-	Namespaces  Context = "namespaces"
-	Quotas      Context = "quotas"
-	All         Context = "all"
-	Plugins     Context = "plugins"
-	Volumes     Context = "volumes"
+	Allocs          Context = "allocs"
+	Deployments     Context = "deployment"
+	Evals           Context = "evals"
+	Jobs            Context = "jobs"
+	Nodes           Context = "nodes"
+	Namespaces      Context = "namespaces"
+	Quotas          Context = "quotas"
+	Recommendations Context = "recommendations"
+	All             Context = "all"
+	Plugins         Context = "plugins"
+	Volumes         Context = "volumes"
 )
 
 // NamespacedID is a tuple of an ID and a namespace
@@ -217,6 +243,11 @@ type RPCInfo interface {
 	AllowStaleRead() bool
 	IsForwarded() bool
 	SetForwarded()
+	TimeToBlock() time.Duration
+	// TimeToBlock sets how long this request can block. The requested time may not be possible,
+	// so Callers should readback TimeToBlock. E.g. you cannot set time to block at all on WriteRequests
+	// and it cannot exceed MaxBlockingRPCQueryTime
+	SetTimeToBlock(t time.Duration)
 }
 
 // InternalRpcInfo allows adding internal RPC metadata to an RPC. This struct
@@ -269,6 +300,24 @@ type QueryOptions struct {
 	AuthToken string
 
 	InternalRpcInfo
+}
+
+// TimeToBlock returns MaxQueryTime adjusted for maximums and defaults
+// it will return 0 if this is not a blocking query
+func (q QueryOptions) TimeToBlock() time.Duration {
+	if q.MinQueryIndex == 0 {
+		return 0
+	}
+	if q.MaxQueryTime > MaxBlockingRPCQueryTime {
+		return MaxBlockingRPCQueryTime
+	} else if q.MaxQueryTime <= 0 {
+		return DefaultBlockingRPCQueryTime
+	}
+	return q.MaxQueryTime
+}
+
+func (q QueryOptions) SetTimeToBlock(t time.Duration) {
+	q.MaxQueryTime = t
 }
 
 func (q QueryOptions) RequestRegion() string {
@@ -354,6 +403,13 @@ type WriteRequest struct {
 	AuthToken string
 
 	InternalRpcInfo
+}
+
+func (w WriteRequest) TimeToBlock() time.Duration {
+	return 0
+}
+
+func (w WriteRequest) SetTimeToBlock(_ time.Duration) {
 }
 
 func (w WriteRequest) RequestRegion() string {
@@ -660,13 +716,12 @@ type JobPlanRequest struct {
 // JobScaleRequest is used for the Job.Scale endpoint to scale one of the
 // scaling targets in a job
 type JobScaleRequest struct {
-	Namespace string
-	JobID     string
-	Target    map[string]string
-	Count     *int64
-	Message   string
-	Error     bool
-	Meta      map[string]interface{}
+	JobID   string
+	Target  map[string]string
+	Count   *int64
+	Message string
+	Error   bool
+	Meta    map[string]interface{}
 	// PolicyOverride is set when the user is attempting to override any policies
 	PolicyOverride bool
 	WriteRequest
@@ -744,6 +799,8 @@ type JobStabilityResponse struct {
 // NodeListRequest is used to parameterize a list request
 type NodeListRequest struct {
 	QueryOptions
+
+	Fields *NodeStubFields
 }
 
 // EvalUpdateRequest is used for upserting evaluations.
@@ -889,6 +946,8 @@ type AllocStopResponse struct {
 // AllocListRequest is used to request a list of allocations
 type AllocListRequest struct {
 	QueryOptions
+
+	Fields *AllocStubFields
 }
 
 // AllocSpecificRequest is used to query a specific allocation
@@ -1144,6 +1203,8 @@ type SingleScalingPolicyResponse struct {
 
 // ScalingPolicyListRequest is used to parameterize a scaling policy list request
 type ScalingPolicyListRequest struct {
+	Job  string
+	Type string
 	QueryOptions
 }
 
@@ -1758,7 +1819,7 @@ type Node struct {
 
 	// Resources is the available resources on the client.
 	// For example 'cpu=2' 'memory=2048'
-	// COMPAT(0.10): Remove in 0.10
+	// COMPAT(0.10): Remove after 0.10
 	Resources *Resources
 
 	// Reserved is the set of resources that are reserved,
@@ -1766,6 +1827,7 @@ type Node struct {
 	// the purposes of scheduling. This may be provide certain
 	// high-watermark tolerances or because of external schedulers
 	// consuming resources.
+	// COMPAT(0.10): Remove after 0.10
 	Reserved *Resources
 
 	// Links are used to 'link' this client to external
@@ -2027,11 +2089,11 @@ func (n *Node) ComparableResources() *ComparableResources {
 }
 
 // Stub returns a summarized version of the node
-func (n *Node) Stub() *NodeListStub {
+func (n *Node) Stub(fields *NodeStubFields) *NodeListStub {
 
 	addr, _, _ := net.SplitHostPort(n.HTTPAddr)
 
-	return &NodeListStub{
+	s := &NodeListStub{
 		Address:               addr,
 		ID:                    n.ID,
 		Datacenter:            n.Datacenter,
@@ -2047,6 +2109,15 @@ func (n *Node) Stub() *NodeListStub {
 		CreateIndex:           n.CreateIndex,
 		ModifyIndex:           n.ModifyIndex,
 	}
+
+	if fields != nil {
+		if fields.Resources {
+			s.NodeResources = n.NodeResources
+			s.ReservedResources = n.ReservedResources
+		}
+	}
+
+	return s
 }
 
 // NodeListStub is used to return a subset of job information
@@ -2064,8 +2135,15 @@ type NodeListStub struct {
 	StatusDescription     string
 	Drivers               map[string]*DriverInfo
 	HostVolumes           map[string]*ClientHostVolumeConfig
+	NodeResources         *NodeResources         `json:",omitempty"`
+	ReservedResources     *NodeReservedResources `json:",omitempty"`
 	CreateIndex           uint64
 	ModifyIndex           uint64
+}
+
+// NodeStubFields defines which fields are included in the NodeListStub.
+type NodeStubFields struct {
+	Resources bool
 }
 
 // Resources is used to define the resources available
@@ -2101,7 +2179,7 @@ func DefaultResources() *Resources {
 // api/resources.go and should be kept in sync.
 func MinResources() *Resources {
 	return &Resources{
-		CPU:      20,
+		CPU:      1,
 		MemoryMB: 10,
 	}
 }
@@ -2225,12 +2303,6 @@ func (r *Resources) MeetsMinResources() error {
 	if r.MemoryMB < minResources.MemoryMB {
 		mErr.Errors = append(mErr.Errors, fmt.Errorf("minimum MemoryMB value is %d; got %d", minResources.MemoryMB, r.MemoryMB))
 	}
-	for i, n := range r.Networks {
-		if err := n.MeetsMinResources(); err != nil {
-			mErr.Errors = append(mErr.Errors, fmt.Errorf("network resource at index %d failed: %v", i, err))
-		}
-	}
-
 	return mErr.ErrorOrNil()
 }
 
@@ -2392,6 +2464,20 @@ type DNSConfig struct {
 	Options  []string
 }
 
+func (d *DNSConfig) Copy() *DNSConfig {
+	if d == nil {
+		return nil
+	}
+	newD := new(DNSConfig)
+	newD.Servers = make([]string, len(d.Servers))
+	copy(newD.Servers, d.Servers)
+	newD.Searches = make([]string, len(d.Searches))
+	copy(newD.Searches, d.Searches)
+	newD.Options = make([]string, len(d.Options))
+	copy(newD.Options, d.Options)
+	return newD
+}
+
 // NetworkResource is used to represent available network
 // resources
 type NetworkResource struct {
@@ -2444,16 +2530,6 @@ func (n *NetworkResource) Canonicalize() {
 			n.ReservedPorts[i].HostNetwork = "default"
 		}
 	}
-}
-
-// MeetsMinResources returns an error if the resources specified are less than
-// the minimum allowed.
-func (n *NetworkResource) MeetsMinResources() error {
-	var mErr multierror.Error
-	if n.MBits < 1 {
-		mErr.Errors = append(mErr.Errors, fmt.Errorf("minimum MBits value is 1; got %d", n.MBits))
-	}
-	return mErr.ErrorOrNil()
 }
 
 // Copy returns a deep copy of the network resource
@@ -3293,6 +3369,7 @@ func (a *AllocatedResources) Comparable() *ComparableResources {
 	prestartSidecarTasks := &AllocatedTaskResources{}
 	prestartEphemeralTasks := &AllocatedTaskResources{}
 	main := &AllocatedTaskResources{}
+	poststopTasks := &AllocatedTaskResources{}
 
 	for taskName, r := range a.Tasks {
 		lc := a.TaskLifecycles[taskName]
@@ -3304,11 +3381,14 @@ func (a *AllocatedResources) Comparable() *ComparableResources {
 			} else {
 				prestartEphemeralTasks.Add(r)
 			}
+		} else if lc.Hook == TaskLifecycleHookPoststop {
+			poststopTasks.Add(r)
 		}
 	}
 
 	// update this loop to account for lifecycle hook
 	prestartEphemeralTasks.Max(main)
+	prestartEphemeralTasks.Max(poststopTasks)
 	prestartSidecarTasks.Add(prestartEphemeralTasks)
 	c.Flattened.Add(prestartSidecarTasks)
 
@@ -3334,6 +3414,23 @@ func (a *AllocatedResources) OldTaskResources() map[string]*Resources {
 	}
 
 	return m
+}
+
+func (a *AllocatedResources) Canonicalize() {
+	a.Shared.Canonicalize()
+
+	for _, r := range a.Tasks {
+		for _, nw := range r.Networks {
+			for _, port := range append(nw.DynamicPorts, nw.ReservedPorts...) {
+				a.Shared.Ports = append(a.Shared.Ports, AllocatedPortMapping{
+					Label:  port.Label,
+					Value:  port.Value,
+					To:     port.To,
+					HostIP: nw.IP,
+				})
+			}
+		}
+	}
 }
 
 // AllocatedTaskResources are the set of resources allocated to a task.
@@ -3442,11 +3539,7 @@ func (a *AllocatedTaskResources) Comparable() *ComparableResources {
 			},
 		},
 	}
-	if len(a.Networks) > 0 {
-		for _, net := range a.Networks {
-			ret.Flattened.Networks = append(ret.Flattened.Networks, net)
-		}
-	}
+	ret.Flattened.Networks = append(ret.Flattened.Networks, a.Networks...)
 	return ret
 }
 
@@ -3960,9 +4053,13 @@ func (j *Job) Validate() error {
 		mErr.Errors = append(mErr.Errors, errors.New("Missing job ID"))
 	} else if strings.Contains(j.ID, " ") {
 		mErr.Errors = append(mErr.Errors, errors.New("Job ID contains a space"))
+	} else if strings.Contains(j.ID, "\000") {
+		mErr.Errors = append(mErr.Errors, errors.New("Job ID contains a null character"))
 	}
 	if j.Name == "" {
 		mErr.Errors = append(mErr.Errors, errors.New("Missing job name"))
+	} else if strings.Contains(j.Name, "\000") {
+		mErr.Errors = append(mErr.Errors, errors.New("Job Name contains a null character"))
 	}
 	if j.Namespace == "" {
 		mErr.Errors = append(mErr.Errors, errors.New("Job must be in a namespace"))
@@ -4655,9 +4752,7 @@ func (m *Multiregion) Copy() *Multiregion {
 			Datacenters: []string{},
 			Meta:        map[string]string{},
 		}
-		for _, dc := range region.Datacenters {
-			copyRegion.Datacenters = append(copyRegion.Datacenters, dc)
-		}
+		copyRegion.Datacenters = append(copyRegion.Datacenters, region.Datacenters...)
 		for k, v := range region.Meta {
 			copyRegion.Meta[k] = v
 		}
@@ -4676,6 +4771,126 @@ type MultiregionRegion struct {
 	Count       int
 	Datacenters []string
 	Meta        map[string]string
+}
+
+// Namespace allows logically grouping jobs and their associated objects.
+type Namespace struct {
+	// Name is the name of the namespace
+	Name string
+
+	// Description is a human readable description of the namespace
+	Description string
+
+	// Quota is the quota specification that the namespace should account
+	// against.
+	Quota string
+
+	// Hash is the hash of the namespace which is used to efficiently replicate
+	// cross-regions.
+	Hash []byte
+
+	// Raft Indexes
+	CreateIndex uint64
+	ModifyIndex uint64
+}
+
+func (n *Namespace) Validate() error {
+	var mErr multierror.Error
+
+	// Validate the name and description
+	if !validNamespaceName.MatchString(n.Name) {
+		err := fmt.Errorf("invalid name %q. Must match regex %s", n.Name, validNamespaceName)
+		mErr.Errors = append(mErr.Errors, err)
+	}
+	if len(n.Description) > maxNamespaceDescriptionLength {
+		err := fmt.Errorf("description longer than %d", maxNamespaceDescriptionLength)
+		mErr.Errors = append(mErr.Errors, err)
+	}
+
+	return mErr.ErrorOrNil()
+}
+
+// SetHash is used to compute and set the hash of the namespace
+func (n *Namespace) SetHash() []byte {
+	// Initialize a 256bit Blake2 hash (32 bytes)
+	hash, err := blake2b.New256(nil)
+	if err != nil {
+		panic(err)
+	}
+
+	// Write all the user set fields
+	hash.Write([]byte(n.Name))
+	hash.Write([]byte(n.Description))
+	hash.Write([]byte(n.Quota))
+
+	// Finalize the hash
+	hashVal := hash.Sum(nil)
+
+	// Set and return the hash
+	n.Hash = hashVal
+	return hashVal
+}
+
+func (n *Namespace) Copy() *Namespace {
+	nc := new(Namespace)
+	*nc = *n
+	nc.Hash = make([]byte, len(n.Hash))
+	copy(nc.Hash, n.Hash)
+	return nc
+}
+
+// NamespaceListRequest is used to request a list of namespaces
+type NamespaceListRequest struct {
+	QueryOptions
+}
+
+// NamespaceListResponse is used for a list request
+type NamespaceListResponse struct {
+	Namespaces []*Namespace
+	QueryMeta
+}
+
+// NamespaceSpecificRequest is used to query a specific namespace
+type NamespaceSpecificRequest struct {
+	Name string
+	QueryOptions
+}
+
+// SingleNamespaceResponse is used to return a single namespace
+type SingleNamespaceResponse struct {
+	Namespace *Namespace
+	QueryMeta
+}
+
+// NamespaceSetRequest is used to query a set of namespaces
+type NamespaceSetRequest struct {
+	Namespaces []string
+	QueryOptions
+}
+
+// NamespaceSetResponse is used to return a set of namespaces
+type NamespaceSetResponse struct {
+	Namespaces map[string]*Namespace // Keyed by namespace Name
+	QueryMeta
+}
+
+// NamespaceDeleteRequest is used to delete a set of namespaces
+type NamespaceDeleteRequest struct {
+	Namespaces []string
+	WriteRequest
+}
+
+// NamespaceUpsertRequest is used to upsert a set of namespaces
+type NamespaceUpsertRequest struct {
+	Namespaces []*Namespace
+	WriteRequest
+}
+
+// NamespaceUpsertRequestv0 is used to upsert a set of namespaces
+// Here only for backcompat
+type NamespaceUpsertRequestv0 struct {
+	Namespace *Namespace
+	WriteRequest
 }
 
 const (
@@ -4938,6 +5153,7 @@ func (d *DispatchPayloadConfig) Validate() error {
 const (
 	TaskLifecycleHookPrestart  = "prestart"
 	TaskLifecycleHookPoststart = "poststart"
+	TaskLifecycleHookPoststop  = "poststop"
 )
 
 type TaskLifecycleConfig struct {
@@ -4962,6 +5178,7 @@ func (d *TaskLifecycleConfig) Validate() error {
 	switch d.Hook {
 	case TaskLifecycleHookPrestart:
 	case TaskLifecycleHookPoststart:
+	case TaskLifecycleHookPoststop:
 	case "":
 		return fmt.Errorf("no lifecycle hook provided")
 	default:
@@ -5103,6 +5320,9 @@ type ScalingPolicy struct {
 	// ID is a generated UUID used for looking up the scaling policy
 	ID string
 
+	// Type is the type of scaling performed by the policy
+	Type string
+
 	// Target contains information about the target of the scaling policy, like job and group
 	Target map[string]string
 
@@ -5122,11 +5342,105 @@ type ScalingPolicy struct {
 	ModifyIndex uint64
 }
 
+// JobKey returns a key that is unique to a job-scoped target, useful as a map
+// key. This uses the policy type, plus target (group and task).
+func (p *ScalingPolicy) JobKey() string {
+	return p.Type + "\000" +
+		p.Target[ScalingTargetGroup] + "\000" +
+		p.Target[ScalingTargetTask]
+}
+
 const (
 	ScalingTargetNamespace = "Namespace"
 	ScalingTargetJob       = "Job"
 	ScalingTargetGroup     = "Group"
+	ScalingTargetTask      = "Task"
+
+	ScalingPolicyTypeHorizontal = "horizontal"
 )
+
+func (p *ScalingPolicy) Canonicalize() {
+	if p.Type == "" {
+		p.Type = ScalingPolicyTypeHorizontal
+	}
+}
+
+func (p *ScalingPolicy) Copy() *ScalingPolicy {
+	if p == nil {
+		return nil
+	}
+
+	opaquePolicyConfig, err := copystructure.Copy(p.Policy)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	c := ScalingPolicy{
+		ID:          p.ID,
+		Policy:      opaquePolicyConfig.(map[string]interface{}),
+		Enabled:     p.Enabled,
+		Type:        p.Type,
+		Min:         p.Min,
+		Max:         p.Max,
+		CreateIndex: p.CreateIndex,
+		ModifyIndex: p.ModifyIndex,
+	}
+	c.Target = make(map[string]string, len(p.Target))
+	for k, v := range p.Target {
+		c.Target[k] = v
+	}
+	return &c
+}
+
+func (p *ScalingPolicy) Validate() error {
+	if p == nil {
+		return nil
+	}
+
+	var mErr multierror.Error
+
+	// Check policy type and target
+	if p.Type == "" {
+		mErr.Errors = append(mErr.Errors, fmt.Errorf("missing scaling policy type"))
+	} else {
+		mErr.Errors = append(mErr.Errors, p.validateType().Errors...)
+	}
+
+	// Check Min and Max
+	if p.Max < 0 {
+		mErr.Errors = append(mErr.Errors,
+			fmt.Errorf("maximum count must be specified and non-negative"))
+	} else if p.Max < p.Min {
+		mErr.Errors = append(mErr.Errors,
+			fmt.Errorf("maximum count must not be less than minimum count"))
+	}
+
+	if p.Min < 0 {
+		mErr.Errors = append(mErr.Errors,
+			fmt.Errorf("minimum count must be specified and non-negative"))
+	}
+
+	return mErr.ErrorOrNil()
+}
+
+func (p *ScalingPolicy) validateTargetHorizontal() (mErr multierror.Error) {
+	if len(p.Target) == 0 {
+		// This is probably not a Nomad horizontal policy
+		return
+	}
+
+	// Nomad horizontal policies should have Namespace, Job and TaskGroup
+	if p.Target[ScalingTargetNamespace] == "" {
+		mErr.Errors = append(mErr.Errors, fmt.Errorf("missing target namespace"))
+	}
+	if p.Target[ScalingTargetJob] == "" {
+		mErr.Errors = append(mErr.Errors, fmt.Errorf("missing target job"))
+	}
+	if p.Target[ScalingTargetGroup] == "" {
+		mErr.Errors = append(mErr.Errors, fmt.Errorf("missing target group"))
+	}
+	return
+}
 
 // Diff indicates whether the specification for a given scaling policy has changed
 func (p *ScalingPolicy) Diff(p2 *ScalingPolicy) bool {
@@ -5137,6 +5451,7 @@ func (p *ScalingPolicy) Diff(p2 *ScalingPolicy) bool {
 	return !reflect.DeepEqual(*p, copy)
 }
 
+// TarketTaskGroup updates a ScalingPolicy target to specify a given task group
 func (p *ScalingPolicy) TargetTaskGroup(job *Job, tg *TaskGroup) *ScalingPolicy {
 	p.Target = map[string]string{
 		ScalingTargetNamespace: job.Namespace,
@@ -5146,9 +5461,17 @@ func (p *ScalingPolicy) TargetTaskGroup(job *Job, tg *TaskGroup) *ScalingPolicy 
 	return p
 }
 
+// TargetTask updates a ScalingPolicy target to specify a given task
+func (p *ScalingPolicy) TargetTask(job *Job, tg *TaskGroup, task *Task) *ScalingPolicy {
+	p.TargetTaskGroup(job, tg)
+	p.Target[ScalingTargetTask] = task.Name
+	return p
+}
+
 func (p *ScalingPolicy) Stub() *ScalingPolicyListStub {
 	stub := &ScalingPolicyListStub{
 		ID:          p.ID,
+		Type:        p.Type,
 		Target:      make(map[string]string),
 		Enabled:     p.Enabled,
 		CreateIndex: p.CreateIndex,
@@ -5170,6 +5493,8 @@ func (j *Job) GetScalingPolicies() []*ScalingPolicy {
 		}
 	}
 
+	ret = append(ret, j.GetEntScalingPolicies()...)
+
 	return ret
 }
 
@@ -5178,6 +5503,7 @@ func (j *Job) GetScalingPolicies() []*ScalingPolicy {
 type ScalingPolicyListStub struct {
 	ID          string
 	Enabled     bool
+	Type        string
 	Target      map[string]string
 	CreateIndex uint64
 	ModifyIndex uint64
@@ -5594,7 +5920,7 @@ func (tg *TaskGroup) Copy() *TaskGroup {
 	ntg.Affinities = CopySliceAffinities(ntg.Affinities)
 	ntg.Spreads = CopySliceSpreads(ntg.Spreads)
 	ntg.Volumes = CopyMapVolumeRequest(ntg.Volumes)
-	ntg.Scaling = CopyScalingPolicy(ntg.Scaling)
+	ntg.Scaling = ntg.Scaling.Copy()
 
 	// Copy the network objects
 	if tg.Networks != nil {
@@ -5664,6 +5990,10 @@ func (tg *TaskGroup) Canonicalize(job *Job) {
 		tg.EphemeralDisk = DefaultEphemeralDisk()
 	}
 
+	if tg.Scaling != nil {
+		tg.Scaling.Canonicalize()
+	}
+
 	for _, service := range tg.Services {
 		service.Canonicalize(job.Name, tg.Name, "group")
 	}
@@ -5682,6 +6012,8 @@ func (tg *TaskGroup) Validate(j *Job) error {
 	var mErr multierror.Error
 	if tg.Name == "" {
 		mErr.Errors = append(mErr.Errors, errors.New("Missing task group name"))
+	} else if strings.Contains(tg.Name, "\000") {
+		mErr.Errors = append(mErr.Errors, errors.New("Task group name contains null character"))
 	}
 	if tg.Count < 0 {
 		mErr.Errors = append(mErr.Errors, errors.New("Task group count can't be negative"))
@@ -5852,7 +6184,7 @@ func (tg *TaskGroup) Validate(j *Job) error {
 			}
 		}
 
-		if err := task.Validate(tg.EphemeralDisk, j.Type, tg.Services); err != nil {
+		if err := task.Validate(tg.EphemeralDisk, j.Type, tg.Services, tg.Networks); err != nil {
 			outer := fmt.Errorf("Task %s validation failed: %v", task.Name, err)
 			mErr.Errors = append(mErr.Errors, outer)
 		}
@@ -5960,6 +6292,9 @@ func (tg *TaskGroup) validateServices() error {
 			// error messages to provide the user.
 			continue
 		}
+		if service.AddressMode == AddressModeDriver {
+			mErr.Errors = append(mErr.Errors, fmt.Errorf("service %q cannot use address_mode=\"driver\", only services defined in a \"task\" block can use this mode", service.Name))
+		}
 		// if _, ok := knownServices[service.Name+service.PortLabel]; ok {
 		// 	mErr.Errors = append(mErr.Errors, fmt.Errorf("Service %s is duplicate", service.Name))
 		// }
@@ -5969,6 +6304,9 @@ func (tg *TaskGroup) validateServices() error {
 				if check.Type != ServiceCheckScript && check.Type != ServiceCheckGRPC {
 					mErr.Errors = append(mErr.Errors,
 						fmt.Errorf("Check %s invalid: only script and gRPC checks should have tasks", check.Name))
+				}
+				if check.AddressMode == AddressModeDriver {
+					mErr.Errors = append(mErr.Errors, fmt.Errorf("Check %q invalid: cannot use address_mode=\"driver\", only checks defined in a \"task\" service block can use this mode", service.Name))
 				}
 				if _, ok := knownTasks[check.TaskName]; !ok {
 					mErr.Errors = append(mErr.Errors,
@@ -6009,19 +6347,19 @@ func (tg *TaskGroup) validateScalingPolicy(j *Job) error {
 
 	var mErr multierror.Error
 
-	// was invalid or not specified; don't bother testing anything else involving max
-	if tg.Scaling.Max < 0 {
+	err := tg.Scaling.Validate()
+	if err != nil {
+		// prefix scaling policy errors
+		if me, ok := err.(*multierror.Error); ok {
+			for _, e := range me.Errors {
+				mErr.Errors = append(mErr.Errors, fmt.Errorf("Scaling policy invalid: %s", e))
+			}
+		}
+	}
+
+	if tg.Scaling.Max < int64(tg.Count) {
 		mErr.Errors = append(mErr.Errors,
-			fmt.Errorf("Scaling policy invalid: maximum count must be specified and non-negative"))
-	} else {
-		if tg.Scaling.Max < tg.Scaling.Min {
-			mErr.Errors = append(mErr.Errors,
-				fmt.Errorf("Scaling policy invalid: maximum count must not be less than minimum count"))
-		}
-		if tg.Scaling.Max < int64(tg.Count) {
-			mErr.Errors = append(mErr.Errors,
-				fmt.Errorf("Scaling policy invalid: task group count must not be greater than maximum count in scaling policy"))
-		}
+			fmt.Errorf("Scaling policy invalid: task group count must not be greater than maximum count in scaling policy"))
 	}
 
 	if int64(tg.Count) < tg.Scaling.Min && !(j.IsMultiregion() && tg.Count == 0 && j.Region == "global") {
@@ -6045,6 +6383,11 @@ func (tg *TaskGroup) Warnings(j *Job) error {
 				fmt.Errorf("Update max parallel count is greater than task group count (%d > %d). "+
 					"A destructive change would result in the simultaneous replacement of all allocations.", u.MaxParallel, tg.Count))
 		}
+	}
+
+	// Check for mbits network field
+	if len(tg.Networks) > 0 && tg.Networks[0].MBits > 0 {
+		mErr.Errors = append(mErr.Errors, fmt.Errorf("mbits has been deprecated as of Nomad 0.12.0. Please remove mbits from the network block"))
 	}
 
 	for _, t := range tg.Tasks {
@@ -6165,8 +6508,6 @@ const (
 type LogConfig struct {
 	MaxFiles      int
 	MaxFileSizeMB int
-	Driver        string
-	Config        map[string]interface{}
 }
 
 func (l *LogConfig) Equals(o *LogConfig) bool {
@@ -6290,7 +6631,8 @@ type Task struct {
 	// attached to this task.
 	VolumeMounts []*VolumeMount
 
-	// The kill signal to use for the task. This is an optional specification,
+	// ScalingPolicies is a list of scaling policies scoped to this task
+	ScalingPolicies []*ScalingPolicy
 
 	// KillSignal is the kill signal to use for the task. This is an optional
 	// specification and defaults to SIGINT
@@ -6309,7 +6651,11 @@ type Task struct {
 // Task, which exports known types of Tasks. UsesConnect will be true if the
 // task is a connect proxy, connect native, or is a connect gateway.
 func (t *Task) UsesConnect() bool {
-	return t.Kind.IsConnectProxy() || t.Kind.IsConnectNative() || t.Kind.IsAnyConnectGateway()
+	return t.Kind.IsConnectNative() || t.UsesConnectSidecar()
+}
+
+func (t *Task) UsesConnectSidecar() bool {
+	return t.Kind.IsConnectProxy() || t.Kind.IsAnyConnectGateway()
 }
 
 func (t *Task) Copy() *Task {
@@ -6413,7 +6759,7 @@ func (t *Task) GoString() string {
 }
 
 // Validate is used to sanity check a task
-func (t *Task) Validate(ephemeralDisk *EphemeralDisk, jobType string, tgServices []*Service) error {
+func (t *Task) Validate(ephemeralDisk *EphemeralDisk, jobType string, tgServices []*Service, tgNetworks Networks) error {
 	var mErr multierror.Error
 	if t.Name == "" {
 		mErr.Errors = append(mErr.Errors, errors.New("Missing task name"))
@@ -6422,6 +6768,8 @@ func (t *Task) Validate(ephemeralDisk *EphemeralDisk, jobType string, tgServices
 		// We enforce this so that when creating the directory on disk it will
 		// not have any slashes.
 		mErr.Errors = append(mErr.Errors, errors.New("Task name cannot include slashes"))
+	} else if strings.Contains(t.Name, "\000") {
+		mErr.Errors = append(mErr.Errors, errors.New("Task name cannot include null characters"))
 	}
 	if t.Driver == "" {
 		mErr.Errors = append(mErr.Errors, errors.New("Missing task driver"))
@@ -6474,7 +6822,7 @@ func (t *Task) Validate(ephemeralDisk *EphemeralDisk, jobType string, tgServices
 	}
 
 	// Validate Services
-	if err := validateServices(t); err != nil {
+	if err := validateServices(t, tgNetworks); err != nil {
 		mErr.Errors = append(mErr.Errors, err)
 	}
 
@@ -6572,7 +6920,7 @@ func (t *Task) Validate(ephemeralDisk *EphemeralDisk, jobType string, tgServices
 
 // validateServices takes a task and validates the services within it are valid
 // and reference ports that exist.
-func validateServices(t *Task) error {
+func validateServices(t *Task, tgNetworks Networks) error {
 	var mErr multierror.Error
 
 	// Ensure that services don't ask for nonexistent ports and their names are
@@ -6589,6 +6937,10 @@ func validateServices(t *Task) error {
 		if err := service.Validate(); err != nil {
 			outer := fmt.Errorf("service[%d] %+q validation failed: %s", i, service.Name, err)
 			mErr.Errors = append(mErr.Errors, outer)
+		}
+
+		if service.AddressMode == AddressModeAlloc {
+			mErr.Errors = append(mErr.Errors, fmt.Errorf("service %q cannot use address_mode=\"alloc\", only services defined in a \"group\" block can use this mode", service.Name))
 		}
 
 		// Ensure that services with the same name are not being registered for
@@ -6618,6 +6970,10 @@ func validateServices(t *Task) error {
 				mErr.Errors = append(mErr.Errors, fmt.Errorf("check %q is duplicate", check.Name))
 			}
 			knownChecks[check.Name] = struct{}{}
+
+			if check.AddressMode == AddressModeAlloc {
+				mErr.Errors = append(mErr.Errors, fmt.Errorf("check %q cannot use address_mode=\"alloc\", only checks defined in a \"group\" service block can use this mode", service.Name))
+			}
 
 			if !check.RequiresPort() {
 				// No need to continue validating check if it doesn't need a port
@@ -6659,12 +7015,22 @@ func validateServices(t *Task) error {
 		}
 	}
 
-	// Get the set of port labels.
+	// Get the set of group port labels.
 	portLabels := make(map[string]struct{})
+	if len(tgNetworks) > 0 {
+		ports := tgNetworks[0].PortLabels()
+		for portLabel := range ports {
+			portLabels[portLabel] = struct{}{}
+		}
+	}
+
+	// COMPAT(0.13)
+	// Append the set of task port labels. (Note that network resources on the
+	// task resources are deprecated, but we must let them continue working; a
+	// warning will be emitted on job submission).
 	if t.Resources != nil {
 		for _, network := range t.Resources.Networks {
-			ports := network.PortLabels()
-			for portLabel := range ports {
+			for portLabel := range network.PortLabels() {
 				portLabels[portLabel] = struct{}{}
 			}
 		}
@@ -6705,6 +7071,10 @@ func (t *Task) Warnings() error {
 	// Validate the resources
 	if t.Resources != nil && t.Resources.IOPS != 0 {
 		mErr.Errors = append(mErr.Errors, fmt.Errorf("IOPS has been deprecated as of Nomad 0.9.0. Please remove IOPS from resource stanza."))
+	}
+
+	if t.Resources != nil && len(t.Resources.Networks) != 0 {
+		mErr.Errors = append(mErr.Errors, fmt.Errorf("task network resources have been deprecated as of Nomad 0.12.0. Please configure networking via group network block."))
 	}
 
 	for idx, tmpl := range t.Templates {
@@ -7563,6 +7933,10 @@ type TaskArtifact struct {
 	// go-getter.
 	GetterOptions map[string]string
 
+	// GetterHeaders are headers to use when downloading the artifact using
+	// go-getter.
+	GetterHeaders map[string]string
+
 	// GetterMode is the go-getter.ClientMode for fetching resources.
 	// Defaults to "any" but can be set to "file" or "dir".
 	GetterMode string
@@ -7576,40 +7950,48 @@ func (ta *TaskArtifact) Copy() *TaskArtifact {
 	if ta == nil {
 		return nil
 	}
-	nta := new(TaskArtifact)
-	*nta = *ta
-	nta.GetterOptions = helper.CopyMapStringString(ta.GetterOptions)
-	return nta
+	return &TaskArtifact{
+		GetterSource:  ta.GetterSource,
+		GetterOptions: helper.CopyMapStringString(ta.GetterOptions),
+		GetterHeaders: helper.CopyMapStringString(ta.GetterHeaders),
+		GetterMode:    ta.GetterMode,
+		RelativeDest:  ta.RelativeDest,
+	}
 }
 
 func (ta *TaskArtifact) GoString() string {
 	return fmt.Sprintf("%+v", ta)
 }
 
-// Hash creates a unique identifier for a TaskArtifact as the same GetterSource
-// may be specified multiple times with different destinations.
-func (ta *TaskArtifact) Hash() string {
-	hash, err := blake2b.New256(nil)
-	if err != nil {
-		panic(err)
-	}
-
-	hash.Write([]byte(ta.GetterSource))
-
-	// Must iterate over keys in a consistent order
-	keys := make([]string, 0, len(ta.GetterOptions))
-	for k := range ta.GetterOptions {
+// hashStringMap appends a deterministic hash of m onto h.
+func hashStringMap(h hash.Hash, m map[string]string) {
+	keys := make([]string, 0, len(m))
+	for k := range m {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		hash.Write([]byte(k))
-		hash.Write([]byte(ta.GetterOptions[k]))
+		h.Write([]byte(k))
+		h.Write([]byte(m[k]))
+	}
+}
+
+// Hash creates a unique identifier for a TaskArtifact as the same GetterSource
+// may be specified multiple times with different destinations.
+func (ta *TaskArtifact) Hash() string {
+	h, err := blake2b.New256(nil)
+	if err != nil {
+		panic(err)
 	}
 
-	hash.Write([]byte(ta.GetterMode))
-	hash.Write([]byte(ta.RelativeDest))
-	return base64.RawStdEncoding.EncodeToString(hash.Sum(nil))
+	h.Write([]byte(ta.GetterSource))
+
+	hashStringMap(h, ta.GetterOptions)
+	hashStringMap(h, ta.GetterHeaders)
+
+	h.Write([]byte(ta.GetterMode))
+	h.Write([]byte(ta.RelativeDest))
+	return base64.RawStdEncoding.EncodeToString(h.Sum(nil))
 }
 
 // PathEscapesAllocDir returns if the given path escapes the allocation
@@ -8020,15 +8402,15 @@ func (s *Spread) Validate() error {
 		if !ok {
 			seen[target.Value] = struct{}{}
 		} else {
-			mErr.Errors = append(mErr.Errors, errors.New(fmt.Sprintf("Spread target value %q already defined", target.Value)))
+			mErr.Errors = append(mErr.Errors, fmt.Errorf("Spread target value %q already defined", target.Value))
 		}
-		if target.Percent < 0 || target.Percent > 100 {
-			mErr.Errors = append(mErr.Errors, errors.New(fmt.Sprintf("Spread target percentage for value %q must be between 0 and 100", target.Value)))
+		if target.Percent > 100 {
+			mErr.Errors = append(mErr.Errors, fmt.Errorf("Spread target percentage for value %q must be between 0 and 100", target.Value))
 		}
 		sumPercent += uint32(target.Percent)
 	}
 	if sumPercent > 100 {
-		mErr.Errors = append(mErr.Errors, errors.New(fmt.Sprintf("Sum of spread target percentages must not be greater than 100%%; got %d%%", sumPercent)))
+		mErr.Errors = append(mErr.Errors, fmt.Errorf("Sum of spread target percentages must not be greater than 100%%; got %d%%", sumPercent))
 	}
 	return mErr.ErrorOrNil()
 }
@@ -8679,6 +9061,9 @@ type Allocation struct {
 	// RescheduleTrackers captures details of previous reschedule attempts of the allocation
 	RescheduleTracker *RescheduleTracker
 
+	// NetworkStatus captures networking details of an allocation known at runtime
+	NetworkStatus *AllocNetworkStatus
+
 	// FollowupEvalID captures a follow up evaluation created to handle a failed allocation
 	// that can be rescheduled in the future
 	FollowupEvalID string
@@ -8901,6 +9286,15 @@ func (a *Allocation) ReschedulePolicy() *ReschedulePolicy {
 		return nil
 	}
 	return tg.ReschedulePolicy
+}
+
+// MigrateStrategy returns the migrate strategy based on the task group
+func (a *Allocation) MigrateStrategy() *MigrateStrategy {
+	tg := a.Job.LookupTaskGroup(a.TaskGroup)
+	if tg == nil {
+		return nil
+	}
+	return tg.Migrate
 }
 
 // NextRescheduleTime returns a time on or after which the allocation is eligible to be rescheduled,
@@ -9157,8 +9551,8 @@ func (a *Allocation) LookupTask(name string) *Task {
 }
 
 // Stub returns a list stub for the allocation
-func (a *Allocation) Stub() *AllocListStub {
-	return &AllocListStub{
+func (a *Allocation) Stub(fields *AllocStubFields) *AllocListStub {
+	s := &AllocListStub{
 		ID:                    a.ID,
 		EvalID:                a.EvalID,
 		Name:                  a.Name,
@@ -9185,6 +9579,17 @@ func (a *Allocation) Stub() *AllocListStub {
 		CreateTime:            a.CreateTime,
 		ModifyTime:            a.ModifyTime,
 	}
+
+	if fields != nil {
+		if fields.Resources {
+			s.AllocatedResources = a.AllocatedResources
+		}
+		if !fields.TaskStates {
+			s.TaskStates = nil
+		}
+	}
+
+	return s
 }
 
 // AllocationDiff converts an Allocation type to an AllocationDiff type
@@ -9212,6 +9617,7 @@ type AllocListStub struct {
 	JobType               string
 	JobVersion            uint64
 	TaskGroup             string
+	AllocatedResources    *AllocatedResources `json:",omitempty"`
 	DesiredStatus         string
 	DesiredDescription    string
 	ClientStatus          string
@@ -9237,12 +9643,28 @@ func (a *AllocListStub) SetEventDisplayMessages() {
 }
 
 func setDisplayMsg(taskStates map[string]*TaskState) {
-	if taskStates != nil {
-		for _, taskState := range taskStates {
-			for _, event := range taskState.Events {
-				event.PopulateEventDisplayMessage()
-			}
+	for _, taskState := range taskStates {
+		for _, event := range taskState.Events {
+			event.PopulateEventDisplayMessage()
 		}
+	}
+}
+
+// AllocStubFields defines which fields are included in the AllocListStub.
+type AllocStubFields struct {
+	// Resources includes resource-related fields if true.
+	Resources bool
+
+	// TaskStates removes the TaskStates field if false (default is to
+	// include TaskStates).
+	TaskStates bool
+}
+
+func NewAllocStubFields() *AllocStubFields {
+	return &AllocStubFields{
+		// Maintain backward compatibility by retaining task states by
+		// default.
+		TaskStates: true,
 	}
 }
 
@@ -9437,6 +9859,26 @@ func (s *NodeScoreMeta) Score() float64 {
 
 func (s *NodeScoreMeta) Data() interface{} {
 	return s
+}
+
+// AllocNetworkStatus captures the status of an allocation's network during runtime.
+// Depending on the network mode, an allocation's address may need to be known to other
+// systems in Nomad such as service registration.
+type AllocNetworkStatus struct {
+	InterfaceName string
+	Address       string
+	DNS           *DNSConfig
+}
+
+func (a *AllocNetworkStatus) Copy() *AllocNetworkStatus {
+	if a == nil {
+		return nil
+	}
+	return &AllocNetworkStatus{
+		InterfaceName: a.InterfaceName,
+		Address:       a.Address,
+		DNS:           a.DNS.Copy(),
+	}
 }
 
 // AllocDeploymentStatus captures the status of the allocation as part of the
@@ -10095,7 +10537,7 @@ func (p *PlanResult) FullCommit(plan *Plan) (bool, int, int) {
 	expected := 0
 	actual := 0
 	for name, allocList := range plan.NodeAllocation {
-		didAlloc, _ := p.NodeAllocation[name]
+		didAlloc := p.NodeAllocation[name]
 		expected += len(allocList)
 		actual += len(didAlloc)
 	}
@@ -10412,6 +10854,18 @@ type ACLToken struct {
 	ModifyIndex uint64
 }
 
+func (a *ACLToken) Copy() *ACLToken {
+	c := new(ACLToken)
+	*c = *a
+
+	c.Policies = make([]string, len(a.Policies))
+	copy(c.Policies, a.Policies)
+	c.Hash = make([]byte, len(a.Hash))
+	copy(c.Hash, a.Hash)
+
+	return c
+}
+
 var (
 	// AnonymousACLToken is used no SecretID is provided, and the
 	// request is made anonymously.
@@ -10590,132 +11044,19 @@ type ACLTokenUpsertResponse struct {
 	WriteMeta
 }
 
-var (
-	// validNamespaceName is used to validate a namespace name
-	validNamespaceName = regexp.MustCompile("^[a-zA-Z0-9-]{1,128}$")
-)
-
-const (
-	// maxNamespaceDescriptionLength limits a namespace description length
-	maxNamespaceDescriptionLength = 256
-)
-
-// Namespace allows logically grouping jobs and their associated objects.
-type Namespace struct {
-	// Name is the name of the namespace
-	Name string
-
-	// Description is a human readable description of the namespace
-	Description string
-
-	// Quota is the quota specification that the namespace should account
-	// against.
-	Quota string
-
-	// Hash is the hash of the namespace which is used to efficiently replicate
-	// cross-regions.
-	Hash []byte
-
-	// Raft Indexes
-	CreateIndex uint64
-	ModifyIndex uint64
+// RpcError is used for serializing errors with a potential error code
+type RpcError struct {
+	Message string
+	Code    *int64
 }
 
-func (n *Namespace) Validate() error {
-	var mErr multierror.Error
-
-	// Validate the name and description
-	if !validNamespaceName.MatchString(n.Name) {
-		err := fmt.Errorf("invalid name %q. Must match regex %s", n.Name, validNamespaceName)
-		mErr.Errors = append(mErr.Errors, err)
+func NewRpcError(err error, code *int64) *RpcError {
+	return &RpcError{
+		Message: err.Error(),
+		Code:    code,
 	}
-	if len(n.Description) > maxNamespaceDescriptionLength {
-		err := fmt.Errorf("description longer than %d", maxNamespaceDescriptionLength)
-		mErr.Errors = append(mErr.Errors, err)
-	}
-
-	return mErr.ErrorOrNil()
 }
 
-// SetHash is used to compute and set the hash of the namespace
-func (n *Namespace) SetHash() []byte {
-	// Initialize a 256bit Blake2 hash (32 bytes)
-	hash, err := blake2b.New256(nil)
-	if err != nil {
-		panic(err)
-	}
-
-	// Write all the user set fields
-	hash.Write([]byte(n.Name))
-	hash.Write([]byte(n.Description))
-	hash.Write([]byte(n.Quota))
-
-	// Finalize the hash
-	hashVal := hash.Sum(nil)
-
-	// Set and return the hash
-	n.Hash = hashVal
-	return hashVal
-}
-
-func (n *Namespace) Copy() *Namespace {
-	nc := new(Namespace)
-	*nc = *n
-	nc.Hash = make([]byte, len(n.Hash))
-	copy(nc.Hash, n.Hash)
-	return nc
-}
-
-// NamespaceListRequest is used to request a list of namespaces
-type NamespaceListRequest struct {
-	QueryOptions
-}
-
-// NamespaceListResponse is used for a list request
-type NamespaceListResponse struct {
-	Namespaces []*Namespace
-	QueryMeta
-}
-
-// NamespaceSpecificRequest is used to query a specific namespace
-type NamespaceSpecificRequest struct {
-	Name string
-	QueryOptions
-}
-
-// SingleNamespaceResponse is used to return a single namespace
-type SingleNamespaceResponse struct {
-	Namespace *Namespace
-	QueryMeta
-}
-
-// NamespaceSetRequest is used to query a set of namespaces
-type NamespaceSetRequest struct {
-	Namespaces []string
-	QueryOptions
-}
-
-// NamespaceSetResponse is used to return a set of namespaces
-type NamespaceSetResponse struct {
-	Namespaces map[string]*Namespace // Keyed by namespace Name
-	QueryMeta
-}
-
-// NamespaceDeleteRequest is used to delete a set of namespaces
-type NamespaceDeleteRequest struct {
-	Namespaces []string
-	WriteRequest
-}
-
-// NamespaceUpsertRequest is used to upsert a set of namespaces
-type NamespaceUpsertRequest struct {
-	Namespaces []*Namespace
-	WriteRequest
-}
-
-// NamespaceUpsertRequestv0 is used to upsert a set of namespaces
-// Here only for backcompat
-type NamespaceUpsertRequestv0 struct {
-	Namespace *Namespace
-	WriteRequest
+func (r *RpcError) Error() string {
+	return r.Message
 }

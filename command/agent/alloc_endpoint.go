@@ -33,6 +33,26 @@ func (s *HTTPServer) AllocsRequest(resp http.ResponseWriter, req *http.Request) 
 		return nil, nil
 	}
 
+	// Parse resources and task_states field selection
+	resources, err := parseBool(req, "resources")
+	if err != nil {
+		return nil, err
+	}
+	taskStates, err := parseBool(req, "task_states")
+	if err != nil {
+		return nil, err
+	}
+
+	if resources != nil || taskStates != nil {
+		args.Fields = structs.NewAllocStubFields()
+		if resources != nil {
+			args.Fields.Resources = *resources
+		}
+		if taskStates != nil {
+			args.Fields.TaskStates = *taskStates
+		}
+	}
+
 	var out structs.AllocListResponse
 	if err := s.agent.RPC("Alloc.List", &args, &out); err != nil {
 		return nil, err
@@ -107,7 +127,8 @@ func (s *HTTPServer) allocGet(allocID string, resp http.ResponseWriter, req *htt
 	alloc.SetEventDisplayMessages()
 
 	// Handle 0.12 ports upgrade path
-	alloc.AllocatedResources.Shared.Canonicalize()
+	alloc = alloc.Copy()
+	alloc.AllocatedResources.Canonicalize()
 
 	return alloc, nil
 }

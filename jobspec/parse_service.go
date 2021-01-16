@@ -7,7 +7,6 @@ import (
 	"github.com/hashicorp/hcl"
 	"github.com/hashicorp/hcl/hcl/ast"
 	"github.com/hashicorp/nomad/api"
-	"github.com/hashicorp/nomad/helper"
 	"github.com/mitchellh/mapstructure"
 )
 
@@ -51,7 +50,7 @@ func parseService(o *ast.ObjectItem) (*api.Service, error) {
 		"meta",
 		"canary_meta",
 	}
-	if err := helper.CheckHCLKeys(o.Val, valid); err != nil {
+	if err := checkHCLKeys(o.Val, valid); err != nil {
 		return nil, err
 	}
 
@@ -151,7 +150,7 @@ func parseConnect(co *ast.ObjectItem) (*api.ConsulConnect, error) {
 		"sidecar_task",
 	}
 
-	if err := helper.CheckHCLKeys(co.Val, valid); err != nil {
+	if err := checkHCLKeys(co.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "connect ->")
 	}
 
@@ -227,7 +226,7 @@ func parseGateway(o *ast.ObjectItem) (*api.ConsulGateway, error) {
 		"ingress",
 	}
 
-	if err := helper.CheckHCLKeys(o.Val, valid); err != nil {
+	if err := checkHCLKeys(o.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "gateway ->")
 	}
 
@@ -299,7 +298,7 @@ func parseGatewayProxy(o *ast.ObjectItem) (*api.ConsulGatewayProxy, error) {
 		"config",
 	}
 
-	if err := helper.CheckHCLKeys(o.Val, valid); err != nil {
+	if err := checkHCLKeys(o.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "proxy ->")
 	}
 
@@ -349,6 +348,7 @@ func parseGatewayProxy(o *ast.ObjectItem) (*api.ConsulGatewayProxy, error) {
 			if err := hcl.DecodeObject(&bind, listenerListVal); err != nil {
 				panic(err)
 			}
+			bind.Name = listenerName
 			proxy.EnvoyGatewayBindAddresses[listenerName] = &bind
 		}
 	}
@@ -385,7 +385,7 @@ func parseConsulIngressService(o *ast.ObjectItem) (*api.ConsulIngressService, er
 		"hosts",
 	}
 
-	if err := helper.CheckHCLKeys(o.Val, valid); err != nil {
+	if err := checkHCLKeys(o.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "service ->")
 	}
 
@@ -416,7 +416,7 @@ func parseConsulIngressListener(o *ast.ObjectItem) (*api.ConsulIngressListener, 
 		"service",
 	}
 
-	if err := helper.CheckHCLKeys(o.Val, valid); err != nil {
+	if err := checkHCLKeys(o.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "listener ->")
 	}
 
@@ -467,7 +467,7 @@ func parseConsulGatewayTLS(o *ast.ObjectItem) (*api.ConsulGatewayTLSConfig, erro
 		"enabled",
 	}
 
-	if err := helper.CheckHCLKeys(o.Val, valid); err != nil {
+	if err := checkHCLKeys(o.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "tls ->")
 	}
 
@@ -497,7 +497,7 @@ func parseIngressConfigEntry(o *ast.ObjectItem) (*api.ConsulIngressConfigEntry, 
 		"listener",
 	}
 
-	if err := helper.CheckHCLKeys(o.Val, valid); err != nil {
+	if err := checkHCLKeys(o.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "ingress ->")
 	}
 
@@ -551,7 +551,7 @@ func parseSidecarService(o *ast.ObjectItem) (*api.ConsulSidecarService, error) {
 		"tags",
 	}
 
-	if err := helper.CheckHCLKeys(o.Val, valid); err != nil {
+	if err := checkHCLKeys(o.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "sidecar_service ->")
 	}
 
@@ -653,7 +653,7 @@ func parseProxy(o *ast.ObjectItem) (*api.ConsulProxy, error) {
 		"config",
 	}
 
-	if err := helper.CheckHCLKeys(o.Val, valid); err != nil {
+	if err := checkHCLKeys(o.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "proxy ->")
 	}
 
@@ -738,7 +738,7 @@ func parseExpose(eo *ast.ObjectItem) (*api.ConsulExposeConfig, error) {
 		"path", // an array of path blocks
 	}
 
-	if err := helper.CheckHCLKeys(eo.Val, valid); err != nil {
+	if err := checkHCLKeys(eo.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "expose ->")
 	}
 
@@ -776,7 +776,7 @@ func parseExposePath(epo *ast.ObjectItem) (*api.ConsulExposePath, error) {
 		"listener_port",
 	}
 
-	if err := helper.CheckHCLKeys(epo.Val, valid); err != nil {
+	if err := checkHCLKeys(epo.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "path ->")
 	}
 
@@ -806,7 +806,7 @@ func parseUpstream(uo *ast.ObjectItem) (*api.ConsulUpstream, error) {
 		"local_bind_port",
 	}
 
-	if err := helper.CheckHCLKeys(uo.Val, valid); err != nil {
+	if err := checkHCLKeys(uo.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "upstream ->")
 	}
 
@@ -859,7 +859,7 @@ func parseChecks(service *api.Service, checkObjs *ast.ObjectList) error {
 			"success_before_passing",
 			"failures_before_critical",
 		}
-		if err := helper.CheckHCLKeys(co.Val, valid); err != nil {
+		if err := checkHCLKeys(co.Val, valid); err != nil {
 			return multierror.Prefix(err, "check ->")
 		}
 
@@ -945,7 +945,7 @@ func parseCheckRestart(cro *ast.ObjectItem) (*api.CheckRestart, error) {
 		"ignore_warnings",
 	}
 
-	if err := helper.CheckHCLKeys(cro.Val, valid); err != nil {
+	if err := checkHCLKeys(cro.Val, valid); err != nil {
 		return nil, multierror.Prefix(err, "check_restart ->")
 	}
 

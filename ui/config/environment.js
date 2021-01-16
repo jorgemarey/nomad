@@ -25,10 +25,11 @@ module.exports = function(environment) {
 
     APP: {
       blockingQueries: true,
-      mirageScenario: 'smallCluster',
-      mirageWithNamespaces: true,
+      mirageScenario: 'topoMedium',
+      mirageWithNamespaces: false,
       mirageWithTokens: true,
       mirageWithRegions: true,
+      showStorybookLink: process.env.STORYBOOK_LINK === 'true',
     },
   };
 

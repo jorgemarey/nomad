@@ -2,6 +2,7 @@ package helper
 
 import (
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"testing"
@@ -167,7 +168,7 @@ func TestCopyMapSliceInterface(t *testing.T) {
 	require.False(t, reflect.DeepEqual(m, c))
 }
 
-func TestClearEnvVar(t *testing.T) {
+func TestCleanEnvVar(t *testing.T) {
 	type testCase struct {
 		input    string
 		expected string
@@ -198,6 +199,79 @@ func BenchmarkCleanEnvVar(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		CleanEnvVar(in, replacement)
+	}
+}
+
+type testCase struct {
+	input    string
+	expected string
+}
+
+func commonCleanFilenameCases() (cases []testCase) {
+	// Common set of test cases for all 3 TestCleanFilenameX functions
+	cases = []testCase{
+		{"asdf", "asdf"},
+		{"ASDF", "ASDF"},
+		{"0sdf", "0sdf"},
+		{"asd0", "asd0"},
+		{"_asd", "_asd"},
+		{"-asd", "-asd"},
+		{"asd.fgh", "asd.fgh"},
+		{"Linux/Forbidden", "Linux_Forbidden"},
+		{"Windows<>:\"/\\|?*Forbidden", "Windows_________Forbidden"},
+		{`Windows<>:"/\|?*Forbidden_StringLiteral`, "Windows_________Forbidden_StringLiteral"},
+	}
+	return cases
+}
+
+func TestCleanFilename(t *testing.T) {
+	cases := append(
+		[]testCase{
+			{"A\U0001f4a9Z", "A💩Z"}, // CleanFilename allows unicode
+			{"A💩Z", "A💩Z"},
+			{"A~!@#$%^&*()_+-={}[]|\\;:'\"<,>?/Z", "A~!@#$%^&_()_+-={}[]__;_'__,___Z"},
+		}, commonCleanFilenameCases()...)
+
+	for i, c := range cases {
+		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {
+			output := CleanFilename(c.input, "_")
+			failMsg := fmt.Sprintf("CleanFilename(%q, '_') -> %q != %q", c.input, output, c.expected)
+			require.Equal(t, c.expected, output, failMsg)
+		})
+	}
+}
+
+func TestCleanFilenameASCIIOnly(t *testing.T) {
+	ASCIIOnlyCases := append(
+		[]testCase{
+			{"A\U0001f4a9Z", "A_Z"}, // CleanFilenameASCIIOnly does not allow unicode
+			{"A💩Z", "A_Z"},
+			{"A~!@#$%^&*()_+-={}[]|\\;:'\"<,>?/Z", "A~!@#$%^&_()_+-={}[]__;_'__,___Z"},
+		}, commonCleanFilenameCases()...)
+
+	for i, c := range ASCIIOnlyCases {
+		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {
+			output := CleanFilenameASCIIOnly(c.input, "_")
+			failMsg := fmt.Sprintf("CleanFilenameASCIIOnly(%q, '_') -> %q != %q", c.input, output, c.expected)
+			require.Equal(t, c.expected, output, failMsg)
+		})
+	}
+}
+
+func TestCleanFilenameStrict(t *testing.T) {
+	strictCases := append(
+		[]testCase{
+			{"A\U0001f4a9Z", "A💩Z"}, // CleanFilenameStrict allows unicode
+			{"A💩Z", "A💩Z"},
+			{"A~!@#$%^&*()_+-={}[]|\\;:'\"<,>?/Z", "A_!___%^______-_{}_____________Z"},
+		}, commonCleanFilenameCases()...)
+
+	for i, c := range strictCases {
+		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {
+			output := CleanFilenameStrict(c.input, "_")
+			failMsg := fmt.Sprintf("CleanFilenameStrict(%q, '_') -> %q != %q", c.input, output, c.expected)
+			require.Equal(t, c.expected, output, failMsg)
+		})
 	}
 }
 
@@ -241,6 +315,91 @@ func TestCheckNamespaceScope(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			offending := CheckNamespaceScope(tc.provided, tc.requested)
 			require.Equal(t, offending, tc.offending)
+		})
+	}
+}
+
+func TestPathEscapesSandbox(t *testing.T) {
+	cases := []struct {
+		name     string
+		path     string
+		dir      string
+		expected bool
+	}{
+		{
+			// this is the ${NOMAD_SECRETS_DIR} case
+			name:     "ok joined absolute path inside sandbox",
+			path:     filepath.Join("/alloc", "/secrets"),
+			dir:      "/alloc",
+			expected: false,
+		},
+		{
+			name:     "fail unjoined absolute path outside sandbox",
+			path:     "/secrets",
+			dir:      "/alloc",
+			expected: true,
+		},
+		{
+			name:     "ok joined relative path inside sandbox",
+			path:     filepath.Join("/alloc", "./safe"),
+			dir:      "/alloc",
+			expected: false,
+		},
+		{
+			name:     "fail unjoined relative path outside sandbox",
+			path:     "./safe",
+			dir:      "/alloc",
+			expected: true,
+		},
+		{
+			name:     "ok relative path traversal constrained to sandbox",
+			path:     filepath.Join("/alloc", "../../alloc/safe"),
+			dir:      "/alloc",
+			expected: false,
+		},
+		{
+			name:     "ok unjoined absolute path traversal constrained to sandbox",
+			path:     filepath.Join("/alloc", "/../alloc/safe"),
+			dir:      "/alloc",
+			expected: false,
+		},
+		{
+			name:     "ok unjoined absolute path traversal constrained to sandbox",
+			path:     "/../alloc/safe",
+			dir:      "/alloc",
+			expected: false,
+		},
+		{
+			name:     "fail joined relative path traverses outside sandbox",
+			path:     filepath.Join("/alloc", "../../../unsafe"),
+			dir:      "/alloc",
+			expected: true,
+		},
+		{
+			name:     "fail unjoined relative path traverses outside sandbox",
+			path:     "../../../unsafe",
+			dir:      "/alloc",
+			expected: true,
+		},
+		{
+			name:     "fail joined absolute path tries to transverse outside sandbox",
+			path:     filepath.Join("/alloc", "/alloc/../../unsafe"),
+			dir:      "/alloc",
+			expected: true,
+		},
+		{
+			name:     "fail unjoined absolute path tries to transverse outside sandbox",
+			path:     "/alloc/../../unsafe",
+			dir:      "/alloc",
+			expected: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			caseMsg := fmt.Sprintf("path: %v\ndir: %v", tc.path, tc.dir)
+			escapes := PathEscapesSandbox(tc.dir, tc.path)
+			require.Equal(t, tc.expected, escapes, caseMsg)
 		})
 	}
 }

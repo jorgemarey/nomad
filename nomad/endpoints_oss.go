@@ -6,20 +6,17 @@ import "net/rpc"
 
 // EnterpriseEndpoints holds the set of custom endpoints to register
 type EnterpriseEndpoints struct {
-	Namespace *Namespace
-	Sentinel  *Sentinel
+	Sentinel *Sentinel
 }
 
 // NewEnterpriseEndpoints returns the custom nomad endpoints
 func NewEnterpriseEndpoints(s *Server) *EnterpriseEndpoints {
 	return &EnterpriseEndpoints{
-		Namespace: &Namespace{s},
-		Sentinel:  &Sentinel{s},
+		Sentinel: &Sentinel{s},
 	}
 }
 
 // Register is a no-op in oss.
 func (e *EnterpriseEndpoints) Register(s *rpc.Server) {
-	s.Register(e.Namespace)
 	s.Register(e.Sentinel)
 }

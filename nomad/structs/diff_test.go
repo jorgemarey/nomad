@@ -2687,6 +2687,7 @@ func TestTaskGroupDiff(t *testing.T) {
 										{
 											DestinationName: "foo",
 											LocalBindPort:   8000,
+											Datacenter:      "dc2",
 										},
 									},
 									Config: map[string]interface{}{
@@ -2941,6 +2942,12 @@ func TestTaskGroupDiff(t *testing.T) {
 														Type: DiffTypeAdded,
 														Name: "ConsulUpstreams",
 														Fields: []*FieldDiff{
+															{
+																Type: DiffTypeAdded,
+																Name: "Datacenter",
+																Old:  "",
+																New:  "dc2",
+															},
 															{
 																Type: DiffTypeAdded,
 																Name: "DestinationName",
@@ -4056,6 +4063,9 @@ func TestTaskDiff(t *testing.T) {
 						GetterOptions: map[string]string{
 							"bar": "baz",
 						},
+						GetterHeaders: map[string]string{
+							"User": "user1",
+						},
 						GetterMode:   "dir",
 						RelativeDest: "bar",
 					},
@@ -4075,6 +4085,10 @@ func TestTaskDiff(t *testing.T) {
 						GetterOptions: map[string]string{
 							"bam": "baz",
 						},
+						GetterHeaders: map[string]string{
+							"User":       "user2",
+							"User-Agent": "nomad",
+						},
 						GetterMode:   "file",
 						RelativeDest: "bam",
 					},
@@ -4087,6 +4101,18 @@ func TestTaskDiff(t *testing.T) {
 						Type: DiffTypeAdded,
 						Name: "Artifact",
 						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeAdded,
+								Name: "GetterHeaders[User-Agent]",
+								Old:  "",
+								New:  "nomad",
+							},
+							{
+								Type: DiffTypeAdded,
+								Name: "GetterHeaders[User]",
+								Old:  "",
+								New:  "user2",
+							},
 							{
 								Type: DiffTypeAdded,
 								Name: "GetterMode",
@@ -4117,6 +4143,12 @@ func TestTaskDiff(t *testing.T) {
 						Type: DiffTypeDeleted,
 						Name: "Artifact",
 						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeDeleted,
+								Name: "GetterHeaders[User]",
+								Old:  "user1",
+								New:  "",
+							},
 							{
 								Type: DiffTypeDeleted,
 								Name: "GetterMode",

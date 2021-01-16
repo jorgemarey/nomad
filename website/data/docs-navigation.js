@@ -9,38 +9,49 @@ export default [
   {
     category: 'install',
     content: [
-      { category: 'quickstart' },
+      'quickstart',
       {
         category: 'production',
         content: [
           'requirements',
-          'nomad-agent',
-          'reference-architecture',
-          'deployment-guide'
-        ]
+          {
+            title: 'Reference Architecture',
+            href:
+              'https://learn.hashicorp.com/tutorials/nomad/production-reference-architecture-vm-with-consul',
+          },
+          {
+            title: 'Deployment Guide',
+            href:
+              'https://learn.hashicorp.com/tutorials/nomad/production-deployment-guide-vm-with-consul',
+          },
+        ],
       },
-      'windows-service'
-    ]
+      'windows-service',
+    ],
   },
   { category: 'upgrade', content: ['upgrade-specific'] },
   {
     category: 'integrations',
-    content: ['consul-integration', 'consul-connect', 'vault-integration']
+    content: ['consul-integration', 'consul-connect', 'vault-integration'],
   },
   '-----------',
   {
     category: 'internals',
     content: [
       'architecture',
-      { category: 'plugins', content: ['base', 'task-drivers', 'devices', 'csi'] },
+      {
+        category: 'plugins',
+        content: ['base', 'task-drivers', 'devices', 'csi'],
+      },
       {
         category: 'scheduling',
-        content: ['scheduling', 'preemption']
+        content: ['scheduling', 'preemption'],
       },
       'consensus',
+      'filesystem',
       'gossip',
-      'security'
-    ]
+      'security',
+    ],
   },
   {
     category: 'configuration',
@@ -56,8 +67,8 @@ export default [
       'server_join',
       'telemetry',
       'tls',
-      'vault'
-    ]
+      'vault',
+    ],
   },
   {
     category: 'commands',
@@ -75,18 +86,26 @@ export default [
           'token-info',
           'token-list',
           'token-self',
-          'token-update'
-        ]
+          'token-update',
+        ],
       },
       'agent',
       'agent-info',
       {
         category: 'alloc',
-        content: ['exec', 'fs', 'logs', 'restart', 'signal', 'status', 'stop']
+        content: ['exec', 'fs', 'logs', 'restart', 'signal', 'status', 'stop'],
       },
       {
         category: 'deployment',
-        content: ['fail', 'list', 'pause', 'promote', 'resume', 'status', 'unblock']
+        content: [
+          'fail',
+          'list',
+          'pause',
+          'promote',
+          'resume',
+          'status',
+          'unblock',
+        ],
       },
       'eval-status',
       {
@@ -103,23 +122,25 @@ export default [
           'promote',
           'revert',
           'run',
+          'scale',
+          'scaling-events',
           'status',
           'stop',
-          'validate'
-        ]
+          'validate',
+        ],
       },
       {
         category: 'license',
-        content: ['get', 'put']
+        content: ['get', 'put'],
       },
       'monitor',
       {
         category: 'namespace',
-        content: ['apply', 'delete', 'inspect', 'list', 'status']
+        content: ['apply', 'delete', 'inspect', 'list', 'status'],
       },
       {
         category: 'node',
-        content: ['config', 'drain', 'eligibility', 'status']
+        content: ['config', 'drain', 'eligibility', 'status'],
       },
       {
         category: 'operator',
@@ -129,32 +150,186 @@ export default [
           'debug',
           'keygen',
           'keyring',
+          'metrics',
           'raft-list-peers',
           'raft-remove-peer',
           'snapshot-agent',
           'snapshot-inspect',
           'snapshot-restore',
-          'snapshot-save'
-        ]
+          'snapshot-save',
+        ],
       },
       { category: 'plugin', content: ['status'] },
       {
         category: 'quota',
-        content: ['apply', 'delete', 'init', 'inspect', 'list', 'status']
+        content: ['apply', 'delete', 'init', 'inspect', 'list', 'status'],
       },
+      {
+        category: 'recommendation',
+        content: ['apply', 'dismiss', 'info', 'list'],
+      },
+      { category: 'scaling', content: ['policy-info', 'policy-list'] },
       { category: 'sentinel', content: ['apply', 'delete', 'list', 'read'] },
       { category: 'server', content: ['force-leave', 'join', 'members'] },
       'status',
       { category: 'system', content: ['gc', 'reconcile-summaries'] },
       'ui',
       'version',
-      { category: 'volume', content: ['deregister', 'detach', 'status', 'register'] }
-    ]
+      {
+        category: 'volume',
+        content: ['deregister', 'detach', 'status', 'register'],
+      },
+    ],
   },
   '----------',
   {
     category: 'job-specification',
     content: [
+      {
+        category: 'hcl2',
+        content: [
+          'expressions',
+          {
+            category: 'functions',
+            content: [
+              {
+                category: 'collection',
+                name: 'Collection Functions',
+                content: [
+                  'chunklist',
+                  'coalesce',
+                  'coalescelist',
+                  'compact',
+                  'concat',
+                  'contains',
+                  'distinct',
+                  'element',
+                  'flatten',
+                  'index-fn',
+                  'keys',
+                  'length',
+                  'lookup',
+                  'merge',
+                  'range',
+                  'reverse',
+                  'setintersection',
+                  'setproduct',
+                  'setunion',
+                  'slice',
+                  'sort',
+                  'values',
+                  'zipmap',
+                ],
+              },
+              {
+                category: 'conversion',
+                name: 'Type Conversion Functions',
+                content: ['can', 'convert', 'try'],
+              },
+              {
+                category: 'crypto',
+                name: 'Hash and Crypto Functions',
+                content: [
+                  'bcrypt',
+                  'md5',
+                  'rsadecrypt',
+                  'sha1',
+                  'sha256',
+                  'sha512',
+                ],
+              },
+              {
+                category: 'datetime',
+                name: 'Date and Time Functions',
+                content: ['formatdate', 'timeadd', 'timestamp'],
+              },
+              {
+                category: 'encoding',
+                name: 'Encoding Functions',
+                content: [
+                  'base64decode',
+                  'base64encode',
+                  'csvdecode',
+                  'jsondecode',
+                  'jsonencode',
+                  'urlencode',
+                  'yamldecode',
+                  'yamlencode',
+                ],
+              },
+              {
+                category: 'file',
+                name: 'Filesystem Functions',
+                content: [
+                  'abspath',
+                  'basename',
+                  'dirname',
+                  'file',
+                  'fileexists',
+                  'fileset',
+                  'pathexpand',
+                ],
+              },
+              {
+                category: 'ipnet',
+                name: 'IP Network Functions',
+                content: [
+                  'cidrhost',
+                  'cidrnetmask',
+                  'cidrsubnet',
+                  'cidrsubnets',
+                ],
+              },
+              {
+                category: 'numeric',
+                name: 'Numeric Functions',
+                content: [
+                  'abs',
+                  'ceil',
+                  'floor',
+                  'log',
+                  'max',
+                  'min',
+                  'parseint',
+                  'pow',
+                  'signum',
+                ],
+              },
+              {
+                category: 'string',
+                name: 'String Functions',
+                content: [
+                  'chomp',
+                  'format',
+                  'formatlist',
+                  'indent',
+                  'join',
+                  'lower',
+                  'regex_replace',
+                  'replace',
+                  'split',
+                  'strrev',
+                  'substr',
+                  'title',
+                  'trim',
+                  'trimprefix',
+                  'trimspace',
+                  'trimsuffix',
+                  'upper',
+                ],
+              },
+              {
+                category: 'uuid',
+                name: 'UUID Functions',
+                content: ['uuidv4', 'uuidv5'],
+              },
+            ],
+          },
+          'locals',
+          'syntax',
+          'variables',
+        ],
+      },
       'artifact',
       'affinity',
       'check_restart',
@@ -192,8 +367,8 @@ export default [
       'upstreams',
       'vault',
       'volume',
-      'volume_mount'
-    ]
+      'volume_mount',
+    ],
   },
   {
     category: 'drivers',
@@ -215,14 +390,14 @@ export default [
           'rkt',
           'singularity',
           'nspawn',
-          'iis'
-        ]
-      }
-    ]
+          'iis',
+        ],
+      },
+    ],
   },
   {
     category: 'devices',
-    content: ['nvidia', 'community']
+    content: ['nvidia', 'community'],
   },
   'schedulers',
   { category: 'runtime', content: ['environment', 'interpolation'] },
@@ -233,24 +408,45 @@ export default [
       'api',
       'cli',
       'policy',
+      'telemetry',
       {
         category: 'plugins',
-        content: [
-          'apm',
-          'strategy',
-          'target'
-        ]
+        content: ['apm', 'strategy', 'target'],
       },
       {
         category: 'internals',
-        content: [
-          'checks'
-        ]
-      }
-    ]
+        content: ['checks'],
+      },
+    ],
   },
-  { category: 'telemetry', content: ['metrics'] },
+  {
+    category: 'operations',
+    content: [
+      'nomad-agent',
+      'telemetry',
+      'metrics',
+      {
+        title: 'Cluster Management',
+        href: 'https://learn.hashicorp.com/collections/nomad/manage-clusters',
+      },
+      {
+        title: 'Transport Security',
+        href:
+          'https://learn.hashicorp.com/collections/nomad/transport-security',
+      },
+      {
+        title: 'Access Control',
+        href: 'https://learn.hashicorp.com/collections/nomad/access-control',
+      },
+    ],
+  },
   '------------',
-  { category: 'enterprise' },
-  'faq'
+  {
+    category: 'nomad-vs-kubernetes',
+    content: ['alternative', 'supplement'],
+  },
+  'ecosystem',
+  'who-uses-nomad',
+  'enterprise',
+  'faq',
 ]

@@ -407,7 +407,7 @@ func TestHTTP_JobQuery_Payload(t *testing.T) {
 
 		// Directly manipulate the state
 		state := s.Agent.server.State()
-		if err := state.UpsertJob(1000, job); err != nil {
+		if err := state.UpsertJob(structs.MsgTypeTestSetup, 1000, job); err != nil {
 			t.Fatalf("Failed to upsert job: %v", err)
 		}
 
@@ -1007,7 +1007,7 @@ func TestHTTP_JobAllocations(t *testing.T) {
 		alloc1.TaskStates = make(map[string]*structs.TaskState)
 		alloc1.TaskStates["test"] = taskState
 		state := s.Agent.server.State()
-		err := state.UpsertAllocs(1000, []*structs.Allocation{alloc1})
+		err := state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc1})
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -2628,12 +2628,11 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						},
 						Artifacts: []*api.TaskArtifact{
 							{
-								GetterSource: helper.StringToPtr("source"),
-								GetterOptions: map[string]string{
-									"a": "b",
-								},
-								GetterMode:   helper.StringToPtr("dir"),
-								RelativeDest: helper.StringToPtr("dest"),
+								GetterSource:  helper.StringToPtr("source"),
+								GetterOptions: map[string]string{"a": "b"},
+								GetterHeaders: map[string]string{"User-Agent": "nomad"},
+								GetterMode:    helper.StringToPtr("dir"),
+								RelativeDest:  helper.StringToPtr("dest"),
 							},
 						},
 						DispatchPayload: &api.DispatchPayloadConfig{
@@ -2752,12 +2751,11 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						},
 						Artifacts: []*structs.TaskArtifact{
 							{
-								GetterSource: "source",
-								GetterOptions: map[string]string{
-									"a": "b",
-								},
-								GetterMode:   "dir",
-								RelativeDest: "dest",
+								GetterSource:  "source",
+								GetterOptions: map[string]string{"a": "b"},
+								GetterHeaders: map[string]string{"User-Agent": "nomad"},
+								GetterMode:    "dir",
+								RelativeDest:  "dest",
 							},
 						},
 						DispatchPayload: &structs.DispatchPayloadConfig{
@@ -2847,6 +2845,23 @@ func TestJobs_ApiJobToStructsJobUpdate(t *testing.T) {
 	require.Equal(t, jobUpdate, structsJob.Update)
 	require.Equal(t, group1, *structsJob.TaskGroups[0].Update)
 	require.Equal(t, group2, *structsJob.TaskGroups[1].Update)
+}
+
+// TestJobs_Matching_Resources asserts:
+//	api.{Default,Min}Resources == structs.{Default,Min}Resources
+//
+// While this is an odd place to test that, this is where both are imported,
+// validated, and converted.
+func TestJobs_Matching_Resources(t *testing.T) {
+	t.Parallel()
+
+	// api.MinResources == structs.MinResources
+	structsMinRes := ApiResourcesToStructs(api.MinResources())
+	assert.Equal(t, structs.MinResources(), structsMinRes)
+
+	// api.DefaultResources == structs.DefaultResources
+	structsDefaultRes := ApiResourcesToStructs(api.DefaultResources())
+	assert.Equal(t, structs.DefaultResources(), structsDefaultRes)
 }
 
 // TestHTTP_JobValidate_SystemMigrate asserts that a system job with a migrate
@@ -2991,9 +3006,11 @@ func TestConversion_apiUpstreamsToStructs(t *testing.T) {
 	require.Equal(t, []structs.ConsulUpstream{{
 		DestinationName: "upstream",
 		LocalBindPort:   8000,
+		Datacenter:      "dc2",
 	}}, apiUpstreamsToStructs([]*api.ConsulUpstream{{
 		DestinationName: "upstream",
 		LocalBindPort:   8000,
+		Datacenter:      "dc2",
 	}}))
 }
 

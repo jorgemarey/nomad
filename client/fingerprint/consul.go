@@ -81,14 +81,13 @@ func (f *ConsulFingerprint) Fingerprint(req *FingerprintRequest, resp *Fingerpri
 	} else {
 		f.logger.Warn("unable to fingerprint consul.datacenter")
 	}
-	if tags, ok := info["Member"]["Tags"].(map[string]interface{}); ok {
-		if s, ok := tags["segment"].(string); ok {
+	if g, ok := info["Member"]["Tags"].(map[string]interface{}); ok {
+		if s, ok := g["segment"].(string); ok {
 			resp.AddAttribute("consul.segment", s)
 		}
 	} else {
 		f.logger.Warn("unable to fingerprint consul.segment")
 	}
-
 	if dc, ok := resp.Attributes["consul.datacenter"]; ok {
 		if name, ok2 := resp.Attributes["unique.consul.name"]; ok2 {
 			resp.AddLink("consul", fmt.Sprintf("%s.%s", dc, name))

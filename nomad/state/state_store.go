@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	log "github.com/hashicorp/go-hclog"
@@ -13,12 +14,13 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/hashicorp/nomad/helper"
+	"github.com/hashicorp/nomad/nomad/stream"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
 // Txn is a transaction against a state store.
 // This can be a read or write transaction.
-type Txn = *memdb.Txn
+type Txn = *txn
 
 const (
 	// NodeRegisterEventReregistered is the message used when the node becomes
@@ -44,6 +46,12 @@ type StateStoreConfig struct {
 
 	// Region is the region of the server embedding the state store.
 	Region string
+
+	// EnablePublisher is used to enable or disable the event publisher
+	EnablePublisher bool
+
+	// EventBufferSize configures the amount of events to hold in memory
+	EventBufferSize int64
 }
 
 // The StateStore is responsible for maintaining all the Nomad
@@ -55,7 +63,7 @@ type StateStoreConfig struct {
 // considered a constant and NEVER modified in place.
 type StateStore struct {
 	logger log.Logger
-	db     *memdb.MemDB
+	db     *changeTrackerDB
 
 	// config is the passed in configuration
 	config *StateStoreConfig
@@ -63,6 +71,19 @@ type StateStore struct {
 	// abandonCh is used to signal watchers that this state store has been
 	// abandoned (usually during a restore). This is only ever closed.
 	abandonCh chan struct{}
+
+	// TODO: refactor abandonCh to use a context so that both can use the same
+	// cancel mechanism.
+	stopEventBroker func()
+}
+
+type streamACLDelegate struct {
+	s *StateStore
+}
+
+func (a *streamACLDelegate) TokenProvider() stream.ACLTokenProvider {
+	resolver, _ := a.s.Snapshot()
+	return resolver
 }
 
 // NewStateStore is used to create a new state store
@@ -74,19 +95,69 @@ func NewStateStore(config *StateStoreConfig) (*StateStore, error) {
 	}
 
 	// Create the state store
+	ctx, cancel := context.WithCancel(context.TODO())
 	s := &StateStore{
-		logger:    config.Logger.Named("state_store"),
-		db:        db,
-		config:    config,
-		abandonCh: make(chan struct{}),
+		logger:          config.Logger.Named("state_store"),
+		config:          config,
+		abandonCh:       make(chan struct{}),
+		stopEventBroker: cancel,
 	}
 
-	// Initialize the state store with required enterprise objects
-	if err := s.enterpriseInit(); err != nil {
+	if config.EnablePublisher {
+		// Create new event publisher using provided config
+		broker, err := stream.NewEventBroker(ctx, &streamACLDelegate{s}, stream.EventBrokerCfg{
+			EventBufferSize: config.EventBufferSize,
+			Logger:          config.Logger,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("creating state store event broker %w", err)
+		}
+		s.db = NewChangeTrackerDB(db, broker, eventsFromChanges)
+	} else {
+		s.db = NewChangeTrackerDB(db, nil, noOpProcessChanges)
+	}
+
+	// Initialize the state store with the default namespace.
+	if err := s.namespaceInit(); err != nil {
 		return nil, fmt.Errorf("enterprise state store initialization failed: %v", err)
 	}
 
 	return s, nil
+}
+
+// NewWatchSet returns a new memdb.WatchSet that adds the state stores abandonCh
+// as a watcher. This is important in that it will notify when this specific
+// state store is no longer valid, usually due to a new snapshot being loaded
+func (s *StateStore) NewWatchSet() memdb.WatchSet {
+	ws := memdb.NewWatchSet()
+	ws.Add(s.AbandonCh())
+	return ws
+}
+
+func (s *StateStore) EventBroker() (*stream.EventBroker, error) {
+	if s.db.publisher == nil {
+		return nil, fmt.Errorf("EventBroker not configured")
+	}
+	return s.db.publisher, nil
+}
+
+// namespaceInit ensures the default namespace exists.
+func (s *StateStore) namespaceInit() error {
+	// Create the default namespace. This is safe to do every time we create the
+	// state store. There are two main cases, a brand new cluster in which case
+	// each server will have the same default namespace object, or a new cluster
+	// in which case if the default namespace has been modified, it will be
+	// overridden by the restore code path.
+	defaultNs := &structs.Namespace{
+		Name:        structs.DefaultNamespace,
+		Description: structs.DefaultNamespaceDescription,
+	}
+
+	if err := s.UpsertNamespaces(1, []*structs.Namespace{defaultNs}); err != nil {
+		return fmt.Errorf("inserting default namespace failed: %v", err)
+	}
+
+	return nil
 }
 
 // Config returns the state store configuration.
@@ -98,12 +169,18 @@ func (s *StateStore) Config() *StateStoreConfig {
 // we use MemDB, we just need to snapshot the state of the underlying
 // database.
 func (s *StateStore) Snapshot() (*StateSnapshot, error) {
+	memDBSnap := s.db.memdb.Snapshot()
+
+	store := StateStore{
+		logger: s.logger,
+		config: s.config,
+	}
+
+	// Create a new change tracker DB that does not publish or track changes
+	store.db = NewChangeTrackerDB(memDBSnap, nil, noOpProcessChanges)
+
 	snap := &StateSnapshot{
-		StateStore: StateStore{
-			logger: s.logger,
-			config: s.config,
-			db:     s.db.Snapshot(),
-		},
+		StateStore: store,
 	}
 	return snap, nil
 }
@@ -167,7 +244,7 @@ func (s *StateStore) SnapshotMinIndex(ctx context.Context, index uint64) (*State
 // state by minimizing the number of transactions and checking
 // overhead.
 func (s *StateStore) Restore() (*StateRestore, error) {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxnRestore()
 	r := &StateRestore{
 		txn: txn,
 	}
@@ -183,7 +260,14 @@ func (s *StateStore) AbandonCh() <-chan struct{} {
 // Abandon is used to signal that the given state store has been abandoned.
 // Calling this more than one time will panic.
 func (s *StateStore) Abandon() {
+	s.StopEventBroker()
 	close(s.abandonCh)
+}
+
+// StopStopEventBroker calls the cancel func for the state stores event
+// publisher. It should be called during server shutdown.
+func (s *StateStore) StopEventBroker() {
+	s.stopEventBroker()
 }
 
 // QueryFn is the definition of a function that can be used to implement a basic
@@ -231,7 +315,7 @@ RUN_QUERY:
 }
 
 // UpsertPlanResults is used to upsert the results of a plan.
-func (s *StateStore) UpsertPlanResults(index uint64, results *structs.ApplyPlanResultsRequest) error {
+func (s *StateStore) UpsertPlanResults(msgType structs.MessageType, index uint64, results *structs.ApplyPlanResultsRequest) error {
 	snapshot, err := s.Snapshot()
 	if err != nil {
 		return err
@@ -253,7 +337,7 @@ func (s *StateStore) UpsertPlanResults(index uint64, results *structs.ApplyPlanR
 		return err
 	}
 
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	// Upsert the newly created or updated deployment
@@ -317,8 +401,7 @@ func (s *StateStore) UpsertPlanResults(index uint64, results *structs.ApplyPlanR
 		}
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // addComputedAllocAttrs adds the computed/derived attributes to the allocation.
@@ -347,7 +430,7 @@ func addComputedAllocAttrs(allocs []*structs.Allocation, job *structs.Job) {
 
 // upsertDeploymentUpdates updates the deployments given the passed status
 // updates.
-func (s *StateStore) upsertDeploymentUpdates(index uint64, updates []*structs.DeploymentStatusUpdate, txn *memdb.Txn) error {
+func (s *StateStore) upsertDeploymentUpdates(index uint64, updates []*structs.DeploymentStatusUpdate, txn *txn) error {
 	for _, u := range updates {
 		if err := s.updateDeploymentStatusImpl(index, u, txn); err != nil {
 			return err
@@ -359,7 +442,7 @@ func (s *StateStore) upsertDeploymentUpdates(index uint64, updates []*structs.De
 
 // UpsertJobSummary upserts a job summary into the state store.
 func (s *StateStore) UpsertJobSummary(index uint64, jobSummary *structs.JobSummary) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	// Check if the job summary already exists
@@ -387,14 +470,13 @@ func (s *StateStore) UpsertJobSummary(index uint64, jobSummary *structs.JobSumma
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // DeleteJobSummary deletes the job summary with the given ID. This is for
 // testing purposes only.
 func (s *StateStore) DeleteJobSummary(index uint64, namespace, id string) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	// Delete the job summary
@@ -404,23 +486,21 @@ func (s *StateStore) DeleteJobSummary(index uint64, namespace, id string) error 
 	if err := txn.Insert("index", &IndexEntry{"job_summary", index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // UpsertDeployment is used to insert a new deployment. If cancelPrior is set to
 // true, all prior deployments for the same job will be cancelled.
 func (s *StateStore) UpsertDeployment(index uint64, deployment *structs.Deployment) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 	if err := s.upsertDeploymentImpl(index, deployment, txn); err != nil {
 		return err
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
-func (s *StateStore) upsertDeploymentImpl(index uint64, deployment *structs.Deployment, txn *memdb.Txn) error {
+func (s *StateStore) upsertDeploymentImpl(index uint64, deployment *structs.Deployment, txn *txn) error {
 	// Check if the deployment already exists
 	existing, err := txn.First("deployment", "id", deployment.ID)
 	if err != nil {
@@ -457,7 +537,7 @@ func (s *StateStore) upsertDeploymentImpl(index uint64, deployment *structs.Depl
 }
 
 func (s *StateStore) Deployments(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire deployments table
 	iter, err := txn.Get("deployment", "id")
@@ -470,7 +550,7 @@ func (s *StateStore) Deployments(ws memdb.WatchSet) (memdb.ResultIterator, error
 }
 
 func (s *StateStore) DeploymentsByNamespace(ws memdb.WatchSet, namespace string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire deployments table
 	iter, err := txn.Get("deployment", "namespace", namespace)
@@ -483,7 +563,7 @@ func (s *StateStore) DeploymentsByNamespace(ws memdb.WatchSet, namespace string)
 }
 
 func (s *StateStore) DeploymentsByIDPrefix(ws memdb.WatchSet, namespace, deploymentID string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire deployments table
 	iter, err := txn.Get("deployment", "id_prefix", deploymentID)
@@ -512,11 +592,11 @@ func deploymentNamespaceFilter(namespace string) func(interface{}) bool {
 }
 
 func (s *StateStore) DeploymentByID(ws memdb.WatchSet, deploymentID string) (*structs.Deployment, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	return s.deploymentByIDImpl(ws, deploymentID, txn)
 }
 
-func (s *StateStore) deploymentByIDImpl(ws memdb.WatchSet, deploymentID string, txn *memdb.Txn) (*structs.Deployment, error) {
+func (s *StateStore) deploymentByIDImpl(ws memdb.WatchSet, deploymentID string, txn *txn) (*structs.Deployment, error) {
 	watchCh, existing, err := txn.FirstWatch("deployment", "id", deploymentID)
 	if err != nil {
 		return nil, fmt.Errorf("deployment lookup failed: %v", err)
@@ -531,7 +611,7 @@ func (s *StateStore) deploymentByIDImpl(ws memdb.WatchSet, deploymentID string, 
 }
 
 func (s *StateStore) DeploymentsByJobID(ws memdb.WatchSet, namespace, jobID string, all bool) ([]*structs.Deployment, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	var job *structs.Job
 	// Read job from state store
@@ -574,7 +654,7 @@ func (s *StateStore) DeploymentsByJobID(ws memdb.WatchSet, namespace, jobID stri
 // LatestDeploymentByJobID returns the latest deployment for the given job. The
 // latest is determined strictly by CreateIndex.
 func (s *StateStore) LatestDeploymentByJobID(ws memdb.WatchSet, namespace, jobID string) (*structs.Deployment, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Get an iterator over the deployments
 	iter, err := txn.Get("deployment", "job", namespace, jobID)
@@ -602,7 +682,7 @@ func (s *StateStore) LatestDeploymentByJobID(ws memdb.WatchSet, namespace, jobID
 
 // DeleteDeployment is used to delete a set of deployments by ID
 func (s *StateStore) DeleteDeployment(index uint64, deploymentIDs []string) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	if len(deploymentIDs) == 0 {
@@ -629,14 +709,13 @@ func (s *StateStore) DeleteDeployment(index uint64, deploymentIDs []string) erro
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // UpsertScalingEvent is used to insert a new scaling event.
 // Only the most recent JobTrackedScalingEvents will be kept.
 func (s *StateStore) UpsertScalingEvent(index uint64, req *structs.ScalingEventRequest) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	// Get the existing events
@@ -681,13 +760,12 @@ func (s *StateStore) UpsertScalingEvent(index uint64, req *structs.ScalingEventR
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // ScalingEvents returns an iterator over all the job scaling events
 func (s *StateStore) ScalingEvents(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire scaling_event table
 	iter, err := txn.Get("scaling_event", "id")
@@ -701,7 +779,7 @@ func (s *StateStore) ScalingEvents(ws memdb.WatchSet) (memdb.ResultIterator, err
 }
 
 func (s *StateStore) ScalingEventsByJob(ws memdb.WatchSet, namespace, jobID string) (map[string][]*structs.ScalingEvent, uint64, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	watchCh, existing, err := txn.FirstWatch("scaling_event", "id", namespace, jobID)
 	if err != nil {
@@ -719,10 +797,18 @@ func (s *StateStore) ScalingEventsByJob(ws memdb.WatchSet, namespace, jobID stri
 // UpsertNode is used to register a node or update a node definition
 // This is assumed to be triggered by the client, so we retain the value
 // of drain/eligibility which is set by the scheduler.
-func (s *StateStore) UpsertNode(index uint64, node *structs.Node) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) UpsertNode(msgType structs.MessageType, index uint64, node *structs.Node) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
+	err := upsertNodeTxn(txn, index, node)
+	if err != nil {
+		return nil
+	}
+	return txn.Commit()
+}
+
+func upsertNodeTxn(txn *txn, index uint64, node *structs.Node) error {
 	// Check if the node already exists
 	existing, err := txn.First("nodes", "id", node.ID)
 	if err != nil {
@@ -771,18 +857,25 @@ func (s *StateStore) UpsertNode(index uint64, node *structs.Node) error {
 		return fmt.Errorf("csi plugin update failed: %v", err)
 	}
 
-	txn.Commit()
 	return nil
 }
 
 // DeleteNode deregisters a batch of nodes
-func (s *StateStore) DeleteNode(index uint64, nodes []string) error {
+func (s *StateStore) DeleteNode(msgType structs.MessageType, index uint64, nodes []string) error {
+	txn := s.db.WriteTxn(index)
+	defer txn.Abort()
+
+	err := deleteNodeTxn(txn, index, nodes)
+	if err != nil {
+		return nil
+	}
+	return txn.Commit()
+}
+
+func deleteNodeTxn(txn *txn, index uint64, nodes []string) error {
 	if len(nodes) == 0 {
 		return fmt.Errorf("node ids missing")
 	}
-
-	txn := s.db.Txn(true)
-	defer txn.Abort()
 
 	for _, nodeID := range nodes {
 		existing, err := txn.First("nodes", "id", nodeID)
@@ -808,14 +901,22 @@ func (s *StateStore) DeleteNode(index uint64, nodes []string) error {
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
 	return nil
 }
 
 // UpdateNodeStatus is used to update the status of a node
-func (s *StateStore) UpdateNodeStatus(index uint64, nodeID, status string, updatedAt int64, event *structs.NodeEvent) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) UpdateNodeStatus(msgType structs.MessageType, index uint64, nodeID, status string, updatedAt int64, event *structs.NodeEvent) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
+
+	if err := s.updateNodeStatusTxn(txn, nodeID, status, updatedAt, event); err != nil {
+		return err
+	}
+
+	return txn.Commit()
+}
+
+func (s *StateStore) updateNodeStatusTxn(txn *txn, nodeID, status string, updatedAt int64, event *structs.NodeEvent) error {
 
 	// Lookup the node
 	existing, err := txn.First("nodes", "id", nodeID)
@@ -833,52 +934,47 @@ func (s *StateStore) UpdateNodeStatus(index uint64, nodeID, status string, updat
 
 	// Add the event if given
 	if event != nil {
-		appendNodeEvents(index, copyNode, []*structs.NodeEvent{event})
+		appendNodeEvents(txn.Index, copyNode, []*structs.NodeEvent{event})
 	}
 
 	// Update the status in the copy
 	copyNode.Status = status
-	copyNode.ModifyIndex = index
+	copyNode.ModifyIndex = txn.Index
 
 	// Insert the node
 	if err := txn.Insert("nodes", copyNode); err != nil {
 		return fmt.Errorf("node update failed: %v", err)
 	}
-	if err := txn.Insert("index", &IndexEntry{"nodes", index}); err != nil {
+	if err := txn.Insert("index", &IndexEntry{"nodes", txn.Index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
-
-	txn.Commit()
 	return nil
 }
 
 // BatchUpdateNodeDrain is used to update the drain of a node set of nodes
-func (s *StateStore) BatchUpdateNodeDrain(index uint64, updatedAt int64, updates map[string]*structs.DrainUpdate, events map[string]*structs.NodeEvent) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) BatchUpdateNodeDrain(msgType structs.MessageType, index uint64, updatedAt int64, updates map[string]*structs.DrainUpdate, events map[string]*structs.NodeEvent) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 	for node, update := range updates {
 		if err := s.updateNodeDrainImpl(txn, index, node, update.DrainStrategy, update.MarkEligible, updatedAt, events[node]); err != nil {
 			return err
 		}
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // UpdateNodeDrain is used to update the drain of a node
-func (s *StateStore) UpdateNodeDrain(index uint64, nodeID string,
-	drain *structs.DrainStrategy, markEligible bool, updatedAt int64, event *structs.NodeEvent) error {
+func (s *StateStore) UpdateNodeDrain(msgType structs.MessageType, index uint64, nodeID string, drain *structs.DrainStrategy, markEligible bool, updatedAt int64, event *structs.NodeEvent) error {
 
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 	if err := s.updateNodeDrainImpl(txn, index, nodeID, drain, markEligible, updatedAt, event); err != nil {
 		return err
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
-func (s *StateStore) updateNodeDrainImpl(txn *memdb.Txn, index uint64, nodeID string,
+func (s *StateStore) updateNodeDrainImpl(txn *txn, index uint64, nodeID string,
 	drain *structs.DrainStrategy, markEligible bool, updatedAt int64, event *structs.NodeEvent) error {
 
 	// Lookup the node
@@ -923,9 +1019,9 @@ func (s *StateStore) updateNodeDrainImpl(txn *memdb.Txn, index uint64, nodeID st
 }
 
 // UpdateNodeEligibility is used to update the scheduling eligibility of a node
-func (s *StateStore) UpdateNodeEligibility(index uint64, nodeID string, eligibility string, updatedAt int64, event *structs.NodeEvent) error {
+func (s *StateStore) UpdateNodeEligibility(msgType structs.MessageType, index uint64, nodeID string, eligibility string, updatedAt int64, event *structs.NodeEvent) error {
 
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	// Lookup the node
@@ -964,14 +1060,13 @@ func (s *StateStore) UpdateNodeEligibility(index uint64, nodeID string, eligibil
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // UpsertNodeEvents adds the node events to the nodes, rotating events as
 // necessary.
-func (s *StateStore) UpsertNodeEvents(index uint64, nodeEvents map[string][]*structs.NodeEvent) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) UpsertNodeEvents(msgType structs.MessageType, index uint64, nodeEvents map[string][]*structs.NodeEvent) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	for nodeID, events := range nodeEvents {
@@ -980,14 +1075,13 @@ func (s *StateStore) UpsertNodeEvents(index uint64, nodeEvents map[string][]*str
 		}
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // upsertNodeEvent upserts a node event for a respective node. It also maintains
 // that a fixed number of node events are ever stored simultaneously, deleting
 // older events once this bound has been reached.
-func (s *StateStore) upsertNodeEvents(index uint64, nodeID string, events []*structs.NodeEvent, txn *memdb.Txn) error {
+func (s *StateStore) upsertNodeEvents(index uint64, nodeID string, events []*structs.NodeEvent, txn *txn) error {
 	// Lookup the node
 	existing, err := txn.First("nodes", "id", nodeID)
 	if err != nil {
@@ -1031,7 +1125,7 @@ func appendNodeEvents(index uint64, node *structs.Node, events []*structs.NodeEv
 
 // upsertNodeCSIPlugins indexes csi plugins for volume retrieval, with health. It's called
 // on upsertNodeEvents, so that event driven health changes are updated
-func upsertNodeCSIPlugins(txn *memdb.Txn, node *structs.Node, index uint64) error {
+func upsertNodeCSIPlugins(txn *txn, node *structs.Node, index uint64) error {
 
 	loop := func(info *structs.CSIInfo) error {
 		raw, err := txn.First("csi_plugins", "id", info.PluginID)
@@ -1147,7 +1241,7 @@ func upsertNodeCSIPlugins(txn *memdb.Txn, node *structs.Node, index uint64) erro
 }
 
 // deleteNodeCSIPlugins cleans up CSIInfo node health status, called in DeleteNode
-func deleteNodeCSIPlugins(txn *memdb.Txn, node *structs.Node, index uint64) error {
+func deleteNodeCSIPlugins(txn *txn, node *structs.Node, index uint64) error {
 	if len(node.CSIControllerPlugins) == 0 && len(node.CSINodePlugins) == 0 {
 		return nil
 	}
@@ -1190,7 +1284,7 @@ func deleteNodeCSIPlugins(txn *memdb.Txn, node *structs.Node, index uint64) erro
 }
 
 // updateOrGCPlugin updates a plugin but will delete it if the plugin is empty
-func updateOrGCPlugin(index uint64, txn *memdb.Txn, plug *structs.CSIPlugin) error {
+func updateOrGCPlugin(index uint64, txn Txn, plug *structs.CSIPlugin) error {
 	plug.ModifyIndex = index
 
 	if plug.IsEmpty() {
@@ -1209,7 +1303,7 @@ func updateOrGCPlugin(index uint64, txn *memdb.Txn, plug *structs.CSIPlugin) err
 
 // deleteJobFromPlugins removes the allocations of this job from any plugins the job is
 // running, possibly deleting the plugin if it's no longer in use. It's called in DeleteJobTxn
-func (s *StateStore) deleteJobFromPlugins(index uint64, txn *memdb.Txn, job *structs.Job) error {
+func (s *StateStore) deleteJobFromPlugins(index uint64, txn Txn, job *structs.Job) error {
 	ws := memdb.NewWatchSet()
 	summary, err := s.JobSummaryByID(ws, job.Namespace, job.ID)
 	if err != nil {
@@ -1266,7 +1360,7 @@ func (s *StateStore) deleteJobFromPlugins(index uint64, txn *memdb.Txn, job *str
 		plug, ok := plugins[x.pluginID]
 
 		if !ok {
-			plug, err = s.CSIPluginByID(ws, x.pluginID)
+			plug, err = s.CSIPluginByIDTxn(txn, nil, x.pluginID)
 			if err != nil {
 				return fmt.Errorf("error getting plugin: %s, %v", x.pluginID, err)
 			}
@@ -1304,7 +1398,7 @@ func (s *StateStore) deleteJobFromPlugins(index uint64, txn *memdb.Txn, job *str
 
 // NodeByID is used to lookup a node by ID
 func (s *StateStore) NodeByID(ws memdb.WatchSet, nodeID string) (*structs.Node, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	watchCh, existing, err := txn.FirstWatch("nodes", "id", nodeID)
 	if err != nil {
@@ -1320,7 +1414,7 @@ func (s *StateStore) NodeByID(ws memdb.WatchSet, nodeID string) (*structs.Node, 
 
 // NodesByIDPrefix is used to lookup nodes by prefix
 func (s *StateStore) NodesByIDPrefix(ws memdb.WatchSet, nodeID string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("nodes", "id_prefix", nodeID)
 	if err != nil {
@@ -1333,7 +1427,7 @@ func (s *StateStore) NodesByIDPrefix(ws memdb.WatchSet, nodeID string) (memdb.Re
 
 // NodeBySecretID is used to lookup a node by SecretID
 func (s *StateStore) NodeBySecretID(ws memdb.WatchSet, secretID string) (*structs.Node, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	watchCh, existing, err := txn.FirstWatch("nodes", "secret_id", secretID)
 	if err != nil {
@@ -1349,7 +1443,7 @@ func (s *StateStore) NodeBySecretID(ws memdb.WatchSet, secretID string) (*struct
 
 // Nodes returns an iterator over all the nodes
 func (s *StateStore) Nodes(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire nodes table
 	iter, err := txn.Get("nodes", "id")
@@ -1361,14 +1455,13 @@ func (s *StateStore) Nodes(ws memdb.WatchSet) (memdb.ResultIterator, error) {
 }
 
 // UpsertJob is used to register a job or update a job definition
-func (s *StateStore) UpsertJob(index uint64, job *structs.Job) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) UpsertJob(msgType structs.MessageType, index uint64, job *structs.Job) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 	if err := s.upsertJobImpl(index, job, false, txn); err != nil {
 		return err
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // UpsertJobTxn is used to register a job or update a job definition, like UpsertJob,
@@ -1378,7 +1471,7 @@ func (s *StateStore) UpsertJobTxn(index uint64, job *structs.Job, txn Txn) error
 }
 
 // upsertJobImpl is the implementation for registering a job or updating a job definition
-func (s *StateStore) upsertJobImpl(index uint64, job *structs.Job, keepVersion bool, txn *memdb.Txn) error {
+func (s *StateStore) upsertJobImpl(index uint64, job *structs.Job, keepVersion bool, txn *txn) error {
 	// Assert the namespace exists
 	if exists, err := s.namespaceExists(txn, job.Namespace); err != nil {
 		return err
@@ -1447,6 +1540,10 @@ func (s *StateStore) upsertJobImpl(index uint64, job *structs.Job, keepVersion b
 		return fmt.Errorf("unable to update job scaling policies: %v", err)
 	}
 
+	if err := s.updateJobRecommendations(index, txn, existingJob, job); err != nil {
+		return fmt.Errorf("unable to update job recommendations: %v", err)
+	}
+
 	if err := s.updateJobCSIPlugins(index, job, existingJob, txn); err != nil {
 		return fmt.Errorf("unable to update job scaling policies: %v", err)
 	}
@@ -1464,12 +1561,12 @@ func (s *StateStore) upsertJobImpl(index uint64, job *structs.Job, keepVersion b
 
 // DeleteJob is used to deregister a job
 func (s *StateStore) DeleteJob(index uint64, namespace, jobID string) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	err := s.DeleteJobTxn(index, namespace, jobID, txn)
 	if err == nil {
-		txn.Commit()
+		return txn.Commit()
 	}
 	return err
 }
@@ -1564,6 +1661,11 @@ func (s *StateStore) DeleteJobTxn(index uint64, namespace, jobID string, txn Txn
 		return fmt.Errorf("deleting job scaling policies failed: %v", err)
 	}
 
+	// Delete any job recommendations
+	if err := s.deleteRecommendationsByJob(index, txn, job); err != nil {
+		return fmt.Errorf("deleting job recommendatons failed: %v", err)
+	}
+
 	// Delete the scaling events
 	if _, err = txn.DeleteAll("scaling_event", "id", namespace, jobID); err != nil {
 		return fmt.Errorf("deleting job scaling events failed: %v", err)
@@ -1576,7 +1678,7 @@ func (s *StateStore) DeleteJobTxn(index uint64, namespace, jobID string, txn Txn
 }
 
 // deleteJobScalingPolicies deletes any scaling policies associated with the job
-func (s *StateStore) deleteJobScalingPolicies(index uint64, job *structs.Job, txn *memdb.Txn) error {
+func (s *StateStore) deleteJobScalingPolicies(index uint64, job *structs.Job, txn *txn) error {
 	iter, err := s.ScalingPoliciesByJobTxn(nil, job.Namespace, job.ID, txn)
 	if err != nil {
 		return fmt.Errorf("getting job scaling policies for deletion failed: %v", err)
@@ -1609,7 +1711,7 @@ func (s *StateStore) deleteJobScalingPolicies(index uint64, job *structs.Job, tx
 }
 
 // deleteJobVersions deletes all versions of the given job.
-func (s *StateStore) deleteJobVersions(index uint64, job *structs.Job, txn *memdb.Txn) error {
+func (s *StateStore) deleteJobVersions(index uint64, job *structs.Job, txn *txn) error {
 	iter, err := txn.Get("job_version", "id_prefix", job.Namespace, job.ID)
 	if err != nil {
 		return err
@@ -1649,7 +1751,7 @@ func (s *StateStore) deleteJobVersions(index uint64, job *structs.Job, txn *memd
 
 // upsertJobVersion inserts a job into its historic version table and limits the
 // number of job versions that are tracked.
-func (s *StateStore) upsertJobVersion(index uint64, job *structs.Job, txn *memdb.Txn) error {
+func (s *StateStore) upsertJobVersion(index uint64, job *structs.Job, txn *txn) error {
 	// Insert the job
 	if err := txn.Insert("job_version", job); err != nil {
 		return fmt.Errorf("failed to insert job into job_version table: %v", err)
@@ -1699,7 +1801,7 @@ func (s *StateStore) upsertJobVersion(index uint64, job *structs.Job, txn *memdb
 // JobByID is used to lookup a job by its ID. JobByID returns the current/latest job
 // version.
 func (s *StateStore) JobByID(ws memdb.WatchSet, namespace, id string) (*structs.Job, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	return s.JobByIDTxn(ws, namespace, id, txn)
 }
 
@@ -1720,7 +1822,7 @@ func (s *StateStore) JobByIDTxn(ws memdb.WatchSet, namespace, id string, txn Txn
 
 // JobsByIDPrefix is used to lookup a job by prefix
 func (s *StateStore) JobsByIDPrefix(ws memdb.WatchSet, namespace, id string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("jobs", "id_prefix", namespace, id)
 	if err != nil {
@@ -1734,24 +1836,22 @@ func (s *StateStore) JobsByIDPrefix(ws memdb.WatchSet, namespace, id string) (me
 
 // JobVersionsByID returns all the tracked versions of a job.
 func (s *StateStore) JobVersionsByID(ws memdb.WatchSet, namespace, id string) ([]*structs.Job, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
-	return s.jobVersionByID(txn, &ws, namespace, id)
+	return s.jobVersionByID(txn, ws, namespace, id)
 }
 
 // jobVersionByID is the underlying implementation for retrieving all tracked
 // versions of a job and is called under an existing transaction. A watch set
 // can optionally be passed in to add the job histories to the watch set.
-func (s *StateStore) jobVersionByID(txn *memdb.Txn, ws *memdb.WatchSet, namespace, id string) ([]*structs.Job, error) {
+func (s *StateStore) jobVersionByID(txn *txn, ws memdb.WatchSet, namespace, id string) ([]*structs.Job, error) {
 	// Get all the historic jobs for this ID
 	iter, err := txn.Get("job_version", "id_prefix", namespace, id)
 	if err != nil {
 		return nil, err
 	}
 
-	if ws != nil {
-		ws.Add(iter.WatchCh())
-	}
+	ws.Add(iter.WatchCh())
 
 	var all []*structs.Job
 	for {
@@ -1780,23 +1880,21 @@ func (s *StateStore) jobVersionByID(txn *memdb.Txn, ws *memdb.WatchSet, namespac
 // JobByIDAndVersion returns the job identified by its ID and Version. The
 // passed watchset may be nil.
 func (s *StateStore) JobByIDAndVersion(ws memdb.WatchSet, namespace, id string, version uint64) (*structs.Job, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	return s.jobByIDAndVersionImpl(ws, namespace, id, version, txn)
 }
 
 // jobByIDAndVersionImpl returns the job identified by its ID and Version. The
 // passed watchset may be nil.
 func (s *StateStore) jobByIDAndVersionImpl(ws memdb.WatchSet, namespace, id string,
-	version uint64, txn *memdb.Txn) (*structs.Job, error) {
+	version uint64, txn *txn) (*structs.Job, error) {
 
 	watchCh, existing, err := txn.FirstWatch("job_version", "id", namespace, id, version)
 	if err != nil {
 		return nil, err
 	}
 
-	if ws != nil {
-		ws.Add(watchCh)
-	}
+	ws.Add(watchCh)
 
 	if existing != nil {
 		job := existing.(*structs.Job)
@@ -1807,7 +1905,7 @@ func (s *StateStore) jobByIDAndVersionImpl(ws memdb.WatchSet, namespace, id stri
 }
 
 func (s *StateStore) JobVersions(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire deployments table
 	iter, err := txn.Get("job_version", "id")
@@ -1821,7 +1919,7 @@ func (s *StateStore) JobVersions(ws memdb.WatchSet) (memdb.ResultIterator, error
 
 // Jobs returns an iterator over all the jobs
 func (s *StateStore) Jobs(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire jobs table
 	iter, err := txn.Get("jobs", "id")
@@ -1836,12 +1934,12 @@ func (s *StateStore) Jobs(ws memdb.WatchSet) (memdb.ResultIterator, error) {
 
 // JobsByNamespace returns an iterator over all the jobs for the given namespace
 func (s *StateStore) JobsByNamespace(ws memdb.WatchSet, namespace string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	return s.jobsByNamespaceImpl(ws, namespace, txn)
 }
 
 // jobsByNamespaceImpl returns an iterator over all the jobs for the given namespace
-func (s *StateStore) jobsByNamespaceImpl(ws memdb.WatchSet, namespace string, txn *memdb.Txn) (memdb.ResultIterator, error) {
+func (s *StateStore) jobsByNamespaceImpl(ws memdb.WatchSet, namespace string, txn *txn) (memdb.ResultIterator, error) {
 	// Walk the entire jobs table
 	iter, err := txn.Get("jobs", "id_prefix", namespace, "")
 	if err != nil {
@@ -1855,7 +1953,7 @@ func (s *StateStore) jobsByNamespaceImpl(ws memdb.WatchSet, namespace string, tx
 
 // JobsByPeriodic returns an iterator over all the periodic or non-periodic jobs.
 func (s *StateStore) JobsByPeriodic(ws memdb.WatchSet, periodic bool) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("jobs", "periodic", periodic)
 	if err != nil {
@@ -1870,7 +1968,7 @@ func (s *StateStore) JobsByPeriodic(ws memdb.WatchSet, periodic bool) (memdb.Res
 // JobsByScheduler returns an iterator over all the jobs with the specific
 // scheduler type.
 func (s *StateStore) JobsByScheduler(ws memdb.WatchSet, schedulerType string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Return an iterator for jobs with the specific type.
 	iter, err := txn.Get("jobs", "type", schedulerType)
@@ -1886,7 +1984,7 @@ func (s *StateStore) JobsByScheduler(ws memdb.WatchSet, schedulerType string) (m
 // JobsByGC returns an iterator over all jobs eligible or uneligible for garbage
 // collection.
 func (s *StateStore) JobsByGC(ws memdb.WatchSet, gc bool) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("jobs", "gc", gc)
 	if err != nil {
@@ -1900,7 +1998,7 @@ func (s *StateStore) JobsByGC(ws memdb.WatchSet, gc bool) (memdb.ResultIterator,
 
 // JobSummary returns a job summary object which matches a specific id.
 func (s *StateStore) JobSummaryByID(ws memdb.WatchSet, namespace, jobID string) (*structs.JobSummary, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	watchCh, existing, err := txn.FirstWatch("job_summary", "id", namespace, jobID)
 	if err != nil {
@@ -1920,7 +2018,7 @@ func (s *StateStore) JobSummaryByID(ws memdb.WatchSet, namespace, jobID string) 
 // JobSummaries walks the entire job summary table and returns all the job
 // summary objects
 func (s *StateStore) JobSummaries(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("job_summary", "id")
 	if err != nil {
@@ -1934,7 +2032,7 @@ func (s *StateStore) JobSummaries(ws memdb.WatchSet) (memdb.ResultIterator, erro
 
 // JobSummaryByPrefix is used to look up Job Summary by id prefix
 func (s *StateStore) JobSummaryByPrefix(ws memdb.WatchSet, namespace, id string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("job_summary", "id_prefix", namespace, id)
 	if err != nil {
@@ -1948,7 +2046,7 @@ func (s *StateStore) JobSummaryByPrefix(ws memdb.WatchSet, namespace, id string)
 
 // CSIVolumeRegister adds a volume to the server store, failing if it already exists
 func (s *StateStore) CSIVolumeRegister(index uint64, volumes []*structs.CSIVolume) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	for _, v := range volumes {
@@ -1982,6 +2080,17 @@ func (s *StateStore) CSIVolumeRegister(index uint64, volumes []*structs.CSIVolum
 			v.ModifyIndex = index
 		}
 
+		// Allocations are copy on write, so we want to keep the Allocation ID
+		// but we need to clear the pointer so that we don't store it when we
+		// write the volume to the state store. We'll get it from the db in
+		// denormalize.
+		for allocID := range v.ReadAllocs {
+			v.ReadAllocs[allocID] = nil
+		}
+		for allocID := range v.WriteAllocs {
+			v.WriteAllocs[allocID] = nil
+		}
+
 		err = txn.Insert("csi_volumes", v)
 		if err != nil {
 			return fmt.Errorf("volume insert: %v", err)
@@ -1992,13 +2101,13 @@ func (s *StateStore) CSIVolumeRegister(index uint64, volumes []*structs.CSIVolum
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
-// CSIVolumes returns the unfiltered list of all volumes
+// CSIVolumes returns the unfiltered list of all volumes. Caller should
+// snapshot if it wants to also denormalize the plugins.
 func (s *StateStore) CSIVolumes(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	defer txn.Abort()
 
 	iter, err := txn.Get("csi_volumes", "id")
@@ -2011,28 +2120,33 @@ func (s *StateStore) CSIVolumes(ws memdb.WatchSet) (memdb.ResultIterator, error)
 	return iter, nil
 }
 
-// CSIVolumeByID is used to lookup a single volume. Returns a copy of the volume
-// because its plugins are denormalized to provide accurate Health.
+// CSIVolumeByID is used to lookup a single volume. Returns a copy of the
+// volume because its plugins and allocations are denormalized to provide
+// accurate Health.
 func (s *StateStore) CSIVolumeByID(ws memdb.WatchSet, namespace, id string) (*structs.CSIVolume, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	watchCh, obj, err := txn.FirstWatch("csi_volumes", "id_prefix", namespace, id)
 	if err != nil {
 		return nil, fmt.Errorf("volume lookup failed: %s %v", id, err)
 	}
+
 	ws.Add(watchCh)
 
 	if obj == nil {
 		return nil, nil
 	}
 
+	// we return the volume with the plugins denormalized by default,
+	// because the scheduler needs them for feasibility checking
 	vol := obj.(*structs.CSIVolume)
-	return s.CSIVolumeDenormalizePlugins(ws, vol.Copy())
+	return s.CSIVolumeDenormalizePluginsTxn(txn, vol.Copy())
 }
 
-// CSIVolumes looks up csi_volumes by pluginID
+// CSIVolumes looks up csi_volumes by pluginID. Caller should snapshot if it
+// wants to also denormalize the plugins.
 func (s *StateStore) CSIVolumesByPluginID(ws memdb.WatchSet, namespace, pluginID string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("csi_volumes", "plugin_id", pluginID)
 	if err != nil {
@@ -2052,9 +2166,10 @@ func (s *StateStore) CSIVolumesByPluginID(ws memdb.WatchSet, namespace, pluginID
 	return wrap, nil
 }
 
-// CSIVolumesByIDPrefix supports search
+// CSIVolumesByIDPrefix supports search. Caller should snapshot if it wants to
+// also denormalize the plugins.
 func (s *StateStore) CSIVolumesByIDPrefix(ws memdb.WatchSet, namespace, volumeID string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("csi_volumes", "id_prefix", namespace, volumeID)
 	if err != nil {
@@ -2062,10 +2177,12 @@ func (s *StateStore) CSIVolumesByIDPrefix(ws memdb.WatchSet, namespace, volumeID
 	}
 
 	ws.Add(iter.WatchCh())
+
 	return iter, nil
 }
 
-// CSIVolumesByNodeID looks up CSIVolumes in use on a node
+// CSIVolumesByNodeID looks up CSIVolumes in use on a node. Caller should
+// snapshot if it wants to also denormalize the plugins.
 func (s *StateStore) CSIVolumesByNodeID(ws memdb.WatchSet, nodeID string) (memdb.ResultIterator, error) {
 	allocs, err := s.AllocsByNode(ws, nodeID)
 	if err != nil {
@@ -2093,7 +2210,7 @@ func (s *StateStore) CSIVolumesByNodeID(ws memdb.WatchSet, nodeID string) (memdb
 
 	// Lookup the raw CSIVolumes to match the other list interfaces
 	iter := NewSliceIterator()
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	for id, namespace := range ids {
 		raw, err := txn.First("csi_volumes", "id", namespace, id)
 		if err != nil {
@@ -2102,17 +2219,20 @@ func (s *StateStore) CSIVolumesByNodeID(ws memdb.WatchSet, nodeID string) (memdb
 		iter.Add(raw)
 	}
 
+	ws.Add(iter.WatchCh())
+
 	return iter, nil
 }
 
 // CSIVolumesByNamespace looks up the entire csi_volumes table
 func (s *StateStore) CSIVolumesByNamespace(ws memdb.WatchSet, namespace string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("csi_volumes", "id_prefix", namespace, "")
 	if err != nil {
 		return nil, fmt.Errorf("volume lookup failed: %v", err)
 	}
+
 	ws.Add(iter.WatchCh())
 
 	return iter, nil
@@ -2120,9 +2240,8 @@ func (s *StateStore) CSIVolumesByNamespace(ws memdb.WatchSet, namespace string) 
 
 // CSIVolumeClaim updates the volume's claim count and allocation list
 func (s *StateStore) CSIVolumeClaim(index uint64, namespace, id string, claim *structs.CSIVolumeClaim) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
-	ws := memdb.NewWatchSet()
 
 	row, err := txn.First("csi_volumes", "id", namespace, id)
 	if err != nil {
@@ -2138,8 +2257,8 @@ func (s *StateStore) CSIVolumeClaim(index uint64, namespace, id string, claim *s
 	}
 
 	var alloc *structs.Allocation
-	if claim.Mode != structs.CSIVolumeClaimRelease {
-		alloc, err = s.AllocByID(ws, claim.AllocationID)
+	if claim.State == structs.CSIVolumeClaimStateTaken {
+		alloc, err = s.allocByIDImpl(txn, nil, claim.AllocationID)
 		if err != nil {
 			s.logger.Error("AllocByID failed", "error", err)
 			return fmt.Errorf(structs.ErrUnknownAllocationPrefix)
@@ -2152,12 +2271,11 @@ func (s *StateStore) CSIVolumeClaim(index uint64, namespace, id string, claim *s
 		}
 	}
 
-	volume, err := s.CSIVolumeDenormalizePlugins(ws, orig.Copy())
+	volume, err := s.CSIVolumeDenormalizePluginsTxn(txn, orig.Copy())
 	if err != nil {
 		return err
 	}
-
-	volume, err = s.CSIVolumeDenormalize(ws, volume)
+	volume, err = s.CSIVolumeDenormalizeTxn(txn, nil, volume)
 	if err != nil {
 		return err
 	}
@@ -2174,6 +2292,17 @@ func (s *StateStore) CSIVolumeClaim(index uint64, namespace, id string, claim *s
 
 	volume.ModifyIndex = index
 
+	// Allocations are copy on write, so we want to keep the Allocation ID
+	// but we need to clear the pointer so that we don't store it when we
+	// write the volume to the state store. We'll get it from the db in
+	// denormalize.
+	for allocID := range volume.ReadAllocs {
+		volume.ReadAllocs[allocID] = nil
+	}
+	for allocID := range volume.WriteAllocs {
+		volume.WriteAllocs[allocID] = nil
+	}
+
 	if err = txn.Insert("csi_volumes", volume); err != nil {
 		return fmt.Errorf("volume update failed: %s: %v", id, err)
 	}
@@ -2182,13 +2311,12 @@ func (s *StateStore) CSIVolumeClaim(index uint64, namespace, id string, claim *s
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // CSIVolumeDeregister removes the volume from the server
 func (s *StateStore) CSIVolumeDeregister(index uint64, namespace string, ids []string, force bool) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	for _, id := range ids {
@@ -2211,7 +2339,7 @@ func (s *StateStore) CSIVolumeDeregister(index uint64, namespace string, ids []s
 		// allocations have been stopped but claims can't be freed because
 		// ex. the plugins have all been removed.
 		if vol.InUse() {
-			if !force || !s.volSafeToForce(vol) {
+			if !force || !s.volSafeToForce(txn, vol) {
 				return fmt.Errorf("volume in use: %s", id)
 			}
 		}
@@ -2225,15 +2353,13 @@ func (s *StateStore) CSIVolumeDeregister(index uint64, namespace string, ids []s
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // volSafeToForce checks if the any of the remaining allocations
 // are in a non-terminal state.
-func (s *StateStore) volSafeToForce(v *structs.CSIVolume) bool {
-	ws := memdb.NewWatchSet()
-	vol, err := s.CSIVolumeDenormalize(ws, v)
+func (s *StateStore) volSafeToForce(txn Txn, v *structs.CSIVolume) bool {
+	vol, err := s.CSIVolumeDenormalizeTxn(txn, nil, v)
 	if err != nil {
 		return false
 	}
@@ -2251,19 +2377,30 @@ func (s *StateStore) volSafeToForce(v *structs.CSIVolume) bool {
 	return true
 }
 
-// CSIVolumeDenormalizePlugins returns a CSIVolume with current health and plugins, but
-// without allocations
-// Use this for current volume metadata, handling lists of volumes
-// Use CSIVolumeDenormalize for volumes containing both health and current allocations
+// CSIVolumeDenormalizePlugins returns a CSIVolume with current health and
+// plugins, but without allocations.
+// Use this for current volume metadata, handling lists of volumes.
+// Use CSIVolumeDenormalize for volumes containing both health and current
+// allocations.
 func (s *StateStore) CSIVolumeDenormalizePlugins(ws memdb.WatchSet, vol *structs.CSIVolume) (*structs.CSIVolume, error) {
 	if vol == nil {
 		return nil, nil
 	}
-	// Lookup CSIPlugin, the health records, and calculate volume health
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	defer txn.Abort()
+	return s.CSIVolumeDenormalizePluginsTxn(txn, vol)
+}
 
-	plug, err := s.CSIPluginByID(ws, vol.PluginID)
+// CSIVolumeDenormalizePluginsTxn returns a CSIVolume with current health and
+// plugins, but without allocations.
+// Use this for current volume metadata, handling lists of volumes.
+// Use CSIVolumeDenormalize for volumes containing both health and current
+// allocations.
+func (s *StateStore) CSIVolumeDenormalizePluginsTxn(txn Txn, vol *structs.CSIVolume) (*structs.CSIVolume, error) {
+	if vol == nil {
+		return nil, nil
+	}
+	plug, err := s.CSIPluginByIDTxn(txn, nil, vol.PluginID)
 	if err != nil {
 		return nil, fmt.Errorf("plugin lookup error: %s %v", vol.PluginID, err)
 	}
@@ -2294,8 +2431,17 @@ func (s *StateStore) CSIVolumeDenormalizePlugins(ws memdb.WatchSet, vol *structs
 
 // CSIVolumeDenormalize returns a CSIVolume with allocations
 func (s *StateStore) CSIVolumeDenormalize(ws memdb.WatchSet, vol *structs.CSIVolume) (*structs.CSIVolume, error) {
+	txn := s.db.ReadTxn()
+	return s.CSIVolumeDenormalizeTxn(txn, ws, vol)
+}
+
+// CSIVolumeDenormalizeTxn populates a CSIVolume with allocations
+func (s *StateStore) CSIVolumeDenormalizeTxn(txn Txn, ws memdb.WatchSet, vol *structs.CSIVolume) (*structs.CSIVolume, error) {
+	if vol == nil {
+		return nil, nil
+	}
 	for id := range vol.ReadAllocs {
-		a, err := s.AllocByID(ws, id)
+		a, err := s.allocByIDImpl(txn, ws, id)
 		if err != nil {
 			return nil, err
 		}
@@ -2316,7 +2462,7 @@ func (s *StateStore) CSIVolumeDenormalize(ws memdb.WatchSet, vol *structs.CSIVol
 	}
 
 	for id := range vol.WriteAllocs {
-		a, err := s.AllocByID(ws, id)
+		a, err := s.allocByIDImpl(txn, ws, id)
 		if err != nil {
 			return nil, err
 		}
@@ -2338,7 +2484,7 @@ func (s *StateStore) CSIVolumeDenormalize(ws memdb.WatchSet, vol *structs.CSIVol
 
 // CSIPlugins returns the unfiltered list of all plugin health status
 func (s *StateStore) CSIPlugins(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	defer txn.Abort()
 
 	iter, err := txn.Get("csi_plugins", "id")
@@ -2353,7 +2499,7 @@ func (s *StateStore) CSIPlugins(ws memdb.WatchSet) (memdb.ResultIterator, error)
 
 // CSIPluginsByIDPrefix supports search
 func (s *StateStore) CSIPluginsByIDPrefix(ws memdb.WatchSet, pluginID string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("csi_plugins", "id_prefix", pluginID)
 	if err != nil {
@@ -2365,27 +2511,40 @@ func (s *StateStore) CSIPluginsByIDPrefix(ws memdb.WatchSet, pluginID string) (m
 	return iter, nil
 }
 
-// CSIPluginByID returns the one named CSIPlugin
+// CSIPluginByID returns a named CSIPlugin. This method creates a new
+// transaction so you should not call it from within another transaction.
 func (s *StateStore) CSIPluginByID(ws memdb.WatchSet, id string) (*structs.CSIPlugin, error) {
-	txn := s.db.Txn(false)
-	defer txn.Abort()
+	txn := s.db.ReadTxn()
+	plugin, err := s.CSIPluginByIDTxn(txn, ws, id)
+	if err != nil {
+		return nil, err
+	}
+	return plugin, nil
+}
 
-	raw, err := txn.First("csi_plugins", "id_prefix", id)
+// CSIPluginByIDTxn returns a named CSIPlugin
+func (s *StateStore) CSIPluginByIDTxn(txn Txn, ws memdb.WatchSet, id string) (*structs.CSIPlugin, error) {
+
+	watchCh, obj, err := txn.FirstWatch("csi_plugins", "id_prefix", id)
 	if err != nil {
 		return nil, fmt.Errorf("csi_plugin lookup failed: %s %v", id, err)
 	}
 
-	if raw == nil {
-		return nil, nil
+	ws.Add(watchCh)
+
+	if obj != nil {
+		return obj.(*structs.CSIPlugin), nil
 	}
-
-	plug := raw.(*structs.CSIPlugin)
-
-	return plug, nil
+	return nil, nil
 }
 
 // CSIPluginDenormalize returns a CSIPlugin with allocation details. Always called on a copy of the plugin.
 func (s *StateStore) CSIPluginDenormalize(ws memdb.WatchSet, plug *structs.CSIPlugin) (*structs.CSIPlugin, error) {
+	txn := s.db.ReadTxn()
+	return s.CSIPluginDenormalizeTxn(txn, ws, plug)
+}
+
+func (s *StateStore) CSIPluginDenormalizeTxn(txn Txn, ws memdb.WatchSet, plug *structs.CSIPlugin) (*structs.CSIPlugin, error) {
 	if plug == nil {
 		return nil, nil
 	}
@@ -2400,14 +2559,14 @@ func (s *StateStore) CSIPluginDenormalize(ws memdb.WatchSet, plug *structs.CSIPl
 	}
 
 	for id := range ids {
-		alloc, err := s.AllocByID(ws, id)
+		alloc, err := s.allocByIDImpl(txn, ws, id)
 		if err != nil {
 			return nil, err
 		}
 		if alloc == nil {
 			continue
 		}
-		plug.Allocations = append(plug.Allocations, alloc.Stub())
+		plug.Allocations = append(plug.Allocations, alloc.Stub(nil))
 	}
 
 	return plug, nil
@@ -2417,7 +2576,7 @@ func (s *StateStore) CSIPluginDenormalize(ws memdb.WatchSet, plug *structs.CSIPl
 // is currently no raft message for this, as it's intended to support
 // testing use cases.
 func (s *StateStore) UpsertCSIPlugin(index uint64, plug *structs.CSIPlugin) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	existing, err := txn.First("csi_plugins", "id", plug.ID)
@@ -2437,17 +2596,15 @@ func (s *StateStore) UpsertCSIPlugin(index uint64, plug *structs.CSIPlugin) erro
 	if err := txn.Insert("index", &IndexEntry{"csi_plugins", index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // DeleteCSIPlugin deletes the plugin if it's not in use.
 func (s *StateStore) DeleteCSIPlugin(index uint64, id string) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
-	ws := memdb.NewWatchSet()
 
-	plug, err := s.CSIPluginByID(ws, id)
+	plug, err := s.CSIPluginByIDTxn(txn, nil, id)
 	if err != nil {
 		return err
 	}
@@ -2456,7 +2613,7 @@ func (s *StateStore) DeleteCSIPlugin(index uint64, id string) error {
 		return nil
 	}
 
-	plug, err = s.CSIPluginDenormalize(ws, plug.Copy())
+	plug, err = s.CSIPluginDenormalizeTxn(txn, nil, plug.Copy())
 	if err != nil {
 		return err
 	}
@@ -2468,13 +2625,12 @@ func (s *StateStore) DeleteCSIPlugin(index uint64, id string) error {
 	if err != nil {
 		return fmt.Errorf("csi_plugins delete error: %v", err)
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // UpsertPeriodicLaunch is used to register a launch or update it.
 func (s *StateStore) UpsertPeriodicLaunch(index uint64, launch *structs.PeriodicLaunch) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	// Check if the job already exists
@@ -2500,18 +2656,17 @@ func (s *StateStore) UpsertPeriodicLaunch(index uint64, launch *structs.Periodic
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // DeletePeriodicLaunch is used to delete the periodic launch
 func (s *StateStore) DeletePeriodicLaunch(index uint64, namespace, jobID string) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	err := s.DeletePeriodicLaunchTxn(index, namespace, jobID, txn)
 	if err == nil {
-		txn.Commit()
+		return txn.Commit()
 	}
 	return err
 }
@@ -2542,7 +2697,7 @@ func (s *StateStore) DeletePeriodicLaunchTxn(index uint64, namespace, jobID stri
 // PeriodicLaunchByID is used to lookup a periodic launch by the periodic job
 // ID.
 func (s *StateStore) PeriodicLaunchByID(ws memdb.WatchSet, namespace, id string) (*structs.PeriodicLaunch, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	watchCh, existing, err := txn.FirstWatch("periodic_launch", "id", namespace, id)
 	if err != nil {
@@ -2559,7 +2714,7 @@ func (s *StateStore) PeriodicLaunchByID(ws memdb.WatchSet, namespace, id string)
 
 // PeriodicLaunches returns an iterator over all the periodic launches
 func (s *StateStore) PeriodicLaunches(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire table
 	iter, err := txn.Get("periodic_launch", "id")
@@ -2573,13 +2728,13 @@ func (s *StateStore) PeriodicLaunches(ws memdb.WatchSet) (memdb.ResultIterator, 
 }
 
 // UpsertEvals is used to upsert a set of evaluations
-func (s *StateStore) UpsertEvals(index uint64, evals []*structs.Evaluation) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) UpsertEvals(msgType structs.MessageType, index uint64, evals []*structs.Evaluation) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	err := s.UpsertEvalsTxn(index, evals, txn)
 	if err == nil {
-		txn.Commit()
+		return txn.Commit()
 	}
 	return err
 }
@@ -2610,7 +2765,7 @@ func (s *StateStore) UpsertEvalsTxn(index uint64, evals []*structs.Evaluation, t
 }
 
 // nestedUpsertEvaluation is used to nest an evaluation upsert within a transaction
-func (s *StateStore) nestedUpsertEval(txn *memdb.Txn, index uint64, eval *structs.Evaluation) error {
+func (s *StateStore) nestedUpsertEval(txn *txn, index uint64, eval *structs.Evaluation) error {
 	// Lookup the evaluation
 	existing, err := txn.First("evals", "id", eval.ID)
 	if err != nil {
@@ -2701,7 +2856,7 @@ func (s *StateStore) nestedUpsertEval(txn *memdb.Txn, index uint64, eval *struct
 // updateEvalModifyIndex is used to update the modify index of an evaluation that has been
 // through a scheduler pass. This is done as part of plan apply. It ensures that when a subsequent
 // scheduler workers process a re-queued evaluation it sees any partial updates from the plan apply.
-func (s *StateStore) updateEvalModifyIndex(txn *memdb.Txn, index uint64, evalID string) error {
+func (s *StateStore) updateEvalModifyIndex(txn *txn, index uint64, evalID string) error {
 	// Lookup the evaluation
 	existing, err := txn.First("evals", "id", evalID)
 	if err != nil {
@@ -2727,7 +2882,7 @@ func (s *StateStore) updateEvalModifyIndex(txn *memdb.Txn, index uint64, evalID 
 
 // DeleteEval is used to delete an evaluation
 func (s *StateStore) DeleteEval(index uint64, evals []string, allocs []string) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	jobs := make(map[structs.NamespacedID]string, len(evals))
@@ -2777,13 +2932,12 @@ func (s *StateStore) DeleteEval(index uint64, evals []string, allocs []string) e
 		return fmt.Errorf("setting job status failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // EvalByID is used to lookup an eval by its ID
 func (s *StateStore) EvalByID(ws memdb.WatchSet, id string) (*structs.Evaluation, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	watchCh, existing, err := txn.FirstWatch("evals", "id", id)
 	if err != nil {
@@ -2801,7 +2955,7 @@ func (s *StateStore) EvalByID(ws memdb.WatchSet, id string) (*structs.Evaluation
 // EvalsByIDPrefix is used to lookup evaluations by prefix in a particular
 // namespace
 func (s *StateStore) EvalsByIDPrefix(ws memdb.WatchSet, namespace, id string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Get an iterator over all evals by the id prefix
 	iter, err := txn.Get("evals", "id_prefix", id)
@@ -2831,7 +2985,7 @@ func evalNamespaceFilter(namespace string) func(interface{}) bool {
 
 // EvalsByJob returns all the evaluations by job id
 func (s *StateStore) EvalsByJob(ws memdb.WatchSet, namespace, jobID string) ([]*structs.Evaluation, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Get an iterator over the node allocations
 	iter, err := txn.Get("evals", "job_prefix", namespace, jobID)
@@ -2862,7 +3016,7 @@ func (s *StateStore) EvalsByJob(ws memdb.WatchSet, namespace, jobID string) ([]*
 
 // Evals returns an iterator over all the evaluations
 func (s *StateStore) Evals(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire table
 	iter, err := txn.Get("evals", "id")
@@ -2878,7 +3032,7 @@ func (s *StateStore) Evals(ws memdb.WatchSet) (memdb.ResultIterator, error) {
 // EvalsByNamespace returns an iterator over all the evaluations in the given
 // namespace
 func (s *StateStore) EvalsByNamespace(ws memdb.WatchSet, namespace string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire table
 	iter, err := txn.Get("evals", "namespace", namespace)
@@ -2896,8 +3050,8 @@ func (s *StateStore) EvalsByNamespace(ws memdb.WatchSet, namespace string) (memd
 // most things, some updates are authoritative from the client. Specifically,
 // the desired state comes from the schedulers, while the actual state comes
 // from clients.
-func (s *StateStore) UpdateAllocsFromClient(index uint64, allocs []*structs.Allocation) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) UpdateAllocsFromClient(msgType structs.MessageType, index uint64, allocs []*structs.Allocation) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	// Handle each of the updated allocations
@@ -2912,12 +3066,11 @@ func (s *StateStore) UpdateAllocsFromClient(index uint64, allocs []*structs.Allo
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // nestedUpdateAllocFromClient is used to nest an update of an allocation with client status
-func (s *StateStore) nestedUpdateAllocFromClient(txn *memdb.Txn, index uint64, alloc *structs.Allocation) error {
+func (s *StateStore) nestedUpdateAllocFromClient(txn *txn, index uint64, alloc *structs.Allocation) error {
 	// Look for existing alloc
 	existing, err := txn.First("allocs", "id", alloc.ID)
 	if err != nil {
@@ -2937,6 +3090,7 @@ func (s *StateStore) nestedUpdateAllocFromClient(txn *memdb.Txn, index uint64, a
 	copyAlloc.ClientStatus = alloc.ClientStatus
 	copyAlloc.ClientDescription = alloc.ClientDescription
 	copyAlloc.TaskStates = alloc.TaskStates
+	copyAlloc.NetworkStatus = alloc.NetworkStatus
 
 	// The client can only set its deployment health and timestamp, so just take
 	// those
@@ -3005,19 +3159,18 @@ func (s *StateStore) nestedUpdateAllocFromClient(txn *memdb.Txn, index uint64, a
 
 // UpsertAllocs is used to evict a set of allocations and allocate new ones at
 // the same time.
-func (s *StateStore) UpsertAllocs(index uint64, allocs []*structs.Allocation) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) UpsertAllocs(msgType structs.MessageType, index uint64, allocs []*structs.Allocation) error {
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 	if err := s.upsertAllocsImpl(index, allocs, txn); err != nil {
 		return err
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // upsertAllocs is the actual implementation of UpsertAllocs so that it may be
 // used with an existing transaction.
-func (s *StateStore) upsertAllocsImpl(index uint64, allocs []*structs.Allocation, txn *memdb.Txn) error {
+func (s *StateStore) upsertAllocsImpl(index uint64, allocs []*structs.Allocation, txn *txn) error {
 	// Handle the allocations
 	jobs := make(map[structs.NamespacedID]string, 1)
 	for _, alloc := range allocs {
@@ -3138,10 +3291,10 @@ func (s *StateStore) upsertAllocsImpl(index uint64, allocs []*structs.Allocation
 
 // UpdateAllocsDesiredTransitions is used to update a set of allocations
 // desired transitions.
-func (s *StateStore) UpdateAllocsDesiredTransitions(index uint64, allocs map[string]*structs.DesiredTransition,
+func (s *StateStore) UpdateAllocsDesiredTransitions(msgType structs.MessageType, index uint64, allocs map[string]*structs.DesiredTransition,
 	evals []*structs.Evaluation) error {
 
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	// Handle each of the updated allocations
@@ -3162,14 +3315,13 @@ func (s *StateStore) UpdateAllocsDesiredTransitions(index uint64, allocs map[str
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // nestedUpdateAllocDesiredTransition is used to nest an update of an
 // allocations desired transition
 func (s *StateStore) nestedUpdateAllocDesiredTransition(
-	txn *memdb.Txn, index uint64, allocID string,
+	txn *txn, index uint64, allocID string,
 	transition *structs.DesiredTransition) error {
 
 	// Look for existing alloc
@@ -3203,24 +3355,31 @@ func (s *StateStore) nestedUpdateAllocDesiredTransition(
 
 // AllocByID is used to lookup an allocation by its ID
 func (s *StateStore) AllocByID(ws memdb.WatchSet, id string) (*structs.Allocation, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
+	return s.allocByIDImpl(txn, ws, id)
+}
 
-	watchCh, existing, err := txn.FirstWatch("allocs", "id", id)
+// allocByIDImpl retrives an allocation and is called under and existing
+// transaction. An optional watch set can be passed to add allocations to the
+// watch set
+func (s *StateStore) allocByIDImpl(txn Txn, ws memdb.WatchSet, id string) (*structs.Allocation, error) {
+	watchCh, raw, err := txn.FirstWatch("allocs", "id", id)
 	if err != nil {
 		return nil, fmt.Errorf("alloc lookup failed: %v", err)
 	}
 
 	ws.Add(watchCh)
 
-	if existing != nil {
-		return existing.(*structs.Allocation), nil
+	if raw == nil {
+		return nil, nil
 	}
-	return nil, nil
+	alloc := raw.(*structs.Allocation)
+	return alloc, nil
 }
 
 // AllocsByIDPrefix is used to lookup allocs by prefix
 func (s *StateStore) AllocsByIDPrefix(ws memdb.WatchSet, namespace, id string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("allocs", "id_prefix", id)
 	if err != nil {
@@ -3248,41 +3407,27 @@ func allocNamespaceFilter(namespace string) func(interface{}) bool {
 }
 
 // AllocsByIDPrefix is used to lookup allocs by prefix
-func (s *StateStore) AllocsByIDPrefixInNSes(ws memdb.WatchSet, namespaces map[string]bool, prefix string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+func (s *StateStore) AllocsByIDPrefixAllNSs(ws memdb.WatchSet, prefix string) (memdb.ResultIterator, error) {
+	txn := s.db.ReadTxn()
 
-	var iter memdb.ResultIterator
-	var err error
-	if prefix != "" {
-		iter, err = txn.Get("allocs", "id_prefix", prefix)
-	} else {
-		iter, err = txn.Get("allocs", "id")
-
-	}
+	iter, err := txn.Get("allocs", "id_prefix", prefix)
 	if err != nil {
 		return nil, fmt.Errorf("alloc lookup failed: %v", err)
 	}
 
 	ws.Add(iter.WatchCh())
 
-	// Wrap the iterator in a filter
-	nsesFilter := func(raw interface{}) bool {
-		alloc, ok := raw.(*structs.Allocation)
-		if !ok {
-			return true
-		}
-
-		return namespaces[alloc.Namespace]
-	}
-
-	wrap := memdb.NewFilterIterator(iter, nsesFilter)
-	return wrap, nil
+	return iter, nil
 }
 
 // AllocsByNode returns all the allocations by node
 func (s *StateStore) AllocsByNode(ws memdb.WatchSet, node string) ([]*structs.Allocation, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
+	return allocsByNodeTxn(txn, ws, node)
+}
+
+func allocsByNodeTxn(txn ReadTxn, ws memdb.WatchSet, node string) ([]*structs.Allocation, error) {
 	// Get an iterator over the node allocations, using only the
 	// node prefix which ignores the terminal status
 	iter, err := txn.Get("allocs", "node_prefix", node)
@@ -3305,7 +3450,7 @@ func (s *StateStore) AllocsByNode(ws memdb.WatchSet, node string) ([]*structs.Al
 
 // AllocsByNode returns all the allocations by node and terminal status
 func (s *StateStore) AllocsByNodeTerminal(ws memdb.WatchSet, node string, terminal bool) ([]*structs.Allocation, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Get an iterator over the node allocations
 	iter, err := txn.Get("allocs", "node", node, terminal)
@@ -3328,7 +3473,7 @@ func (s *StateStore) AllocsByNodeTerminal(ws memdb.WatchSet, node string, termin
 
 // AllocsByJob returns allocations by job id
 func (s *StateStore) AllocsByJob(ws memdb.WatchSet, namespace, jobID string, anyCreateIndex bool) ([]*structs.Allocation, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Get the job
 	var job *structs.Job
@@ -3369,7 +3514,7 @@ func (s *StateStore) AllocsByJob(ws memdb.WatchSet, namespace, jobID string, any
 
 // AllocsByEval returns all the allocations by eval id
 func (s *StateStore) AllocsByEval(ws memdb.WatchSet, evalID string) ([]*structs.Allocation, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Get an iterator over the eval allocations
 	iter, err := txn.Get("allocs", "eval", evalID)
@@ -3392,7 +3537,7 @@ func (s *StateStore) AllocsByEval(ws memdb.WatchSet, evalID string) ([]*structs.
 
 // AllocsByDeployment returns all the allocations by deployment id
 func (s *StateStore) AllocsByDeployment(ws memdb.WatchSet, deploymentID string) ([]*structs.Allocation, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Get an iterator over the deployments allocations
 	iter, err := txn.Get("allocs", "deployment", deploymentID)
@@ -3415,7 +3560,7 @@ func (s *StateStore) AllocsByDeployment(ws memdb.WatchSet, deploymentID string) 
 
 // Allocs returns an iterator over all the evaluations
 func (s *StateStore) Allocs(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire table
 	iter, err := txn.Get("allocs", "id")
@@ -3431,13 +3576,13 @@ func (s *StateStore) Allocs(ws memdb.WatchSet) (memdb.ResultIterator, error) {
 // AllocsByNamespace returns an iterator over all the allocations in the
 // namespace
 func (s *StateStore) AllocsByNamespace(ws memdb.WatchSet, namespace string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	return s.allocsByNamespaceImpl(ws, txn, namespace)
 }
 
 // allocsByNamespaceImpl returns an iterator over all the allocations in the
 // namespace
-func (s *StateStore) allocsByNamespaceImpl(ws memdb.WatchSet, txn *memdb.Txn, namespace string) (memdb.ResultIterator, error) {
+func (s *StateStore) allocsByNamespaceImpl(ws memdb.WatchSet, txn *txn, namespace string) (memdb.ResultIterator, error) {
 	// Walk the entire table
 	iter, err := txn.Get("allocs", "namespace", namespace)
 	if err != nil {
@@ -3451,7 +3596,7 @@ func (s *StateStore) allocsByNamespaceImpl(ws memdb.WatchSet, txn *memdb.Txn, na
 
 // UpsertVaultAccessors is used to register a set of Vault Accessors
 func (s *StateStore) UpsertVaultAccessor(index uint64, accessors []*structs.VaultAccessor) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	for _, accessor := range accessors {
@@ -3468,13 +3613,12 @@ func (s *StateStore) UpsertVaultAccessor(index uint64, accessors []*structs.Vaul
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // DeleteVaultAccessors is used to delete a set of Vault Accessors
 func (s *StateStore) DeleteVaultAccessors(index uint64, accessors []*structs.VaultAccessor) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	// Lookup the accessor
@@ -3489,13 +3633,12 @@ func (s *StateStore) DeleteVaultAccessors(index uint64, accessors []*structs.Vau
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // VaultAccessor returns the given Vault accessor
 func (s *StateStore) VaultAccessor(ws memdb.WatchSet, accessor string) (*structs.VaultAccessor, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	watchCh, existing, err := txn.FirstWatch("vault_accessors", "id", accessor)
 	if err != nil {
@@ -3513,7 +3656,7 @@ func (s *StateStore) VaultAccessor(ws memdb.WatchSet, accessor string) (*structs
 
 // VaultAccessors returns an iterator of Vault accessors.
 func (s *StateStore) VaultAccessors(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("vault_accessors", "id")
 	if err != nil {
@@ -3527,7 +3670,7 @@ func (s *StateStore) VaultAccessors(ws memdb.WatchSet) (memdb.ResultIterator, er
 
 // VaultAccessorsByAlloc returns all the Vault accessors by alloc id
 func (s *StateStore) VaultAccessorsByAlloc(ws memdb.WatchSet, allocID string) ([]*structs.VaultAccessor, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Get an iterator over the accessors
 	iter, err := txn.Get("vault_accessors", "alloc_id", allocID)
@@ -3550,7 +3693,7 @@ func (s *StateStore) VaultAccessorsByAlloc(ws memdb.WatchSet, allocID string) ([
 
 // VaultAccessorsByNode returns all the Vault accessors by node id
 func (s *StateStore) VaultAccessorsByNode(ws memdb.WatchSet, nodeID string) ([]*structs.VaultAccessor, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Get an iterator over the accessors
 	iter, err := txn.Get("vault_accessors", "node_id", nodeID)
@@ -3582,7 +3725,7 @@ const siTokenAccessorTable = "si_token_accessors"
 
 // UpsertSITokenAccessors is used to register a set of Service Identity token accessors.
 func (s *StateStore) UpsertSITokenAccessors(index uint64, accessors []*structs.SITokenAccessor) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	for _, accessor := range accessors {
@@ -3600,13 +3743,12 @@ func (s *StateStore) UpsertSITokenAccessors(index uint64, accessors []*structs.S
 		return errors.Wrap(err, "index update failed")
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // DeleteSITokenAccessors is used to delete a set of Service Identity token accessors.
 func (s *StateStore) DeleteSITokenAccessors(index uint64, accessors []*structs.SITokenAccessor) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	// Lookup each accessor
@@ -3622,13 +3764,12 @@ func (s *StateStore) DeleteSITokenAccessors(index uint64, accessors []*structs.S
 		return errors.Wrap(err, "index update failed")
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // SITokenAccessor returns the given Service Identity token accessor.
 func (s *StateStore) SITokenAccessor(ws memdb.WatchSet, accessorID string) (*structs.SITokenAccessor, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	defer txn.Abort()
 
 	watchCh, existing, err := txn.FirstWatch(siTokenAccessorTable, "id", accessorID)
@@ -3647,7 +3788,7 @@ func (s *StateStore) SITokenAccessor(ws memdb.WatchSet, accessorID string) (*str
 
 // SITokenAccessors returns an iterator of Service Identity token accessors.
 func (s *StateStore) SITokenAccessors(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	defer txn.Abort()
 
 	iter, err := txn.Get(siTokenAccessorTable, "id")
@@ -3662,7 +3803,7 @@ func (s *StateStore) SITokenAccessors(ws memdb.WatchSet) (memdb.ResultIterator, 
 
 // SITokenAccessorsByAlloc returns all the Service Identity token accessors by alloc ID.
 func (s *StateStore) SITokenAccessorsByAlloc(ws memdb.WatchSet, allocID string) ([]*structs.SITokenAccessor, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	defer txn.Abort()
 
 	// Get an iterator over the accessors
@@ -3683,7 +3824,7 @@ func (s *StateStore) SITokenAccessorsByAlloc(ws memdb.WatchSet, allocID string) 
 
 // SITokenAccessorsByNode returns all the Service Identity token accessors by node ID.
 func (s *StateStore) SITokenAccessorsByNode(ws memdb.WatchSet, nodeID string) ([]*structs.SITokenAccessor, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	defer txn.Abort()
 
 	// Get an iterator over the accessors
@@ -3704,8 +3845,8 @@ func (s *StateStore) SITokenAccessorsByNode(ws memdb.WatchSet, nodeID string) ([
 
 // UpdateDeploymentStatus is used to make deployment status updates and
 // potentially make a evaluation
-func (s *StateStore) UpdateDeploymentStatus(index uint64, req *structs.DeploymentStatusUpdateRequest) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) UpdateDeploymentStatus(msgType structs.MessageType, index uint64, req *structs.DeploymentStatusUpdateRequest) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	if err := s.updateDeploymentStatusImpl(index, req.DeploymentUpdate, txn); err != nil {
@@ -3726,12 +3867,11 @@ func (s *StateStore) UpdateDeploymentStatus(index uint64, req *structs.Deploymen
 		}
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // updateDeploymentStatusImpl is used to make deployment status updates
-func (s *StateStore) updateDeploymentStatusImpl(index uint64, u *structs.DeploymentStatusUpdate, txn *memdb.Txn) error {
+func (s *StateStore) updateDeploymentStatusImpl(index uint64, u *structs.DeploymentStatusUpdate, txn *txn) error {
 	// Retrieve deployment
 	ws := memdb.NewWatchSet()
 	deployment, err := s.deploymentByIDImpl(ws, u.DeploymentID, txn)
@@ -3772,19 +3912,18 @@ func (s *StateStore) updateDeploymentStatusImpl(index uint64, u *structs.Deploym
 // UpdateJobStability updates the stability of the given job and version to the
 // desired status.
 func (s *StateStore) UpdateJobStability(index uint64, namespace, jobID string, jobVersion uint64, stable bool) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	if err := s.updateJobStabilityImpl(index, namespace, jobID, jobVersion, stable, txn); err != nil {
 		return err
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // updateJobStabilityImpl updates the stability of the given job and version
-func (s *StateStore) updateJobStabilityImpl(index uint64, namespace, jobID string, jobVersion uint64, stable bool, txn *memdb.Txn) error {
+func (s *StateStore) updateJobStabilityImpl(index uint64, namespace, jobID string, jobVersion uint64, stable bool, txn *txn) error {
 	// Get the job that is referenced
 	job, err := s.jobByIDAndVersionImpl(nil, namespace, jobID, jobVersion, txn)
 	if err != nil {
@@ -3808,8 +3947,8 @@ func (s *StateStore) updateJobStabilityImpl(index uint64, namespace, jobID strin
 
 // UpdateDeploymentPromotion is used to promote canaries in a deployment and
 // potentially make a evaluation
-func (s *StateStore) UpdateDeploymentPromotion(index uint64, req *structs.ApplyDeploymentPromoteRequest) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) UpdateDeploymentPromotion(msgType structs.MessageType, index uint64, req *structs.ApplyDeploymentPromoteRequest) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	// Retrieve deployment and ensure it is not terminal and is active
@@ -3945,14 +4084,13 @@ func (s *StateStore) UpdateDeploymentPromotion(index uint64, req *structs.ApplyD
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // UpdateDeploymentAllocHealth is used to update the health of allocations as
 // part of the deployment and potentially make a evaluation
-func (s *StateStore) UpdateDeploymentAllocHealth(index uint64, req *structs.ApplyDeploymentAllocHealthRequest) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) UpdateDeploymentAllocHealth(msgType structs.MessageType, index uint64, req *structs.ApplyDeploymentAllocHealthRequest) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	// Retrieve deployment and ensure it is not terminal and is active
@@ -4041,8 +4179,7 @@ func (s *StateStore) UpdateDeploymentAllocHealth(index uint64, req *structs.Appl
 		}
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // LastIndex returns the greatest index value for all indexes
@@ -4073,7 +4210,7 @@ func (s *StateStore) LatestIndex() (uint64, error) {
 
 // Index finds the matching index value
 func (s *StateStore) Index(name string) (uint64, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Lookup the first matching index
 	out, err := txn.First("index", "id", name)
@@ -4086,22 +4223,9 @@ func (s *StateStore) Index(name string) (uint64, error) {
 	return out.(*IndexEntry).Value, nil
 }
 
-// RemoveIndex is a helper method to remove an index for testing purposes
-func (s *StateStore) RemoveIndex(name string) error {
-	txn := s.db.Txn(true)
-	defer txn.Abort()
-
-	if _, err := txn.DeleteAll("index", "id", name); err != nil {
-		return err
-	}
-
-	txn.Commit()
-	return nil
-}
-
 // Indexes returns an iterator over all the indexes
 func (s *StateStore) Indexes() (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire nodes table
 	iter, err := txn.Get("index", "id")
@@ -4114,7 +4238,7 @@ func (s *StateStore) Indexes() (memdb.ResultIterator, error) {
 // ReconcileJobSummaries re-creates summaries for all jobs present in the state
 // store
 func (s *StateStore) ReconcileJobSummaries(index uint64) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	// Get all the jobs
@@ -4266,14 +4390,13 @@ func (s *StateStore) ReconcileJobSummaries(index uint64) error {
 	if err := txn.Insert("index", &IndexEntry{"job_summary", index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // setJobStatuses is a helper for calling setJobStatus on multiple jobs by ID.
 // It takes a map of job IDs to an optional forceStatus string. It returns an
 // error if the job doesn't exist or setJobStatus fails.
-func (s *StateStore) setJobStatuses(index uint64, txn *memdb.Txn,
+func (s *StateStore) setJobStatuses(index uint64, txn *txn,
 	jobs map[structs.NamespacedID]string, evalDelete bool) error {
 	for tuple, forceStatus := range jobs {
 
@@ -4299,7 +4422,7 @@ func (s *StateStore) setJobStatuses(index uint64, txn *memdb.Txn,
 // called because an evaluation is being deleted (potentially because of garbage
 // collection). If forceStatus is non-empty, the job's status will be set to the
 // passed status.
-func (s *StateStore) setJobStatus(index uint64, txn *memdb.Txn,
+func (s *StateStore) setJobStatus(index uint64, txn *txn,
 	job *structs.Job, evalDelete bool, forceStatus string) error {
 
 	// Capture the current status so we can check if there is a change
@@ -4398,7 +4521,7 @@ func (s *StateStore) setJobStatus(index uint64, txn *memdb.Txn,
 	return nil
 }
 
-func (s *StateStore) getJobStatus(txn *memdb.Txn, job *structs.Job, evalDelete bool) (string, error) {
+func (s *StateStore) getJobStatus(txn *txn, job *structs.Job, evalDelete bool) (string, error) {
 	// System, Periodic and Parameterized jobs are running until explicitly
 	// stopped
 	if job.Type == structs.JobTypeSystem || job.IsParameterized() || job.IsPeriodic() {
@@ -4455,7 +4578,7 @@ func (s *StateStore) getJobStatus(txn *memdb.Txn, job *structs.Job, evalDelete b
 // updateSummaryWithJob creates or updates job summaries when new jobs are
 // upserted or existing ones are updated
 func (s *StateStore) updateSummaryWithJob(index uint64, job *structs.Job,
-	txn *memdb.Txn) error {
+	txn *txn) error {
 
 	// Update the job summary
 	summaryRaw, err := txn.First("job_summary", "id", job.Namespace, job.ID)
@@ -4510,21 +4633,14 @@ func (s *StateStore) updateSummaryWithJob(index uint64, job *structs.Job,
 
 // updateJobScalingPolicies upserts any scaling policies contained in the job and removes
 // any previous scaling policies that were removed from the job
-func (s *StateStore) updateJobScalingPolicies(index uint64, job *structs.Job, txn *memdb.Txn) error {
+func (s *StateStore) updateJobScalingPolicies(index uint64, job *structs.Job, txn *txn) error {
 
 	ws := memdb.NewWatchSet()
 
-	if job.Stop {
-		if err := s.deleteJobScalingPolicies(index, job, txn); err != nil {
-			return fmt.Errorf("deleting job scaling policies failed: %v", err)
-		}
-		return nil
-	}
-
 	scalingPolicies := job.GetScalingPolicies()
-	newTargets := map[string]struct{}{}
+	newTargets := map[string]bool{}
 	for _, p := range scalingPolicies {
-		newTargets[p.Target[structs.ScalingTargetGroup]] = struct{}{}
+		newTargets[p.JobKey()] = true
 	}
 	// find existing policies that need to be deleted
 	deletedPolicies := []string{}
@@ -4532,13 +4648,9 @@ func (s *StateStore) updateJobScalingPolicies(index uint64, job *structs.Job, tx
 	if err != nil {
 		return fmt.Errorf("ScalingPoliciesByJob lookup failed: %v", err)
 	}
-	for {
-		raw := iter.Next()
-		if raw == nil {
-			break
-		}
+	for raw := iter.Next(); raw != nil; raw = iter.Next() {
 		oldPolicy := raw.(*structs.ScalingPolicy)
-		if _, ok := newTargets[oldPolicy.Target[structs.ScalingTargetGroup]]; !ok {
+		if !newTargets[oldPolicy.JobKey()] {
 			deletedPolicies = append(deletedPolicies, oldPolicy.ID)
 		}
 	}
@@ -4556,8 +4668,7 @@ func (s *StateStore) updateJobScalingPolicies(index uint64, job *structs.Job, tx
 }
 
 // updateJobCSIPlugins runs on job update, and indexes the job in the plugin
-func (s *StateStore) updateJobCSIPlugins(index uint64, job, prev *structs.Job, txn *memdb.Txn) error {
-	ws := memdb.NewWatchSet()
+func (s *StateStore) updateJobCSIPlugins(index uint64, job, prev *structs.Job, txn *txn) error {
 	plugIns := make(map[string]*structs.CSIPlugin)
 
 	loop := func(job *structs.Job, delete bool) error {
@@ -4569,7 +4680,7 @@ func (s *StateStore) updateJobCSIPlugins(index uint64, job, prev *structs.Job, t
 
 				plugIn, ok := plugIns[t.CSIPluginConfig.ID]
 				if !ok {
-					p, err := s.CSIPluginByID(ws, t.CSIPluginConfig.ID)
+					p, err := s.CSIPluginByIDTxn(txn, nil, t.CSIPluginConfig.ID)
 					if err != nil {
 						return err
 					}
@@ -4622,7 +4733,7 @@ func (s *StateStore) updateJobCSIPlugins(index uint64, job, prev *structs.Job, t
 // updateDeploymentWithAlloc is used to update the deployment state associated
 // with the given allocation. The passed alloc may be updated if the deployment
 // status has changed to capture the modify index at which it has changed.
-func (s *StateStore) updateDeploymentWithAlloc(index uint64, alloc, existing *structs.Allocation, txn *memdb.Txn) error {
+func (s *StateStore) updateDeploymentWithAlloc(index uint64, alloc, existing *structs.Allocation, txn *txn) error {
 	// Nothing to do if the allocation is not associated with a deployment
 	if alloc.DeploymentID == "" {
 		return nil
@@ -4729,7 +4840,7 @@ func (s *StateStore) updateDeploymentWithAlloc(index uint64, alloc, existing *st
 // updateSummaryWithAlloc updates the job summary when allocations are updated
 // or inserted
 func (s *StateStore) updateSummaryWithAlloc(index uint64, alloc *structs.Allocation,
-	existingAlloc *structs.Allocation, txn *memdb.Txn) error {
+	existingAlloc *structs.Allocation, txn *txn) error {
 
 	// We don't have to update the summary if the job is missing
 	if alloc.Job == nil {
@@ -4848,17 +4959,16 @@ func (s *StateStore) updateSummaryWithAlloc(index uint64, alloc *structs.Allocat
 // updatePluginWithAlloc updates the CSI plugins for an alloc when the
 // allocation is updated or inserted with a terminal server status.
 func (s *StateStore) updatePluginWithAlloc(index uint64, alloc *structs.Allocation,
-	txn *memdb.Txn) error {
+	txn *txn) error {
 	if !alloc.ServerTerminalStatus() {
 		return nil
 	}
 
-	ws := memdb.NewWatchSet()
 	tg := alloc.Job.LookupTaskGroup(alloc.TaskGroup)
 	for _, t := range tg.Tasks {
 		if t.CSIPluginConfig != nil {
 			pluginID := t.CSIPluginConfig.ID
-			plug, err := s.CSIPluginByID(ws, pluginID)
+			plug, err := s.CSIPluginByIDTxn(txn, nil, pluginID)
 			if err != nil {
 				return err
 			}
@@ -4885,9 +4995,8 @@ func (s *StateStore) updatePluginWithAlloc(index uint64, alloc *structs.Allocati
 // updatePluginWithJobSummary updates the CSI plugins for a job when the
 // job summary is updated by an alloc
 func (s *StateStore) updatePluginWithJobSummary(index uint64, summary *structs.JobSummary, alloc *structs.Allocation,
-	txn *memdb.Txn) error {
+	txn *txn) error {
 
-	ws := memdb.NewWatchSet()
 	tg := alloc.Job.LookupTaskGroup(alloc.TaskGroup)
 	if tg == nil {
 		return nil
@@ -4896,7 +5005,7 @@ func (s *StateStore) updatePluginWithJobSummary(index uint64, summary *structs.J
 	for _, t := range tg.Tasks {
 		if t.CSIPluginConfig != nil {
 			pluginID := t.CSIPluginConfig.ID
-			plug, err := s.CSIPluginByID(ws, pluginID)
+			plug, err := s.CSIPluginByIDTxn(txn, nil, pluginID)
 			if err != nil {
 				return err
 			}
@@ -4918,8 +5027,8 @@ func (s *StateStore) updatePluginWithJobSummary(index uint64, summary *structs.J
 }
 
 // UpsertACLPolicies is used to create or update a set of ACL policies
-func (s *StateStore) UpsertACLPolicies(index uint64, policies []*structs.ACLPolicy) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) UpsertACLPolicies(msgType structs.MessageType, index uint64, policies []*structs.ACLPolicy) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	for _, policy := range policies {
@@ -4955,13 +5064,12 @@ func (s *StateStore) UpsertACLPolicies(index uint64, policies []*structs.ACLPoli
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // DeleteACLPolicies deletes the policies with the given names
-func (s *StateStore) DeleteACLPolicies(index uint64, names []string) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) DeleteACLPolicies(msgType structs.MessageType, index uint64, names []string) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	// Delete the policy
@@ -4973,13 +5081,12 @@ func (s *StateStore) DeleteACLPolicies(index uint64, names []string) error {
 	if err := txn.Insert("index", &IndexEntry{"acl_policy", index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // ACLPolicyByName is used to lookup a policy by name
 func (s *StateStore) ACLPolicyByName(ws memdb.WatchSet, name string) (*structs.ACLPolicy, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	watchCh, existing, err := txn.FirstWatch("acl_policy", "id", name)
 	if err != nil {
@@ -4995,7 +5102,7 @@ func (s *StateStore) ACLPolicyByName(ws memdb.WatchSet, name string) (*structs.A
 
 // ACLPolicyByNamePrefix is used to lookup policies by prefix
 func (s *StateStore) ACLPolicyByNamePrefix(ws memdb.WatchSet, prefix string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("acl_policy", "id_prefix", prefix)
 	if err != nil {
@@ -5008,7 +5115,7 @@ func (s *StateStore) ACLPolicyByNamePrefix(ws memdb.WatchSet, prefix string) (me
 
 // ACLPolicies returns an iterator over all the acl policies
 func (s *StateStore) ACLPolicies(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire table
 	iter, err := txn.Get("acl_policy", "id")
@@ -5020,8 +5127,8 @@ func (s *StateStore) ACLPolicies(ws memdb.WatchSet) (memdb.ResultIterator, error
 }
 
 // UpsertACLTokens is used to create or update a set of ACL tokens
-func (s *StateStore) UpsertACLTokens(index uint64, tokens []*structs.ACLToken) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) UpsertACLTokens(msgType structs.MessageType, index uint64, tokens []*structs.ACLToken) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	for _, token := range tokens {
@@ -5062,13 +5169,12 @@ func (s *StateStore) UpsertACLTokens(index uint64, tokens []*structs.ACLToken) e
 	if err := txn.Insert("index", &IndexEntry{"acl_token", index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // DeleteACLTokens deletes the tokens with the given accessor ids
-func (s *StateStore) DeleteACLTokens(index uint64, ids []string) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) DeleteACLTokens(msgType structs.MessageType, index uint64, ids []string) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	// Delete the tokens
@@ -5080,8 +5186,7 @@ func (s *StateStore) DeleteACLTokens(index uint64, ids []string) error {
 	if err := txn.Insert("index", &IndexEntry{"acl_token", index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // ACLTokenByAccessorID is used to lookup a token by accessor ID
@@ -5090,7 +5195,7 @@ func (s *StateStore) ACLTokenByAccessorID(ws memdb.WatchSet, id string) (*struct
 		return nil, fmt.Errorf("acl token lookup failed: missing accessor id")
 	}
 
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	watchCh, existing, err := txn.FirstWatch("acl_token", "id", id)
 	if err != nil {
@@ -5110,7 +5215,7 @@ func (s *StateStore) ACLTokenBySecretID(ws memdb.WatchSet, secretID string) (*st
 		return nil, fmt.Errorf("acl token lookup failed: missing secret id")
 	}
 
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	watchCh, existing, err := txn.FirstWatch("acl_token", "secret", secretID)
 	if err != nil {
@@ -5126,7 +5231,7 @@ func (s *StateStore) ACLTokenBySecretID(ws memdb.WatchSet, secretID string) (*st
 
 // ACLTokenByAccessorIDPrefix is used to lookup tokens by prefix
 func (s *StateStore) ACLTokenByAccessorIDPrefix(ws memdb.WatchSet, prefix string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("acl_token", "id_prefix", prefix)
 	if err != nil {
@@ -5138,7 +5243,7 @@ func (s *StateStore) ACLTokenByAccessorIDPrefix(ws memdb.WatchSet, prefix string
 
 // ACLTokens returns an iterator over all the tokens
 func (s *StateStore) ACLTokens(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire table
 	iter, err := txn.Get("acl_token", "id")
@@ -5151,7 +5256,7 @@ func (s *StateStore) ACLTokens(ws memdb.WatchSet) (memdb.ResultIterator, error) 
 
 // ACLTokensByGlobal returns an iterator over all the tokens filtered by global value
 func (s *StateStore) ACLTokensByGlobal(ws memdb.WatchSet, globalVal bool) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire table
 	iter, err := txn.Get("acl_token", "global", globalVal)
@@ -5164,7 +5269,7 @@ func (s *StateStore) ACLTokensByGlobal(ws memdb.WatchSet, globalVal bool) (memdb
 
 // CanBootstrapACLToken checks if bootstrapping is possible and returns the reset index
 func (s *StateStore) CanBootstrapACLToken() (bool, uint64, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Lookup the bootstrap sentinel
 	out, err := txn.First("index", "id", "acl_token_bootstrap")
@@ -5182,8 +5287,8 @@ func (s *StateStore) CanBootstrapACLToken() (bool, uint64, error) {
 }
 
 // BootstrapACLToken is used to create an initial ACL token
-func (s *StateStore) BootstrapACLTokens(index, resetIndex uint64, token *structs.ACLToken) error {
-	txn := s.db.Txn(true)
+func (s *StateStore) BootstrapACLTokens(msgType structs.MessageType, index uint64, resetIndex uint64, token *structs.ACLToken) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 
 	// Check if we have already done a bootstrap
@@ -5215,13 +5320,12 @@ func (s *StateStore) BootstrapACLTokens(index, resetIndex uint64, token *structs
 	if err := txn.Insert("index", &IndexEntry{"acl_token_bootstrap", index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // SchedulerConfig is used to get the current Scheduler configuration.
 func (s *StateStore) SchedulerConfig() (uint64, *structs.SchedulerConfiguration, error) {
-	tx := s.db.Txn(false)
+	tx := s.db.ReadTxn()
 	defer tx.Abort()
 
 	// Get the scheduler config
@@ -5239,18 +5343,17 @@ func (s *StateStore) SchedulerConfig() (uint64, *structs.SchedulerConfiguration,
 }
 
 // SchedulerSetConfig is used to set the current Scheduler configuration.
-func (s *StateStore) SchedulerSetConfig(idx uint64, config *structs.SchedulerConfiguration) error {
-	tx := s.db.Txn(true)
+func (s *StateStore) SchedulerSetConfig(index uint64, config *structs.SchedulerConfiguration) error {
+	tx := s.db.WriteTxn(index)
 	defer tx.Abort()
 
-	s.schedulerSetConfigTxn(idx, tx, config)
+	s.schedulerSetConfigTxn(index, tx, config)
 
-	tx.Commit()
-	return nil
+	return tx.Commit()
 }
 
 func (s *StateStore) ClusterMetadata(ws memdb.WatchSet) (*structs.ClusterMetadata, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 	defer txn.Abort()
 
 	// Get the cluster metadata
@@ -5268,27 +5371,26 @@ func (s *StateStore) ClusterMetadata(ws memdb.WatchSet) (*structs.ClusterMetadat
 }
 
 func (s *StateStore) ClusterSetMetadata(index uint64, meta *structs.ClusterMetadata) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	if err := s.setClusterMetadata(txn, meta); err != nil {
 		return errors.Wrap(err, "set cluster metadata failed")
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // WithWriteTransaction executes the passed function within a write transaction,
 // and returns its result.  If the invocation returns no error, the transaction
 // is committed; otherwise, it's aborted.
-func (s *StateStore) WithWriteTransaction(fn func(Txn) error) error {
-	tx := s.db.Txn(true)
+func (s *StateStore) WithWriteTransaction(msgType structs.MessageType, index uint64, fn func(Txn) error) error {
+	tx := s.db.WriteTxnMsgT(msgType, index)
 	defer tx.Abort()
 
 	err := fn(tx)
 	if err == nil {
-		tx.Commit()
+		return tx.Commit()
 	}
 	return err
 }
@@ -5296,8 +5398,8 @@ func (s *StateStore) WithWriteTransaction(fn func(Txn) error) error {
 // SchedulerCASConfig is used to update the scheduler configuration with a
 // given Raft index. If the CAS index specified is not equal to the last observed index
 // for the config, then the call is a noop.
-func (s *StateStore) SchedulerCASConfig(idx, cidx uint64, config *structs.SchedulerConfiguration) (bool, error) {
-	tx := s.db.Txn(true)
+func (s *StateStore) SchedulerCASConfig(index, cidx uint64, config *structs.SchedulerConfiguration) (bool, error) {
+	tx := s.db.WriteTxn(index)
 	defer tx.Abort()
 
 	// Check for an existing config
@@ -5314,13 +5416,15 @@ func (s *StateStore) SchedulerCASConfig(idx, cidx uint64, config *structs.Schedu
 		return false, nil
 	}
 
-	s.schedulerSetConfigTxn(idx, tx, config)
+	s.schedulerSetConfigTxn(index, tx, config)
 
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
-func (s *StateStore) schedulerSetConfigTxn(idx uint64, tx *memdb.Txn, config *structs.SchedulerConfiguration) error {
+func (s *StateStore) schedulerSetConfigTxn(idx uint64, tx *txn, config *structs.SchedulerConfiguration) error {
 	// Check for an existing config
 	existing, err := tx.First("scheduler_config", "id")
 	if err != nil {
@@ -5341,7 +5445,7 @@ func (s *StateStore) schedulerSetConfigTxn(idx uint64, tx *memdb.Txn, config *st
 	return nil
 }
 
-func (s *StateStore) setClusterMetadata(txn *memdb.Txn, meta *structs.ClusterMetadata) error {
+func (s *StateStore) setClusterMetadata(txn *txn, meta *structs.ClusterMetadata) error {
 	// Check for an existing config, if it exists, sanity check the cluster ID matches
 	existing, err := txn.First("cluster_meta", "id")
 	if err != nil {
@@ -5366,47 +5470,57 @@ func (s *StateStore) setClusterMetadata(txn *memdb.Txn, meta *structs.ClusterMet
 
 // UpsertScalingPolicy is used to insert a new scaling policy.
 func (s *StateStore) UpsertScalingPolicies(index uint64, scalingPolicies []*structs.ScalingPolicy) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	if err := s.UpsertScalingPoliciesTxn(index, scalingPolicies, txn); err != nil {
 		return err
 	}
 
-	txn.Commit()
-	return nil
+	return txn.Commit()
 }
 
 // upsertScalingPolicy is used to insert a new scaling policy.
 func (s *StateStore) UpsertScalingPoliciesTxn(index uint64, scalingPolicies []*structs.ScalingPolicy,
-	txn *memdb.Txn) error {
+	txn *txn) error {
 
 	hadUpdates := false
 
 	for _, policy := range scalingPolicies {
 		// Check if the scaling policy already exists
-		existing, err := txn.First("scaling_policy", "target",
+		// Policy uniqueness is based on target and type
+		it, err := txn.Get("scaling_policy", "target",
 			policy.Target[structs.ScalingTargetNamespace],
 			policy.Target[structs.ScalingTargetJob],
-			policy.Target[structs.ScalingTargetGroup])
+			policy.Target[structs.ScalingTargetGroup],
+			policy.Target[structs.ScalingTargetTask],
+		)
 		if err != nil {
 			return fmt.Errorf("scaling policy lookup failed: %v", err)
 		}
 
+		// Check if type matches
+		var existing *structs.ScalingPolicy
+		for raw := it.Next(); raw != nil; raw = it.Next() {
+			p := raw.(*structs.ScalingPolicy)
+			if p.Type == policy.Type {
+				existing = p
+				break
+			}
+		}
+
 		// Setup the indexes correctly
 		if existing != nil {
-			p := existing.(*structs.ScalingPolicy)
-			if !p.Diff(policy) {
+			if !existing.Diff(policy) {
 				continue
 			}
-			policy.ID = p.ID
-			policy.CreateIndex = p.CreateIndex
-			policy.ModifyIndex = index
+			policy.ID = existing.ID
+			policy.CreateIndex = existing.CreateIndex
 		} else {
 			// policy.ID must have been set already in Job.Register before log apply
 			policy.CreateIndex = index
-			policy.ModifyIndex = index
 		}
+		policy.ModifyIndex = index
 
 		// Insert the scaling policy
 		hadUpdates = true
@@ -5415,7 +5529,7 @@ func (s *StateStore) UpsertScalingPoliciesTxn(index uint64, scalingPolicies []*s
 		}
 	}
 
-	// Update the indexes table for scaling policy
+	// Update the indexes table for scaling policy if we updated any policies
 	if hadUpdates {
 		if err := txn.Insert("index", &IndexEntry{"scaling_policy", index}); err != nil {
 			return fmt.Errorf("index update failed: %v", err)
@@ -5425,20 +5539,218 @@ func (s *StateStore) UpsertScalingPoliciesTxn(index uint64, scalingPolicies []*s
 	return nil
 }
 
+// NamespaceByName is used to lookup a namespace by name
+func (s *StateStore) NamespaceByName(ws memdb.WatchSet, name string) (*structs.Namespace, error) {
+	txn := s.db.ReadTxn()
+	return s.namespaceByNameImpl(ws, txn, name)
+}
+
+// namespaceByNameImpl is used to lookup a namespace by name
+func (s *StateStore) namespaceByNameImpl(ws memdb.WatchSet, txn *txn, name string) (*structs.Namespace, error) {
+	watchCh, existing, err := txn.FirstWatch(TableNamespaces, "id", name)
+	if err != nil {
+		return nil, fmt.Errorf("namespace lookup failed: %v", err)
+	}
+	ws.Add(watchCh)
+
+	if existing != nil {
+		return existing.(*structs.Namespace), nil
+	}
+	return nil, nil
+}
+
+// namespaceExists returns whether a namespace exists
+func (s *StateStore) namespaceExists(txn *txn, namespace string) (bool, error) {
+	if namespace == structs.DefaultNamespace {
+		return true, nil
+	}
+
+	existing, err := txn.First(TableNamespaces, "id", namespace)
+	if err != nil {
+		return false, fmt.Errorf("namespace lookup failed: %v", err)
+	}
+
+	return existing != nil, nil
+}
+
+// NamespacesByNamePrefix is used to lookup namespaces by prefix
+func (s *StateStore) NamespacesByNamePrefix(ws memdb.WatchSet, namePrefix string) (memdb.ResultIterator, error) {
+	txn := s.db.ReadTxn()
+
+	iter, err := txn.Get(TableNamespaces, "id_prefix", namePrefix)
+	if err != nil {
+		return nil, fmt.Errorf("namespaces lookup failed: %v", err)
+	}
+	ws.Add(iter.WatchCh())
+
+	return iter, nil
+}
+
+// Namespaces returns an iterator over all the namespaces
+func (s *StateStore) Namespaces(ws memdb.WatchSet) (memdb.ResultIterator, error) {
+	txn := s.db.ReadTxn()
+
+	// Walk the entire namespace table
+	iter, err := txn.Get(TableNamespaces, "id")
+	if err != nil {
+		return nil, fmt.Errorf("namespace lookup failed: %v", err)
+	}
+	ws.Add(iter.WatchCh())
+	return iter, nil
+}
+
+func (s *StateStore) NamespaceNames() ([]string, error) {
+	it, err := s.Namespaces(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	nses := []string{}
+	for {
+		next := it.Next()
+		if next == nil {
+			break
+		}
+		ns := next.(*structs.Namespace)
+		nses = append(nses, ns.Name)
+	}
+
+	return nses, nil
+}
+
+// UpsertNamespace is used to register or update a set of namespaces
+func (s *StateStore) UpsertNamespaces(index uint64, namespaces []*structs.Namespace) error {
+	txn := s.db.WriteTxn(index)
+	defer txn.Abort()
+
+	for _, ns := range namespaces {
+		if err := s.upsertNamespaceImpl(index, txn, ns); err != nil {
+			return err
+		}
+	}
+
+	if err := txn.Insert("index", &IndexEntry{TableNamespaces, index}); err != nil {
+		return fmt.Errorf("index update failed: %v", err)
+	}
+
+	return txn.Commit()
+}
+
+// upsertNamespaceImpl is used to upsert a namespace
+func (s *StateStore) upsertNamespaceImpl(index uint64, txn *txn, namespace *structs.Namespace) error {
+	// Ensure the namespace hash is non-nil. This should be done outside the state store
+	// for performance reasons, but we check here for defense in depth.
+	ns := namespace
+	if len(ns.Hash) == 0 {
+		ns.SetHash()
+	}
+
+	// Check if the namespace already exists
+	existing, err := txn.First(TableNamespaces, "id", ns.Name)
+	if err != nil {
+		return fmt.Errorf("namespace lookup failed: %v", err)
+	}
+
+	// Setup the indexes correctly and determine which quotas need to be
+	// reconciled
+	var oldQuota string
+	if existing != nil {
+		exist := existing.(*structs.Namespace)
+		ns.CreateIndex = exist.CreateIndex
+		ns.ModifyIndex = index
+
+		// Grab the old quota on the namespace
+		oldQuota = exist.Quota
+	} else {
+		ns.CreateIndex = index
+		ns.ModifyIndex = index
+	}
+
+	// Validate that the quota on the new namespace exists
+	if ns.Quota != "" {
+		exists, err := s.quotaSpecExists(txn, ns.Quota)
+		if err != nil {
+			return fmt.Errorf("looking up namespace quota %q failed: %v", ns.Quota, err)
+		} else if !exists {
+			return fmt.Errorf("namespace %q using non-existent quota %q", ns.Name, ns.Quota)
+		}
+	}
+
+	// Insert the namespace
+	if err := txn.Insert(TableNamespaces, ns); err != nil {
+		return fmt.Errorf("namespace insert failed: %v", err)
+	}
+
+	// Reconcile changed quotas
+	return s.quotaReconcile(index, txn, ns.Quota, oldQuota)
+}
+
+// DeleteNamespaces is used to remove a set of namespaces
+func (s *StateStore) DeleteNamespaces(index uint64, names []string) error {
+	txn := s.db.WriteTxn(index)
+	defer txn.Abort()
+
+	for _, name := range names {
+		// Lookup the namespace
+		existing, err := txn.First(TableNamespaces, "id", name)
+		if err != nil {
+			return fmt.Errorf("namespace lookup failed: %v", err)
+		}
+		if existing == nil {
+			return fmt.Errorf("namespace not found")
+		}
+
+		ns := existing.(*structs.Namespace)
+		if ns.Name == structs.DefaultNamespace {
+			return fmt.Errorf("default namespace can not be deleted")
+		}
+
+		// Ensure that the namespace doesn't have any non-terminal jobs
+		iter, err := s.jobsByNamespaceImpl(nil, name, txn)
+		if err != nil {
+			return err
+		}
+
+		for {
+			raw := iter.Next()
+			if raw == nil {
+				break
+			}
+			job := raw.(*structs.Job)
+
+			if job.Status != structs.JobStatusDead {
+				return fmt.Errorf("namespace %q contains at least one non-terminal job %q. "+
+					"All jobs must be terminal in namespace before it can be deleted", name, job.ID)
+			}
+		}
+
+		// Delete the namespace
+		if err := txn.Delete(TableNamespaces, existing); err != nil {
+			return fmt.Errorf("namespace deletion failed: %v", err)
+		}
+	}
+
+	if err := txn.Insert("index", &IndexEntry{TableNamespaces, index}); err != nil {
+		return fmt.Errorf("index update failed: %v", err)
+	}
+
+	return txn.Commit()
+}
+
 func (s *StateStore) DeleteScalingPolicies(index uint64, ids []string) error {
-	txn := s.db.Txn(true)
+	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
 	err := s.DeleteScalingPoliciesTxn(index, ids, txn)
 	if err == nil {
-		txn.Commit()
+		return txn.Commit()
 	}
 
 	return err
 }
 
 // DeleteScalingPolicies is used to delete a set of scaling policies by ID
-func (s *StateStore) DeleteScalingPoliciesTxn(index uint64, ids []string, txn *memdb.Txn) error {
+func (s *StateStore) DeleteScalingPoliciesTxn(index uint64, ids []string, txn *txn) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -5468,7 +5780,7 @@ func (s *StateStore) DeleteScalingPoliciesTxn(index uint64, ids []string, txn *m
 
 // ScalingPolicies returns an iterator over all the scaling policies
 func (s *StateStore) ScalingPolicies(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	// Walk the entire scaling_policy table
 	iter, err := txn.Get("scaling_policy", "id")
@@ -5481,8 +5793,21 @@ func (s *StateStore) ScalingPolicies(ws memdb.WatchSet) (memdb.ResultIterator, e
 	return iter, nil
 }
 
-func (s *StateStore) ScalingPoliciesByNamespace(ws memdb.WatchSet, namespace string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
+// ScalingPoliciesByTypePrefix returns an iterator over scaling policies with a certain type prefix.
+func (s *StateStore) ScalingPoliciesByTypePrefix(ws memdb.WatchSet, t string) (memdb.ResultIterator, error) {
+	txn := s.db.ReadTxn()
+
+	iter, err := txn.Get("scaling_policy", "type_prefix", t)
+	if err != nil {
+		return nil, err
+	}
+
+	ws.Add(iter.WatchCh())
+	return iter, nil
+}
+
+func (s *StateStore) ScalingPoliciesByNamespace(ws memdb.WatchSet, namespace, typ string) (memdb.ResultIterator, error) {
+	txn := s.db.ReadTxn()
 
 	iter, err := txn.Get("scaling_policy", "target_prefix", namespace)
 	if err != nil {
@@ -5491,27 +5816,48 @@ func (s *StateStore) ScalingPoliciesByNamespace(ws memdb.WatchSet, namespace str
 
 	ws.Add(iter.WatchCh())
 
+	// Wrap the iterator in a filter to exact match the namespace
+	iter = memdb.NewFilterIterator(iter, scalingPolicyNamespaceFilter(namespace))
+
+	// If policy type is specified as well, wrap again
+	if typ != "" {
+		iter = memdb.NewFilterIterator(iter, func(raw interface{}) bool {
+			p, ok := raw.(*structs.ScalingPolicy)
+			if !ok {
+				return true
+			}
+			return !strings.HasPrefix(p.Type, typ)
+		})
+	}
+
+	return iter, nil
+}
+
+func (s *StateStore) ScalingPoliciesByJob(ws memdb.WatchSet, namespace, jobID, policyType string) (memdb.ResultIterator,
+	error) {
+	txn := s.db.ReadTxn()
+	iter, err := s.ScalingPoliciesByJobTxn(ws, namespace, jobID, txn)
+	if err != nil {
+		return nil, err
+	}
+
+	if policyType == "" {
+		return iter, nil
+	}
+
 	filter := func(raw interface{}) bool {
-		d, ok := raw.(*structs.ScalingPolicy)
+		p, ok := raw.(*structs.ScalingPolicy)
 		if !ok {
 			return true
 		}
-
-		return d.Target[structs.ScalingTargetNamespace] != namespace
+		return policyType != p.Type
 	}
 
-	// Wrap the iterator in a filter
-	wrap := memdb.NewFilterIterator(iter, filter)
-	return wrap, nil
-}
-
-func (s *StateStore) ScalingPoliciesByJob(ws memdb.WatchSet, namespace, jobID string) (memdb.ResultIterator, error) {
-	txn := s.db.Txn(false)
-	return s.ScalingPoliciesByJobTxn(ws, namespace, jobID, txn)
+	return memdb.NewFilterIterator(iter, filter), nil
 }
 
 func (s *StateStore) ScalingPoliciesByJobTxn(ws memdb.WatchSet, namespace, jobID string,
-	txn *memdb.Txn) (memdb.ResultIterator, error) {
+	txn *txn) (memdb.ResultIterator, error) {
 
 	iter, err := txn.Get("scaling_policy", "target_prefix", namespace, jobID)
 	if err != nil {
@@ -5535,7 +5881,7 @@ func (s *StateStore) ScalingPoliciesByJobTxn(ws memdb.WatchSet, namespace, jobID
 }
 
 func (s *StateStore) ScalingPolicyByID(ws memdb.WatchSet, id string) (*structs.ScalingPolicy, error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
 	watchCh, existing, err := txn.FirstWatch("scaling_policy", "id", id)
 	if err != nil {
@@ -5550,26 +5896,67 @@ func (s *StateStore) ScalingPolicyByID(ws memdb.WatchSet, id string) (*structs.S
 	return nil, nil
 }
 
-func (s *StateStore) ScalingPolicyByTarget(ws memdb.WatchSet, target map[string]string) (*structs.ScalingPolicy,
+// ScalingPolicyByTargetAndType returns a fully-qualified policy against a target and policy type,
+// or nil if it does not exist. This method does not honor the watchset on the policy type, just the target.
+func (s *StateStore) ScalingPolicyByTargetAndType(ws memdb.WatchSet, target map[string]string, typ string) (*structs.ScalingPolicy,
 	error) {
-	txn := s.db.Txn(false)
+	txn := s.db.ReadTxn()
 
-	// currently, only scaling policy type is against a task group
 	namespace := target[structs.ScalingTargetNamespace]
 	job := target[structs.ScalingTargetJob]
 	group := target[structs.ScalingTargetGroup]
+	task := target[structs.ScalingTargetTask]
 
-	watchCh, existing, err := txn.FirstWatch("scaling_policy", "target", namespace, job, group)
+	it, err := txn.Get("scaling_policy", "target", namespace, job, group, task)
 	if err != nil {
 		return nil, fmt.Errorf("scaling_policy lookup failed: %v", err)
 	}
-	ws.Add(watchCh)
+
+	ws.Add(it.WatchCh())
+
+	// Check for type
+	var existing *structs.ScalingPolicy
+	for raw := it.Next(); raw != nil; raw = it.Next() {
+		p := raw.(*structs.ScalingPolicy)
+		if p.Type == typ {
+			existing = p
+			break
+		}
+	}
 
 	if existing != nil {
-		return existing.(*structs.ScalingPolicy), nil
+		return existing, nil
 	}
 
 	return nil, nil
+}
+
+func (s *StateStore) ScalingPoliciesByIDPrefix(ws memdb.WatchSet, namespace string, prefix string) (memdb.ResultIterator, error) {
+	txn := s.db.ReadTxn()
+
+	iter, err := txn.Get("scaling_policy", "id_prefix", prefix)
+	if err != nil {
+		return nil, fmt.Errorf("scaling policy lookup failed: %v", err)
+	}
+
+	ws.Add(iter.WatchCh())
+
+	iter = memdb.NewFilterIterator(iter, scalingPolicyNamespaceFilter(namespace))
+
+	return iter, nil
+}
+
+// scalingPolicyNamespaceFilter returns a filter function that filters all
+// scaling policies not targeting the given namespace.
+func scalingPolicyNamespaceFilter(namespace string) func(interface{}) bool {
+	return func(raw interface{}) bool {
+		p, ok := raw.(*structs.ScalingPolicy)
+		if !ok {
+			return true
+		}
+
+		return p.Target[structs.ScalingTargetNamespace] != namespace
+	}
 }
 
 // StateSnapshot is used to provide a point-in-time snapshot
@@ -5656,15 +6043,15 @@ func (s *StateSnapshot) DenormalizeAllocationDiffSlice(allocDiffs []*structs.All
 	return denormalizedAllocs, nil
 }
 
-func getPreemptedAllocDesiredDescription(PreemptedByAllocID string) string {
-	return fmt.Sprintf("Preempted by alloc ID %v", PreemptedByAllocID)
+func getPreemptedAllocDesiredDescription(preemptedByAllocID string) string {
+	return fmt.Sprintf("Preempted by alloc ID %v", preemptedByAllocID)
 }
 
 // StateRestore is used to optimize the performance when
 // restoring state by only using a single large transaction
 // instead of thousands of sub transactions
 type StateRestore struct {
-	txn *memdb.Txn
+	txn *txn
 }
 
 // Abort is used to abort the restore operation
@@ -5673,8 +6060,8 @@ func (s *StateRestore) Abort() {
 }
 
 // Commit is used to commit the restore operation
-func (s *StateRestore) Commit() {
-	s.txn.Commit()
+func (s *StateRestore) Commit() error {
+	return s.txn.Commit()
 }
 
 // NodeRestore is used to restore a node
@@ -5819,9 +6206,18 @@ func (r *StateRestore) CSIVolumeRestore(volume *structs.CSIVolume) error {
 	return nil
 }
 
+// ScalingEventsRestore is used to restore scaling events for a job
 func (r *StateRestore) ScalingEventsRestore(jobEvents *structs.JobScalingEvents) error {
 	if err := r.txn.Insert("scaling_event", jobEvents); err != nil {
 		return fmt.Errorf("scaling event insert failed: %v", err)
+	}
+	return nil
+}
+
+// NamespaceRestore is used to restore a namespace
+func (r *StateRestore) NamespaceRestore(ns *structs.Namespace) error {
+	if err := r.txn.Insert(TableNamespaces, ns); err != nil {
+		return fmt.Errorf("namespace insert failed: %v", err)
 	}
 	return nil
 }

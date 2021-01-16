@@ -1667,7 +1667,6 @@ func TestTaskRunner_Download_Retries(t *testing.T) {
 
 // TestTaskRunner_DriverNetwork asserts that a driver's network is properly
 // used in services and checks.
-// MEIGAS: this test will fail due to code modifications on command/agent/consul/client.go
 func TestTaskRunner_DriverNetwork(t *testing.T) {
 	t.Parallel()
 

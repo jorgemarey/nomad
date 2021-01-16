@@ -335,10 +335,10 @@ func TestReadyNodesInDCs(t *testing.T) {
 	node4 := mock.Node()
 	node4.Drain = true
 
-	require.NoError(t, state.UpsertNode(1000, node1))
-	require.NoError(t, state.UpsertNode(1001, node2))
-	require.NoError(t, state.UpsertNode(1002, node3))
-	require.NoError(t, state.UpsertNode(1003, node4))
+	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 1000, node1))
+	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 1001, node2))
+	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 1002, node3))
+	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 1003, node4))
 
 	nodes, dc, err := readyNodesInDCs(state, []string{"dc1", "dc2"})
 	require.NoError(t, err)
@@ -394,10 +394,10 @@ func TestTaintedNodes(t *testing.T) {
 	node3.Status = structs.NodeStatusDown
 	node4 := mock.Node()
 	node4.Drain = true
-	require.NoError(t, state.UpsertNode(1000, node1))
-	require.NoError(t, state.UpsertNode(1001, node2))
-	require.NoError(t, state.UpsertNode(1002, node3))
-	require.NoError(t, state.UpsertNode(1003, node4))
+	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 1000, node1))
+	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 1001, node2))
+	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 1002, node3))
+	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 1003, node4))
 
 	allocs := []*structs.Allocation{
 		{NodeID: node1.ID},
@@ -599,7 +599,7 @@ func TestTasksUpdated(t *testing.T) {
 	require.True(t, tasksUpdated(j1, j5, name))
 
 	j6 := mock.Job()
-	j6.TaskGroups[0].Tasks[0].Resources.Networks[0].DynamicPorts = []structs.Port{
+	j6.TaskGroups[0].Networks[0].DynamicPorts = []structs.Port{
 		{Label: "http", Value: 0},
 		{Label: "https", Value: 0},
 		{Label: "admin", Value: 0},
@@ -646,16 +646,12 @@ func TestTasksUpdated(t *testing.T) {
 	}
 	require.True(t, tasksUpdated(j11d1, j11d2, name))
 
-	j12 := mock.Job()
-	j12.TaskGroups[0].Tasks[0].Resources.Networks[0].MBits = 100
-	require.True(t, tasksUpdated(j1, j12, name))
-
 	j13 := mock.Job()
-	j13.TaskGroups[0].Tasks[0].Resources.Networks[0].DynamicPorts[0].Label = "foobar"
+	j13.TaskGroups[0].Networks[0].DynamicPorts[0].Label = "foobar"
 	require.True(t, tasksUpdated(j1, j13, name))
 
 	j14 := mock.Job()
-	j14.TaskGroups[0].Tasks[0].Resources.Networks[0].ReservedPorts = []structs.Port{{Label: "foo", Value: 1312}}
+	j14.TaskGroups[0].Networks[0].ReservedPorts = []structs.Port{{Label: "foo", Value: 1312}}
 	require.True(t, tasksUpdated(j1, j14, name))
 
 	j15 := mock.Job()
@@ -678,12 +674,8 @@ func TestTasksUpdated(t *testing.T) {
 
 	// Change network mode
 	j19 := mock.Job()
-	j19.TaskGroups[0].Networks = j19.TaskGroups[0].Tasks[0].Resources.Networks
-	j19.TaskGroups[0].Tasks[0].Resources.Networks = nil
 
 	j20 := mock.Job()
-	j20.TaskGroups[0].Networks = j20.TaskGroups[0].Tasks[0].Resources.Networks
-	j20.TaskGroups[0].Tasks[0].Resources.Networks = nil
 
 	require.False(t, tasksUpdated(j19, j20, name))
 
@@ -868,7 +860,7 @@ func TestInplaceUpdate_ChangedTaskGroup(t *testing.T) {
 	job := mock.Job()
 
 	node := mock.Node()
-	require.NoError(t, state.UpsertNode(900, node))
+	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 900, node))
 
 	// Register an alloc
 	alloc := &structs.Allocation{
@@ -895,7 +887,7 @@ func TestInplaceUpdate_ChangedTaskGroup(t *testing.T) {
 	}
 	alloc.TaskResources = map[string]*structs.Resources{"web": alloc.Resources}
 	require.NoError(t, state.UpsertJobSummary(1000, mock.JobSummary(alloc.JobID)))
-	require.NoError(t, state.UpsertAllocs(1001, []*structs.Allocation{alloc}))
+	require.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1001, []*structs.Allocation{alloc}))
 
 	// Create a new task group that prevents in-place updates.
 	tg := &structs.TaskGroup{}
@@ -917,13 +909,70 @@ func TestInplaceUpdate_ChangedTaskGroup(t *testing.T) {
 	require.Empty(t, ctx.plan.NodeAllocation, "inplaceUpdate incorrectly did an inplace update")
 }
 
+func TestInplaceUpdate_AllocatedResources(t *testing.T) {
+	state, ctx := testContext(t)
+	eval := mock.Eval()
+	job := mock.Job()
+
+	node := mock.Node()
+	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 900, node))
+
+	// Register an alloc
+	alloc := &structs.Allocation{
+		Namespace: structs.DefaultNamespace,
+		ID:        uuid.Generate(),
+		EvalID:    eval.ID,
+		NodeID:    node.ID,
+		JobID:     job.ID,
+		Job:       job,
+		AllocatedResources: &structs.AllocatedResources{
+			Shared: structs.AllocatedSharedResources{
+				Ports: structs.AllocatedPorts{
+					{
+						Label: "api-port",
+						Value: 19910,
+						To:    8080,
+					},
+				},
+			},
+		},
+		DesiredStatus: structs.AllocDesiredStatusRun,
+		TaskGroup:     "web",
+	}
+	alloc.TaskResources = map[string]*structs.Resources{"web": alloc.Resources}
+	require.NoError(t, state.UpsertJobSummary(1000, mock.JobSummary(alloc.JobID)))
+	require.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1001, []*structs.Allocation{alloc}))
+
+	// Update TG to add a new service (inplace)
+	tg := job.TaskGroups[0]
+	tg.Services = []*structs.Service{
+		{
+			Name: "tg-service",
+		},
+	}
+
+	updates := []allocTuple{{Alloc: alloc, TaskGroup: tg}}
+	stack := NewGenericStack(false, ctx)
+
+	// Do the inplace update.
+	unplaced, inplace := inplaceUpdate(ctx, eval, job, stack, updates)
+
+	require.True(t, len(unplaced) == 0 && len(inplace) == 1, "inplaceUpdate incorrectly did not perform an inplace update")
+	require.NotEmpty(t, ctx.plan.NodeAllocation, "inplaceUpdate incorrectly did an inplace update")
+	require.NotEmpty(t, ctx.plan.NodeAllocation[node.ID][0].AllocatedResources.Shared.Ports)
+
+	port, ok := ctx.plan.NodeAllocation[node.ID][0].AllocatedResources.Shared.Ports.Get("api-port")
+	require.True(t, ok)
+	require.Equal(t, 19910, port.Value)
+}
+
 func TestInplaceUpdate_NoMatch(t *testing.T) {
 	state, ctx := testContext(t)
 	eval := mock.Eval()
 	job := mock.Job()
 
 	node := mock.Node()
-	require.NoError(t, state.UpsertNode(900, node))
+	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 900, node))
 
 	// Register an alloc
 	alloc := &structs.Allocation{
@@ -950,7 +999,7 @@ func TestInplaceUpdate_NoMatch(t *testing.T) {
 	}
 	alloc.TaskResources = map[string]*structs.Resources{"web": alloc.Resources}
 	require.NoError(t, state.UpsertJobSummary(1000, mock.JobSummary(alloc.JobID)))
-	require.NoError(t, state.UpsertAllocs(1001, []*structs.Allocation{alloc}))
+	require.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1001, []*structs.Allocation{alloc}))
 
 	// Create a new task group that requires too much resources.
 	tg := &structs.TaskGroup{}
@@ -974,7 +1023,7 @@ func TestInplaceUpdate_Success(t *testing.T) {
 	job := mock.Job()
 
 	node := mock.Node()
-	require.NoError(t, state.UpsertNode(900, node))
+	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 900, node))
 
 	// Register an alloc
 	alloc := &structs.Allocation{
@@ -1001,7 +1050,7 @@ func TestInplaceUpdate_Success(t *testing.T) {
 	}
 	alloc.TaskResources = map[string]*structs.Resources{"web": alloc.Resources}
 	require.NoError(t, state.UpsertJobSummary(999, mock.JobSummary(alloc.JobID)))
-	require.NoError(t, state.UpsertAllocs(1001, []*structs.Allocation{alloc}))
+	require.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1001, []*structs.Allocation{alloc}))
 
 	// Create a new task group that updates the resources.
 	tg := &structs.TaskGroup{}

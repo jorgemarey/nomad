@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/nomad/helper"
+	"github.com/hashicorp/nomad/helper/envoy"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/structs"
 	psstructs "github.com/hashicorp/nomad/plugins/shared/structs"
@@ -77,6 +78,13 @@ func Node() *structs.Node {
 					Mode:   "host",
 					Device: "eth0",
 					Speed:  1000,
+					Addresses: []structs.NodeNetworkAddress{
+						{
+							Alias:   "default",
+							Address: "192.168.0.100",
+							Family:  structs.NodeNetworkAF_IPv4,
+						},
+					},
 				},
 			},
 		},
@@ -209,6 +217,15 @@ func Job() *structs.Job {
 					DelayFunction: "constant",
 				},
 				Migrate: structs.DefaultMigrateStrategy(),
+				Networks: []*structs.NetworkResource{
+					{
+						Mode: "host",
+						DynamicPorts: []structs.Port{
+							{Label: "http"},
+							{Label: "admin"},
+						},
+					},
+				},
 				Tasks: []*structs.Task{
 					{
 						Name:   "web",
@@ -244,15 +261,6 @@ func Job() *structs.Job {
 						Resources: &structs.Resources{
 							CPU:      500,
 							MemoryMB: 256,
-							Networks: []*structs.NetworkResource{
-								{
-									MBits: 50,
-									DynamicPorts: []structs.Port{
-										{Label: "http"},
-										{Label: "admin"},
-									},
-								},
-							},
 						},
 						Meta: map[string]string{
 							"foo": "bar",
@@ -521,6 +529,186 @@ func LifecycleAlloc() *structs.Allocation {
 	return alloc
 }
 
+func LifecycleJobWithPoststopDeploy() *structs.Job {
+	job := &structs.Job{
+		Region:      "global",
+		ID:          fmt.Sprintf("mock-service-%s", uuid.Generate()),
+		Name:        "my-job",
+		Namespace:   structs.DefaultNamespace,
+		Type:        structs.JobTypeBatch,
+		Priority:    50,
+		AllAtOnce:   false,
+		Datacenters: []string{"dc1"},
+		Constraints: []*structs.Constraint{
+			{
+				LTarget: "${attr.kernel.name}",
+				RTarget: "linux",
+				Operand: "=",
+			},
+		},
+		TaskGroups: []*structs.TaskGroup{
+			{
+				Name:    "web",
+				Count:   1,
+				Migrate: structs.DefaultMigrateStrategy(),
+				RestartPolicy: &structs.RestartPolicy{
+					Attempts: 0,
+					Interval: 10 * time.Minute,
+					Delay:    1 * time.Minute,
+					Mode:     structs.RestartPolicyModeFail,
+				},
+				Tasks: []*structs.Task{
+					{
+						Name:   "web",
+						Driver: "mock_driver",
+						Config: map[string]interface{}{
+							"run_for": "1s",
+						},
+						LogConfig: structs.DefaultLogConfig(),
+						Resources: &structs.Resources{
+							CPU:      1000,
+							MemoryMB: 256,
+						},
+					},
+					{
+						Name:   "side",
+						Driver: "mock_driver",
+						Config: map[string]interface{}{
+							"run_for": "1s",
+						},
+						Lifecycle: &structs.TaskLifecycleConfig{
+							Hook:    structs.TaskLifecycleHookPrestart,
+							Sidecar: true,
+						},
+						LogConfig: structs.DefaultLogConfig(),
+						Resources: &structs.Resources{
+							CPU:      1000,
+							MemoryMB: 256,
+						},
+					},
+					{
+						Name:   "post",
+						Driver: "mock_driver",
+						Config: map[string]interface{}{
+							"run_for": "1s",
+						},
+						Lifecycle: &structs.TaskLifecycleConfig{
+							Hook: structs.TaskLifecycleHookPoststop,
+						},
+						LogConfig: structs.DefaultLogConfig(),
+						Resources: &structs.Resources{
+							CPU:      1000,
+							MemoryMB: 256,
+						},
+					},
+					{
+						Name:   "init",
+						Driver: "mock_driver",
+						Config: map[string]interface{}{
+							"run_for": "1s",
+						},
+						Lifecycle: &structs.TaskLifecycleConfig{
+							Hook:    structs.TaskLifecycleHookPrestart,
+							Sidecar: false,
+						},
+						LogConfig: structs.DefaultLogConfig(),
+						Resources: &structs.Resources{
+							CPU:      1000,
+							MemoryMB: 256,
+						},
+					},
+				},
+			},
+		},
+		Meta: map[string]string{
+			"owner": "armon",
+		},
+		Status:         structs.JobStatusPending,
+		Version:        0,
+		CreateIndex:    42,
+		ModifyIndex:    99,
+		JobModifyIndex: 99,
+	}
+	job.Canonicalize()
+	return job
+}
+
+func LifecycleAllocWithPoststopDeploy() *structs.Allocation {
+	alloc := &structs.Allocation{
+		ID:        uuid.Generate(),
+		EvalID:    uuid.Generate(),
+		NodeID:    "12345678-abcd-efab-cdef-123456789abc",
+		Namespace: structs.DefaultNamespace,
+		TaskGroup: "web",
+
+		// TODO Remove once clientv2 gets merged
+		Resources: &structs.Resources{
+			CPU:      500,
+			MemoryMB: 256,
+		},
+		TaskResources: map[string]*structs.Resources{
+			"web": {
+				CPU:      1000,
+				MemoryMB: 256,
+			},
+			"init": {
+				CPU:      1000,
+				MemoryMB: 256,
+			},
+			"side": {
+				CPU:      1000,
+				MemoryMB: 256,
+			},
+			"post": {
+				CPU:      1000,
+				MemoryMB: 256,
+			},
+		},
+
+		AllocatedResources: &structs.AllocatedResources{
+			Tasks: map[string]*structs.AllocatedTaskResources{
+				"web": {
+					Cpu: structs.AllocatedCpuResources{
+						CpuShares: 1000,
+					},
+					Memory: structs.AllocatedMemoryResources{
+						MemoryMB: 256,
+					},
+				},
+				"init": {
+					Cpu: structs.AllocatedCpuResources{
+						CpuShares: 1000,
+					},
+					Memory: structs.AllocatedMemoryResources{
+						MemoryMB: 256,
+					},
+				},
+				"side": {
+					Cpu: structs.AllocatedCpuResources{
+						CpuShares: 1000,
+					},
+					Memory: structs.AllocatedMemoryResources{
+						MemoryMB: 256,
+					},
+				},
+				"post": {
+					Cpu: structs.AllocatedCpuResources{
+						CpuShares: 1000,
+					},
+					Memory: structs.AllocatedMemoryResources{
+						MemoryMB: 256,
+					},
+				},
+			},
+		},
+		Job:           LifecycleJobWithPoststopDeploy(),
+		DesiredStatus: structs.AllocDesiredStatusRun,
+		ClientStatus:  structs.AllocClientStatusPending,
+	}
+	alloc.JobID = alloc.Job.ID
+	return alloc
+}
+
 func MaxParallelJob() *structs.Job {
 	update := *structs.DefaultUpdateStrategy
 	update.MaxParallel = 0
@@ -719,6 +907,23 @@ func ConnectIngressGatewayJob(mode string, inject bool) *structs.Job {
 		tg.Tasks = nil
 	}
 	return job
+}
+
+func ConnectSidecarTask() *structs.Task {
+	return &structs.Task{
+		Name:   "mysidecar-sidecar-task",
+		Driver: "docker",
+		User:   "nobody",
+		Config: map[string]interface{}{
+			"image": envoy.SidecarConfigVar,
+		},
+		Env: nil,
+		Resources: &structs.Resources{
+			CPU:      150,
+			MemoryMB: 350,
+		},
+		Kind: structs.NewTaskKind(structs.ConnectProxyPrefix, "mysidecar"),
+	}
 }
 
 func BatchJob() *structs.Job {
@@ -1350,20 +1555,20 @@ func ACLManagementToken() *structs.ACLToken {
 
 func ScalingPolicy() *structs.ScalingPolicy {
 	return &structs.ScalingPolicy{
-		ID:  uuid.Generate(),
-		Min: 1,
-		Max: 100,
+		ID:   uuid.Generate(),
+		Min:  1,
+		Max:  100,
+		Type: structs.ScalingPolicyTypeHorizontal,
 		Target: map[string]string{
 			structs.ScalingTargetNamespace: structs.DefaultNamespace,
 			structs.ScalingTargetJob:       uuid.Generate(),
 			structs.ScalingTargetGroup:     uuid.Generate(),
+			structs.ScalingTargetTask:      uuid.Generate(),
 		},
 		Policy: map[string]interface{}{
 			"a": "b",
 		},
-		Enabled:     true,
-		CreateIndex: 10,
-		ModifyIndex: 20,
+		Enabled: true,
 	}
 }
 
@@ -1373,6 +1578,7 @@ func JobWithScalingPolicy() (*structs.Job, *structs.ScalingPolicy) {
 		ID:      uuid.Generate(),
 		Min:     int64(job.TaskGroups[0].Count),
 		Max:     int64(job.TaskGroups[0].Count),
+		Type:    structs.ScalingPolicyTypeHorizontal,
 		Policy:  map[string]interface{}{},
 		Enabled: true,
 	}
@@ -1450,4 +1656,49 @@ func CSIVolume(plugin *structs.CSIPlugin) *structs.CSIVolume {
 		NodesHealthy:        plugin.NodesHealthy,
 		NodesExpected:       len(plugin.Nodes),
 	}
+}
+
+func Events(index uint64) *structs.Events {
+	return &structs.Events{
+		Index: index,
+		Events: []structs.Event{
+			{
+				Index:   index,
+				Topic:   "Node",
+				Type:    "update",
+				Key:     uuid.Generate(),
+				Payload: Node(),
+			},
+			{
+				Index:   index,
+				Topic:   "Eval",
+				Type:    "update",
+				Key:     uuid.Generate(),
+				Payload: Eval(),
+			},
+		},
+	}
+}
+
+func AllocNetworkStatus() *structs.AllocNetworkStatus {
+	return &structs.AllocNetworkStatus{
+		InterfaceName: "eth0",
+		Address:       "192.168.0.100",
+		DNS: &structs.DNSConfig{
+			Servers:  []string{"1.1.1.1"},
+			Searches: []string{"localdomain"},
+			Options:  []string{"ndots:5"},
+		},
+	}
+}
+
+func Namespace() *structs.Namespace {
+	ns := &structs.Namespace{
+		Name:        fmt.Sprintf("team-%s", uuid.Generate()),
+		Description: "test namespace",
+		CreateIndex: 100,
+		ModifyIndex: 200,
+	}
+	ns.SetHash()
+	return ns
 }

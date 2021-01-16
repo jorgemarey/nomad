@@ -18,15 +18,18 @@ func (c *JobStopCommand) Help() string {
 Usage: nomad job stop [options] <job>
 Alias: nomad stop
 
-  Stop an existing job. This command is used to signal allocations
-  to shut down for the given job ID. Upon successful deregistration,
-  an interactive monitor session will start to display log lines as
-  the job unwinds its allocations and completes shutting down. It
-  is safe to exit the monitor early using ctrl+c.
+  Stop an existing job. This command is used to signal allocations to shut
+  down for the given job ID. Upon successful deregistration, an interactive
+  monitor session will start to display log lines as the job unwinds its
+  allocations and completes shutting down. It is safe to exit the monitor
+  early using ctrl+c.
+
+  When ACLs are enabled, this command requires a token with the 'submit-job',
+  'read-job', and 'list-jobs' capabilities for the job's namespace.
 
 General Options:
 
-  ` + generalOptionsUsage() + `
+  ` + generalOptionsUsage(usageOptsDefault) + `
 
 Stop Options:
 
@@ -206,5 +209,5 @@ func (c *JobStopCommand) Run(args []string) int {
 
 	// Start monitoring the stop eval
 	mon := newMonitor(c.Ui, client, length)
-	return mon.monitor(evalID, false)
+	return mon.monitor(evalID)
 }
