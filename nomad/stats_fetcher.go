@@ -104,6 +104,10 @@ func (f *StatsFetcher) Fetch(ctx context.Context, members []serf.Member) map[str
 
 		case <-ctx.Done():
 			f.logger.Warn("failed retrieving server health", "server", workItem.server.Name, "error", ctx.Err())
+
+			f.inflightLock.Lock()
+			delete(f.inflight, workItem.server.ID)
+			f.inflightLock.Unlock()
 		}
 	}
 	return replies

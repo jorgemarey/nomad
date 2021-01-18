@@ -320,6 +320,11 @@ func (tm *TaskTemplateManager) handleFirstRender() {
 		noopRunnerFinish = false
 	}
 
+	renderEventCh := make(chan map[string]*manager.RenderEvent)
+	endCh := make(chan struct{})
+	go tm.renderEvents(renderEventCh, runnerRenderEventCh, noopRunnerRenderEventCh, endCh)
+	defer close(endCh)
+
 	// Wait till all the templates have been rendered
 WAIT:
 	for {
@@ -368,8 +373,8 @@ WAIT:
 			// if there's a driver handle then the task is already running and
 			// that changes how we want to behave on first render
 			if dirty && tm.config.Lifecycle.IsRunning() {
-				handledRenders := make(map[string]time.Time, len(tm.config.Templates))
-				tm.onTemplateRendered(handledRenders, time.Time{})
+				handledRenders := make(map[string]time.Time, len(tm.allTemplates))
+				tm.onTemplateRendered(handledRenders, time.Time{}, events)
 			}
 
 			runnerFinish = true
@@ -387,11 +392,22 @@ WAIT:
 				continue
 			}
 
+			dirty := false
 			for _, event := range events {
 				// This template hasn't been rendered
 				if event.LastWouldRender.IsZero() {
 					continue WAIT
 				}
+				if event.WouldRender && event.DidRender {
+					dirty = true
+				}
+			}
+
+			// if there's a driver handle then the task is already running and
+			// that changes how we want to behave on first render
+			if dirty && tm.config.Lifecycle.IsRunning() {
+				handledRenders := make(map[string]time.Time, len(tm.allTemplates))
+				tm.onTemplateRendered(handledRenders, time.Time{}, events)
 			}
 
 			noopRunnerFinish = true
@@ -400,47 +416,7 @@ WAIT:
 			}
 
 			break WAIT
-		case <-runnerRenderEventCh:
-			events := tm.runner.RenderEvents()
-			joinedSet := make(map[string]struct{})
-			for _, event := range events {
-				missing := event.MissingDeps
-				if missing == nil {
-					continue
-				}
-
-				for _, dep := range missing.List() {
-					joinedSet[dep.String()] = struct{}{}
-				}
-			}
-
-			// Check to see if the new joined set is the same as the old
-			different := len(joinedSet) != len(missingDependencies)
-			if !different {
-				for k := range joinedSet {
-					if _, ok := missingDependencies[k]; !ok {
-						different = true
-						break
-					}
-				}
-			}
-
-			// Nothing to do
-			if !different {
-				continue
-			}
-
-			// Update the missing set
-			missingDependencies = joinedSet
-
-			// Update the event timer channel
-			if !outstandingEvent {
-				// We got new data so reset
-				outstandingEvent = true
-				eventTimer.Reset(tm.config.MaxTemplateEventRate)
-			}
-		case <-noopRunnerRenderEventCh:
-			events := tm.noopRunner.RenderEvents()
+		case events := <-renderEventCh:
 			joinedSet := make(map[string]struct{})
 			for _, event := range events {
 				missing := event.MissingDeps
@@ -504,6 +480,19 @@ WAIT:
 	}
 }
 
+func (tm *TaskTemplateManager) renderEvents(eventCh chan<- map[string]*manager.RenderEvent, reCh, nreCh, endCh <-chan struct{}) {
+	select {
+	case <-tm.shutdownCh:
+		return
+	case <-endCh:
+		return
+	case <-reCh:
+		eventCh <- tm.runner.RenderEvents()
+	case <-nreCh:
+		eventCh <- tm.noopRunner.RenderEvents()
+	}
+}
+
 // handleTemplateRerenders is used to handle template render events after they
 // have all rendered. It takes action based on which set of templates re-render.
 // The passed allRenderedTime is the time at which all templates have rendered.
@@ -526,19 +515,18 @@ func (tm *TaskTemplateManager) handleTemplateRerenders(allRenderedTime time.Time
 					SetFailsTask().
 					SetDisplayMessage(fmt.Sprintf("Template failed: %v", err)))
 		case <-tm.runner.TemplateRenderedCh():
-			tm.onTemplateRendered(handledRenders, allRenderedTime)
+			tm.onTemplateRendered(handledRenders, allRenderedTime, tm.runner.RenderEvents())
 		}
 	}
 }
 
-func (tm *TaskTemplateManager) onTemplateRendered(handledRenders map[string]time.Time, allRenderedTime time.Time) {
+func (tm *TaskTemplateManager) onTemplateRendered(handledRenders map[string]time.Time, allRenderedTime time.Time, events map[string]*manager.RenderEvent) {
 
 	var handling []string
 	signals := make(map[string]struct{})
 	restart := false
 	var splay time.Duration
 
-	events := tm.runner.RenderEvents()
 	for id, event := range events {
 
 		// First time through
