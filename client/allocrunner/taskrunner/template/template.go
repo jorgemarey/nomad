@@ -774,6 +774,8 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 		rate := config.retryRate
 		conf.Consul.Retry.Backoff = &rate
 	}
+	retryAttemps := 10000 // ~ one week
+	conf.Consul.Retry.Attempts = &retryAttemps
 
 	// Setup the Consul config
 	if cc.ConsulConfig != nil {
@@ -811,6 +813,7 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 	emptyStr := ""
 	conf.Vault.RenewToken = helper.BoolToPtr(false)
 	conf.Vault.Token = &emptyStr
+	conf.Vault.Retry.Attempts = &retryAttemps
 	if cc.VaultConfig != nil && cc.VaultConfig.IsEnabled() {
 		conf.Vault.Address = &cc.VaultConfig.Addr
 		conf.Vault.Token = &config.VaultToken
