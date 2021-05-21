@@ -7,8 +7,8 @@ import (
 	docker "github.com/fsouza/go-dockerclient"
 )
 
-func getPortBinding(ip string, port string) []docker.PortBinding {
-	return []docker.PortBinding{{HostIP: ip, HostPort: port}}
+func getPortBinding(ip string, port string) docker.PortBinding {
+	return docker.PortBinding{HostIP: ip, HostPort: port}
 }
 
 func tweakCapabilities(basics, adds, drops []string) ([]string, error) {
@@ -27,5 +27,6 @@ func tweakCapabilities(basics, adds, drops []string) ([]string, error) {
 	for i, cap := range effectiveCaps {
 		effectiveCaps[i] = cap[len("CAP_"):]
 	}
+
 	return effectiveCaps, nil
 }

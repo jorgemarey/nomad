@@ -189,7 +189,6 @@ func maybeTweakTags(wanted *api.AgentServiceRegistration, existing *api.AgentSer
 // (cached) state of the service registration reported by Consul. If any of the
 // critical fields are not deeply equal, they considered different.
 func different(wanted *api.AgentServiceRegistration, existing *api.AgentService, sidecar *api.AgentService) bool {
-
 	switch {
 	case wanted.Kind != existing.Kind:
 		return true
@@ -205,12 +204,11 @@ func different(wanted *api.AgentServiceRegistration, existing *api.AgentService,
 		return true
 	case !reflect.DeepEqual(wanted.Meta, existing.Meta):
 		return true
-	case !reflect.DeepEqual(wanted.Tags, existing.Tags):
+	case tagsDifferent(wanted.Tags, existing.Tags):
 		return true
 	case connectSidecarDifferent(wanted, sidecar):
 		return true
 	}
-
 	return false
 }
 
@@ -228,20 +226,36 @@ func tagsDifferent(a, b []string) bool {
 	return false
 }
 
+// sidecarTagsDifferent includes the special logic for comparing sidecar tags
+// from Nomad vs. Consul perspective. Because Consul forces the sidecar tags
+// to inherit the parent service tags if the sidecar tags are unset, we need to
+// take that into consideration when Nomad's sidecar tags are unset by instead
+// comparing them to the parent service tags.
+func sidecarTagsDifferent(parent, wanted, sidecar []string) bool {
+	if len(wanted) == 0 {
+		return tagsDifferent(parent, sidecar)
+	}
+	return tagsDifferent(wanted, sidecar)
+}
+
+// connectSidecarDifferent returns true if Nomad expects there to be a sidecar
+// hanging off the desired parent service definition on the Consul side, and does
+// not match with what Consul has.
 func connectSidecarDifferent(wanted *api.AgentServiceRegistration, sidecar *api.AgentService) bool {
 	if wanted.Connect != nil && wanted.Connect.SidecarService != nil {
 		if sidecar == nil {
 			// consul lost our sidecar (?)
 			return true
 		}
-		if tagsDifferent(wanted.Connect.SidecarService.Tags, sidecar.Tags) {
+
+		if sidecarTagsDifferent(wanted.Tags, wanted.Connect.SidecarService.Tags, sidecar.Tags) {
 			// tags on the nomad definition have been modified
 			return true
 		}
 	}
 
-	// There is no connect sidecar the nomad side; let consul anti-entropy worry
-	// about any registration on the consul side.
+	// Either Nomad does not expect there to be a sidecar_service, or there is
+	// no actionable difference from the Consul sidecar_service definition.
 	return false
 }
 
@@ -873,7 +887,7 @@ func (c *ServiceClient) serviceRegs(ops *operations, service *structs.Service, w
 	}
 
 	// newConnect returns (nil, nil) if there's no Connect-enabled service.
-	connect, err := newConnect(service.Name, service.Connect, workload.Networks)
+	connect, err := newConnect(id, service.Name, service.Connect, workload.Networks, workload.Ports)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Consul Connect configuration for service %q: %v", service.Name, err)
 	}
@@ -898,10 +912,21 @@ func (c *ServiceClient) serviceRegs(ops *operations, service *structs.Service, w
 	// This enables the consul UI to show that Nomad registered this service
 	meta["external-source"] = "nomad"
 
-	// Explicitly set the service kind in case this service represents a Connect gateway.
+	// Explicitly set the Consul service Kind in case this service represents
+	// one of the Connect gateway types.
 	kind := api.ServiceKindTypical
-	if service.Connect.IsGateway() {
+	switch {
+	case service.Connect.IsIngress():
 		kind = api.ServiceKindIngressGateway
+	case service.Connect.IsTerminating():
+		kind = api.ServiceKindTerminatingGateway
+		// set the default port if bridge / default listener set
+		if defaultBind, exists := service.Connect.Gateway.Proxy.EnvoyGatewayBindAddresses["default"]; exists {
+			portLabel := fmt.Sprintf("%s-%s", structs.ConnectTerminatingPrefix, service.Name)
+			if dynPort, ok := workload.Ports.Get(portLabel); ok {
+				defaultBind.Port = dynPort.Value
+			}
+		}
 	}
 
 	// Build the Consul Service registration request
@@ -1497,9 +1522,9 @@ func getAddress(addrMode, portLabel string, networks structs.Networks, driverNet
 		// Check in Networks struct for backwards compatibility if not found
 		mapping, ok := ports.Get(portLabel)
 		if !ok {
-			ip, port := networks.Port(portLabel)
-			if port > 0 {
-				return ip, port, nil
+			mapping = networks.Port(portLabel)
+			if mapping.Value > 0 {
+				return mapping.HostIP, mapping.Value, nil
 			}
 
 			// If port isn't a label, try to parse it as a literal port number

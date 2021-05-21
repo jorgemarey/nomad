@@ -26,8 +26,6 @@ export default class TokenService extends Service {
     } else {
       window.localStorage.nomadTokenSecret = value;
     }
-
-    return value;
   }
 
   @task(function*() {
@@ -94,7 +92,7 @@ export default class TokenService extends Service {
   authorizedRequest(url, options) {
     if (this.get('system.shouldIncludeRegion')) {
       const region = this.get('system.activeRegion');
-      if (region) {
+      if (region && url.indexOf('region=') === -1) {
         url = addParams(url, { region });
       }
     }

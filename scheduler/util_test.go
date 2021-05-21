@@ -762,6 +762,63 @@ func TestTasksUpdated_connectServiceUpdated(t *testing.T) {
 	})
 }
 
+func TestNetworkUpdated(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		a       []*structs.NetworkResource
+		b       []*structs.NetworkResource
+		updated bool
+	}{
+		{
+			name: "mode updated",
+			a: []*structs.NetworkResource{
+				{Mode: "host"},
+			},
+			b: []*structs.NetworkResource{
+				{Mode: "bridge"},
+			},
+			updated: true,
+		},
+		{
+			name: "host_network updated",
+			a: []*structs.NetworkResource{
+				{DynamicPorts: []structs.Port{
+					{Label: "http", To: 8080},
+				}},
+			},
+			b: []*structs.NetworkResource{
+				{DynamicPorts: []structs.Port{
+					{Label: "http", To: 8080, HostNetwork: "public"},
+				}},
+			},
+			updated: true,
+		},
+		{
+			name: "port.To updated",
+			a: []*structs.NetworkResource{
+				{DynamicPorts: []structs.Port{
+					{Label: "http", To: 8080},
+				}},
+			},
+			b: []*structs.NetworkResource{
+				{DynamicPorts: []structs.Port{
+					{Label: "http", To: 8088},
+				}},
+			},
+			updated: true,
+		},
+	}
+
+	for i := range cases {
+		c := cases[i]
+		t.Run(c.name, func(tc *testing.T) {
+			tc.Parallel()
+			require.Equal(tc, c.updated, networkUpdated(c.a, c.b), "unexpected network updated result")
+		})
+	}
+}
+
 func TestEvictAndPlace_LimitLessThanAllocs(t *testing.T) {
 	_, ctx := testContext(t)
 	allocs := []allocTuple{
@@ -1328,4 +1385,78 @@ func TestUtil_UpdateNonTerminalAllocsToLost(t *testing.T) {
 	}
 	expected = []string{}
 	require.True(t, reflect.DeepEqual(allocsLost, expected), "actual: %v, expected: %v", allocsLost, expected)
+}
+
+func TestUtil_connectUpdated(t *testing.T) {
+	t.Run("both nil", func(t *testing.T) {
+		require.False(t, connectUpdated(nil, nil))
+	})
+
+	t.Run("one nil", func(t *testing.T) {
+		require.True(t, connectUpdated(nil, new(structs.ConsulConnect)))
+	})
+
+	t.Run("native differ", func(t *testing.T) {
+		a := &structs.ConsulConnect{Native: true}
+		b := &structs.ConsulConnect{Native: false}
+		require.True(t, connectUpdated(a, b))
+	})
+
+	t.Run("gateway differ", func(t *testing.T) {
+		a := &structs.ConsulConnect{Gateway: &structs.ConsulGateway{
+			Ingress: new(structs.ConsulIngressConfigEntry),
+		}}
+		b := &structs.ConsulConnect{Gateway: &structs.ConsulGateway{
+			Terminating: new(structs.ConsulTerminatingConfigEntry),
+		}}
+		require.True(t, connectUpdated(a, b))
+	})
+
+	t.Run("sidecar task differ", func(t *testing.T) {
+		a := &structs.ConsulConnect{SidecarTask: &structs.SidecarTask{
+			Driver: "exec",
+		}}
+		b := &structs.ConsulConnect{SidecarTask: &structs.SidecarTask{
+			Driver: "docker",
+		}}
+		require.True(t, connectUpdated(a, b))
+	})
+
+	t.Run("sidecar service differ", func(t *testing.T) {
+		a := &structs.ConsulConnect{SidecarService: &structs.ConsulSidecarService{
+			Port: "1111",
+		}}
+		b := &structs.ConsulConnect{SidecarService: &structs.ConsulSidecarService{
+			Port: "2222",
+		}}
+		require.True(t, connectUpdated(a, b))
+	})
+
+	t.Run("same", func(t *testing.T) {
+		a := new(structs.ConsulConnect)
+		b := new(structs.ConsulConnect)
+		require.False(t, connectUpdated(a, b))
+	})
+}
+
+func TestUtil_connectSidecarServiceUpdated(t *testing.T) {
+	t.Run("both nil", func(t *testing.T) {
+		require.False(t, connectSidecarServiceUpdated(nil, nil))
+	})
+
+	t.Run("one nil", func(t *testing.T) {
+		require.True(t, connectSidecarServiceUpdated(nil, new(structs.ConsulSidecarService)))
+	})
+
+	t.Run("ports differ", func(t *testing.T) {
+		a := &structs.ConsulSidecarService{Port: "1111"}
+		b := &structs.ConsulSidecarService{Port: "2222"}
+		require.True(t, connectSidecarServiceUpdated(a, b))
+	})
+
+	t.Run("same", func(t *testing.T) {
+		a := &structs.ConsulSidecarService{Port: "1111"}
+		b := &structs.ConsulSidecarService{Port: "1111"}
+		require.False(t, connectSidecarServiceUpdated(a, b))
+	})
 }

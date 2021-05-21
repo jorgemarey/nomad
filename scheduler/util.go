@@ -467,7 +467,7 @@ func connectServiceUpdated(servicesA, servicesB []*structs.Service) bool {
 // update.
 func connectUpdated(connectA, connectB *structs.ConsulConnect) bool {
 	if connectA == nil || connectB == nil {
-		return connectA == connectB
+		return connectA != connectB
 	}
 
 	if connectA.Native != connectB.Native {
@@ -492,7 +492,7 @@ func connectUpdated(connectA, connectB *structs.ConsulConnect) bool {
 
 func connectSidecarServiceUpdated(ssA, ssB *structs.ConsulSidecarService) bool {
 	if ssA == nil || ssB == nil {
-		return ssA == ssB
+		return ssA != ssB
 	}
 
 	if ssA.Port != ssB.Port {
@@ -534,16 +534,26 @@ func networkUpdated(netA, netB []*structs.NetworkResource) bool {
 	return false
 }
 
-// networkPortMap takes a network resource and returns a map of port labels to
-// values. The value for dynamic ports is disregarded even if it is set. This
+// networkPortMap takes a network resource and returns a AllocatedPorts.
+// The value for dynamic ports is disregarded even if it is set. This
 // makes this function suitable for comparing two network resources for changes.
-func networkPortMap(n *structs.NetworkResource) map[string]int {
-	m := make(map[string]int, len(n.DynamicPorts)+len(n.ReservedPorts))
+func networkPortMap(n *structs.NetworkResource) structs.AllocatedPorts {
+	var m structs.AllocatedPorts
 	for _, p := range n.ReservedPorts {
-		m[p.Label] = p.Value
+		m = append(m, structs.AllocatedPortMapping{
+			Label:  p.Label,
+			Value:  p.Value,
+			To:     p.To,
+			HostIP: p.HostNetwork,
+		})
 	}
 	for _, p := range n.DynamicPorts {
-		m[p.Label] = -1
+		m = append(m, structs.AllocatedPortMapping{
+			Label:  p.Label,
+			Value:  -1,
+			To:     p.To,
+			HostIP: p.HostNetwork,
+		})
 	}
 	return m
 }
@@ -1014,7 +1024,7 @@ func genericAllocUpdateFn(ctx Context, stack Stack, evalID string) allocUpdateTy
 			},
 		}
 
-		// Since this is an inplace update, we should copy network
+		// Since this is an inplace update, we should copy network and port
 		// information from the original alloc. This is similar to how
 		// we copy network info for task level networks above.
 		//
@@ -1022,6 +1032,7 @@ func genericAllocUpdateFn(ctx Context, stack Stack, evalID string) allocUpdateTy
 		// Nomad v0.8 or earlier.
 		if existing.AllocatedResources != nil {
 			newAlloc.AllocatedResources.Shared.Networks = existing.AllocatedResources.Shared.Networks
+			newAlloc.AllocatedResources.Shared.Ports = existing.AllocatedResources.Shared.Ports
 		}
 
 		// Use metrics from existing alloc for in place upgrade

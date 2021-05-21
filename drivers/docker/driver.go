@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,7 +24,9 @@ import (
 	"github.com/hashicorp/nomad/client/taskenv"
 	"github.com/hashicorp/nomad/drivers/docker/docklog"
 	"github.com/hashicorp/nomad/drivers/shared/eventer"
+	"github.com/hashicorp/nomad/drivers/shared/executor"
 	"github.com/hashicorp/nomad/drivers/shared/resolvconf"
+	"github.com/hashicorp/nomad/helper"
 	nstructs "github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/plugins/base"
 	"github.com/hashicorp/nomad/plugins/drivers"
@@ -251,10 +254,7 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 		return nil, nil, fmt.Errorf("image name required for docker driver")
 	}
 
-	// Remove any http
-	if strings.HasPrefix(driverConfig.Image, "https://") {
-		driverConfig.Image = strings.Replace(driverConfig.Image, "https://", "", 1)
-	}
+	driverConfig.Image = strings.TrimPrefix(driverConfig.Image, "https://")
 
 	handle := drivers.NewTaskHandle(taskHandleVersion)
 	handle.Config = cfg
@@ -892,37 +892,11 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	}
 	hostConfig.Privileged = driverConfig.Privileged
 
-	// set capabilities
-	hostCapsWhitelistConfig := d.config.AllowCaps
-	hostCapsWhitelist := make(map[string]struct{})
-	for _, cap := range hostCapsWhitelistConfig {
-		cap = strings.ToLower(strings.TrimSpace(cap))
-		hostCapsWhitelist[cap] = struct{}{}
+	// set add/drop capabilities
+	hostConfig.CapAdd, hostConfig.CapDrop, err = d.getCaps(driverConfig)
+	if err != nil {
+		return c, err
 	}
-
-	if _, ok := hostCapsWhitelist["all"]; !ok {
-		effectiveCaps, err := tweakCapabilities(
-			strings.Split(dockerBasicCaps, ","),
-			driverConfig.CapAdd,
-			driverConfig.CapDrop,
-		)
-		if err != nil {
-			return c, err
-		}
-		var missingCaps []string
-		for _, cap := range effectiveCaps {
-			cap = strings.ToLower(cap)
-			if _, ok := hostCapsWhitelist[cap]; !ok {
-				missingCaps = append(missingCaps, cap)
-			}
-		}
-		if len(missingCaps) > 0 {
-			return c, fmt.Errorf("Docker driver doesn't have the following caps allowlisted on this Nomad agent: %s", missingCaps)
-		}
-	}
-
-	hostConfig.CapAdd = driverConfig.CapAdd
-	hostConfig.CapDrop = driverConfig.CapDrop
 
 	// set SHM size
 	if driverConfig.ShmSize != 0 {
@@ -1163,6 +1137,119 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	}, nil
 }
 
+// getCaps computes the capabilities to supply to the --add-cap and --drop-cap
+// options to the docker driver, which override the default capabilities enabled
+// by docker itself.
+func (d *Driver) getCaps(taskConfig *TaskConfig) ([]string, []string, error) {
+
+	// capabilities allowable by client docker plugin configuration
+	allowCaps := expandAllowCaps(d.config.AllowCaps)
+
+	// capabilities the task docker config is asking for based on the default
+	// capabilities allowable by nomad
+	desiredCaps, err := tweakCapabilities(nomadDefaultCaps(), taskConfig.CapAdd, taskConfig.CapDrop)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// capabilities the task is requesting that are NOT allowed by the docker plugin
+	if missing := missingCaps(allowCaps, desiredCaps); len(missing) > 0 {
+		return nil, nil, fmt.Errorf("Docker driver does not have the following caps allow-listed on this Nomad agent: %s", missing)
+	}
+
+	// capabilities that should be dropped relative to the docker default capabilities
+	dropCaps := capDrops(taskConfig.CapDrop, allowCaps)
+
+	return taskConfig.CapAdd, dropCaps, nil
+}
+
+// capDrops will compute the total dropped capabilities set
+//
+// {task cap_drop} U ({docker defaults} \ {driver allow caps})
+func capDrops(dropCaps []string, allowCaps []string) []string {
+	dropSet := make(map[string]struct{})
+
+	for _, c := range normalizeCaps(dropCaps) {
+		dropSet[c] = struct{}{}
+	}
+
+	// if dropCaps includes ALL, no need to iterate every capability
+	if _, exists := dropSet["ALL"]; exists {
+		return []string{"ALL"}
+	}
+
+	dockerDefaults := helper.SliceStringToSet(normalizeCaps(dockerDefaultCaps()))
+	allowedCaps := helper.SliceStringToSet(normalizeCaps(allowCaps))
+
+	// find the docker default caps not in allowed caps
+	for dCap := range dockerDefaults {
+		if _, exists := allowedCaps[dCap]; !exists {
+			dropSet[dCap] = struct{}{}
+		}
+	}
+
+	drops := make([]string, 0, len(dropSet))
+	for c := range dropSet {
+		drops = append(drops, c)
+	}
+	sort.Strings(drops)
+	return drops
+}
+
+// expandAllowCaps returns the normalized set of allowable capabilities set
+// for the docker plugin configuration.
+func expandAllowCaps(allowCaps []string) []string {
+	if len(allowCaps) == 0 {
+		return nil
+	}
+
+	set := make(map[string]struct{}, len(allowCaps))
+
+	for _, rawCap := range allowCaps {
+		capability := strings.ToUpper(rawCap)
+		if capability == "ALL" {
+			for _, defCap := range normalizeCaps(executor.SupportedCaps(true)) {
+				set[defCap] = struct{}{}
+			}
+		} else {
+			set[capability] = struct{}{}
+		}
+	}
+
+	result := make([]string, 0, len(set))
+	for capability := range set {
+		result = append(result, capability)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// missingCaps returns the set of elements in desired that are not present in
+// allowed. The elements in desired are first upper-cased before comparison.
+// The elements in allowed are assumed to be upper-cased.
+func missingCaps(allowed, desired []string) []string {
+	_, missing := helper.SliceStringIsSubset(allowed, normalizeCaps(desired))
+	sort.Strings(missing)
+	return missing
+}
+
+// normalizeCaps returns a copy of caps with duplicate elements removed and all
+// elements upper-cased.
+func normalizeCaps(caps []string) []string {
+	set := make(map[string]struct{}, len(caps))
+	for _, c := range caps {
+		normal := strings.TrimPrefix(strings.ToUpper(c), "CAP_")
+		set[strings.ToUpper(normal)] = struct{}{}
+	}
+
+	result := make([]string, 0, len(set))
+	for c := range set {
+		result = append(result, c)
+	}
+	sort.Strings(result)
+	return result
+}
+
 func (d *Driver) toDockerMount(m *DockerMount, task *drivers.TaskConfig) (*docker.HostMount, error) {
 	hm, err := m.toDockerHostMount()
 	if err != nil {
@@ -1331,40 +1418,13 @@ func (d *Driver) handleWait(ctx context.Context, ch chan *drivers.ExitResult, h 
 	}
 }
 
-// parseSignal interprets the signal name into an os.Signal. If no name is
-// provided, the docker driver defaults to SIGTERM. If the OS is Windows and
-// SIGINT is provided, the signal is converted to SIGTERM.
-func (d *Driver) parseSignal(os, signal string) (os.Signal, error) {
-	// Unlike other drivers, docker defaults to SIGTERM, aiming for consistency
-	// with the 'docker stop' command.
-	// https://docs.docker.com/engine/reference/commandline/stop/#extended-description
-	if signal == "" {
-		signal = "SIGTERM"
-	}
-
-	// Windows Docker daemon does not support SIGINT, SIGTERM is the semantic equivalent that
-	// allows for graceful shutdown before being followed up by a SIGKILL.
-	// Supported signals:
-	//   https://github.com/moby/moby/blob/0111ee70874a4947d93f64b672f66a2a35071ee2/pkg/signal/signal_windows.go#L17-L26
-	if os == "windows" && signal == "SIGINT" {
-		signal = "SIGTERM"
-	}
-
-	return signals.Parse(signal)
-}
-
 func (d *Driver) StopTask(taskID string, timeout time.Duration, signal string) error {
 	h, ok := d.tasks.Get(taskID)
 	if !ok {
 		return drivers.ErrTaskNotFound
 	}
 
-	sig, err := d.parseSignal(runtime.GOOS, signal)
-	if err != nil {
-		return fmt.Errorf("failed to parse signal: %v", err)
-	}
-
-	return h.Kill(timeout, sig)
+	return h.Kill(timeout, signal)
 }
 
 func (d *Driver) DestroyTask(taskID string, force bool) error {

@@ -21,7 +21,7 @@ import (
 	"github.com/hashicorp/nomad/helper/envoy"
 	vaultapi "github.com/hashicorp/vault/api"
 	"github.com/pkg/errors"
-	"github.com/shirou/gopsutil/host"
+	"github.com/shirou/gopsutil/v3/host"
 
 	"github.com/hashicorp/nomad/client/allocdir"
 	"github.com/hashicorp/nomad/client/allocrunner"
@@ -1224,7 +1224,7 @@ func (c *Client) saveState() error {
 			if err != nil {
 				c.logger.Error("error saving alloc state", "error", err, "alloc_id", id)
 				l.Lock()
-				multierror.Append(&mErr, err)
+				_ = multierror.Append(&mErr, err)
 				l.Unlock()
 			}
 			wg.Done()

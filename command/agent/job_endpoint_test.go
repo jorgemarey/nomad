@@ -221,6 +221,68 @@ func TestHTTP_JobsRegister(t *testing.T) {
 	})
 }
 
+func TestHTTP_JobsRegister_IgnoresParentID(t *testing.T) {
+	t.Parallel()
+	httpTest(t, nil, func(s *TestAgent) {
+		// Create the job
+		job := MockJob()
+		parentID := "somebadparentid"
+		job.ParentID = &parentID
+		args := api.JobRegisterRequest{
+			Job:          job,
+			WriteRequest: api.WriteRequest{Region: "global"},
+		}
+		buf := encodeReq(args)
+
+		// Make the HTTP request
+		req, err := http.NewRequest("PUT", "/v1/jobs", buf)
+		require.NoError(t, err)
+		respW := httptest.NewRecorder()
+
+		// Make the request
+		obj, err := s.Server.JobsRequest(respW, req)
+		require.NoError(t, err)
+
+		// Check the response
+		reg := obj.(structs.JobRegisterResponse)
+		require.NotEmpty(t, reg.EvalID)
+
+		// Check for the index
+		require.NotEmpty(t, respW.HeaderMap.Get("X-Nomad-Index"))
+
+		// Check the job is registered
+		getReq := structs.JobSpecificRequest{
+			JobID: *job.ID,
+			QueryOptions: structs.QueryOptions{
+				Region:    "global",
+				Namespace: structs.DefaultNamespace,
+			},
+		}
+		var getResp structs.SingleJobResponse
+		err = s.Agent.RPC("Job.GetJob", &getReq, &getResp)
+		require.NoError(t, err)
+
+		require.NotNil(t, getResp.Job)
+		require.Equal(t, *job.ID, getResp.Job.ID)
+		require.Empty(t, getResp.Job.ParentID)
+
+		// check the eval exists
+		evalReq := structs.EvalSpecificRequest{
+			EvalID: reg.EvalID,
+			QueryOptions: structs.QueryOptions{
+				Region:    "global",
+				Namespace: structs.DefaultNamespace,
+			},
+		}
+		var evalResp structs.SingleEvalResponse
+		err = s.Agent.RPC("Eval.GetEval", &evalReq, &evalResp)
+		require.NoError(t, err)
+
+		require.NotNil(t, evalResp.Eval)
+		require.Equal(t, reg.EvalID, evalResp.Eval.ID)
+	})
+}
+
 // Test that ACL token is properly threaded through to the RPC endpoint
 func TestHTTP_JobsRegister_ACL(t *testing.T) {
 	t.Parallel()
@@ -2167,7 +2229,6 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 		Namespace:      "foo",
 		VaultNamespace: "ghi789",
 		ID:             "foo",
-		ParentID:       "lol",
 		Name:           "name",
 		Type:           "service",
 		Priority:       50,
@@ -2655,7 +2716,6 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 		Region:      "global",
 		Namespace:   "foo",
 		ID:          "foo",
-		ParentID:    "lol",
 		Name:        "name",
 		Type:        "system",
 		Priority:    50,
@@ -3061,26 +3121,131 @@ func TestConversion_apiConnectSidecarServiceToStructs(t *testing.T) {
 	}))
 }
 
-func TestConversion_ApiConsulConnectToStructs_legacy(t *testing.T) {
+func TestConversion_ApiConsulConnectToStructs(t *testing.T) {
 	t.Parallel()
-	require.Nil(t, ApiConsulConnectToStructs(nil))
-	require.Equal(t, &structs.ConsulConnect{
-		Native:         false,
-		SidecarService: &structs.ConsulSidecarService{Port: "myPort"},
-		SidecarTask:    &structs.SidecarTask{Name: "task"},
-	}, ApiConsulConnectToStructs(&api.ConsulConnect{
-		Native:         false,
-		SidecarService: &api.ConsulSidecarService{Port: "myPort"},
-		SidecarTask:    &api.SidecarTask{Name: "task"},
-	}))
-}
 
-func TestConversion_ApiConsulConnectToStructs_native(t *testing.T) {
-	t.Parallel()
-	require.Nil(t, ApiConsulConnectToStructs(nil))
-	require.Equal(t, &structs.ConsulConnect{
-		Native: true,
-	}, ApiConsulConnectToStructs(&api.ConsulConnect{
-		Native: true,
-	}))
+	t.Run("nil", func(t *testing.T) {
+		require.Nil(t, ApiConsulConnectToStructs(nil))
+	})
+
+	t.Run("sidecar", func(t *testing.T) {
+		require.Equal(t, &structs.ConsulConnect{
+			Native:         false,
+			SidecarService: &structs.ConsulSidecarService{Port: "myPort"},
+			SidecarTask:    &structs.SidecarTask{Name: "task"},
+		}, ApiConsulConnectToStructs(&api.ConsulConnect{
+			Native:         false,
+			SidecarService: &api.ConsulSidecarService{Port: "myPort"},
+			SidecarTask:    &api.SidecarTask{Name: "task"},
+		}))
+	})
+
+	t.Run("gateway proxy", func(t *testing.T) {
+		require.Equal(t, &structs.ConsulConnect{
+			Gateway: &structs.ConsulGateway{
+				Proxy: &structs.ConsulGatewayProxy{
+					ConnectTimeout:                  helper.TimeToPtr(3 * time.Second),
+					EnvoyGatewayBindTaggedAddresses: true,
+					EnvoyGatewayBindAddresses: map[string]*structs.ConsulGatewayBindAddress{
+						"service": {
+							Address: "10.0.0.1",
+							Port:    9000,
+						}},
+					EnvoyGatewayNoDefaultBind: true,
+					EnvoyDNSDiscoveryType:     "STRICT_DNS",
+					Config: map[string]interface{}{
+						"foo": "bar",
+					},
+				},
+			},
+		}, ApiConsulConnectToStructs(&api.ConsulConnect{
+			Gateway: &api.ConsulGateway{
+				Proxy: &api.ConsulGatewayProxy{
+					ConnectTimeout:                  helper.TimeToPtr(3 * time.Second),
+					EnvoyGatewayBindTaggedAddresses: true,
+					EnvoyGatewayBindAddresses: map[string]*api.ConsulGatewayBindAddress{
+						"service": {
+							Address: "10.0.0.1",
+							Port:    9000,
+						},
+					},
+					EnvoyGatewayNoDefaultBind: true,
+					EnvoyDNSDiscoveryType:     "STRICT_DNS",
+					Config: map[string]interface{}{
+						"foo": "bar",
+					},
+				},
+			},
+		}))
+	})
+
+	t.Run("gateway ingress", func(t *testing.T) {
+		require.Equal(t, &structs.ConsulConnect{
+			Gateway: &structs.ConsulGateway{
+				Ingress: &structs.ConsulIngressConfigEntry{
+					TLS: &structs.ConsulGatewayTLSConfig{Enabled: true},
+					Listeners: []*structs.ConsulIngressListener{{
+						Port:     1111,
+						Protocol: "http",
+						Services: []*structs.ConsulIngressService{{
+							Name:  "ingress1",
+							Hosts: []string{"host1"},
+						}},
+					}},
+				},
+			},
+		}, ApiConsulConnectToStructs(
+			&api.ConsulConnect{
+				Gateway: &api.ConsulGateway{
+					Ingress: &api.ConsulIngressConfigEntry{
+						TLS: &api.ConsulGatewayTLSConfig{Enabled: true},
+						Listeners: []*api.ConsulIngressListener{{
+							Port:     1111,
+							Protocol: "http",
+							Services: []*api.ConsulIngressService{{
+								Name:  "ingress1",
+								Hosts: []string{"host1"},
+							}},
+						}},
+					},
+				},
+			},
+		))
+	})
+
+	t.Run("gateway terminating", func(t *testing.T) {
+		require.Equal(t, &structs.ConsulConnect{
+			Gateway: &structs.ConsulGateway{
+				Terminating: &structs.ConsulTerminatingConfigEntry{
+					Services: []*structs.ConsulLinkedService{{
+						Name:     "linked-service",
+						CAFile:   "ca.pem",
+						CertFile: "cert.pem",
+						KeyFile:  "key.pem",
+						SNI:      "linked.consul",
+					}},
+				},
+			},
+		}, ApiConsulConnectToStructs(&api.ConsulConnect{
+			Gateway: &api.ConsulGateway{
+				Terminating: &api.ConsulTerminatingConfigEntry{
+					Services: []*api.ConsulLinkedService{{
+						Name:     "linked-service",
+						CAFile:   "ca.pem",
+						CertFile: "cert.pem",
+						KeyFile:  "key.pem",
+						SNI:      "linked.consul",
+					}},
+				},
+			},
+		}))
+	})
+
+	t.Run("native", func(t *testing.T) {
+		require.Equal(t, &structs.ConsulConnect{
+			Native: true,
+		}, ApiConsulConnectToStructs(&api.ConsulConnect{
+			Native: true,
+		}))
+	})
 }

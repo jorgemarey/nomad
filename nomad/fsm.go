@@ -1945,6 +1945,7 @@ func (s *nomadSnapshot) Persist(sink raft.SnapshotSink) error {
 		return err
 	}
 	if err := s.persistNamespaces(sink, encoder); err != nil {
+		sink.Cancel()
 		return err
 	}
 	if err := s.persistEnterpriseTables(sink, encoder); err != nil {

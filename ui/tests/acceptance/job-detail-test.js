@@ -1,3 +1,4 @@
+/* eslint-disable ember/no-test-module-for */
 import { currentURL } from '@ember/test-helpers';
 import { module, test } from 'qunit';
 import { setupApplicationTest } from 'ember-qunit';
@@ -130,12 +131,11 @@ module('Acceptance | job detail (with namespaces)', function(hooks) {
   test('when switching namespaces, the app redirects to /jobs with the new namespace', async function(assert) {
     const namespace = server.db.namespaces.find(job.namespaceId);
     const otherNamespace = server.db.namespaces.toArray().find(ns => ns !== namespace).name;
-    const label = otherNamespace === 'default' ? 'Default Namespace' : otherNamespace;
 
     await JobDetail.visit({ id: job.id, namespace: namespace.name });
 
     // TODO: Migrate to Page Objects
-    await selectChoose('[data-test-namespace-switcher]', label);
+    await selectChoose('[data-test-namespace-switcher]', otherNamespace);
     assert.equal(currentURL().split('?')[0], '/jobs', 'Navigated to /jobs');
 
     const jobs = server.db.jobs

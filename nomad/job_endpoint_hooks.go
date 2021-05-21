@@ -40,6 +40,8 @@ type jobValidator interface {
 }
 
 func (j *Job) admissionControllers(job *structs.Job) (out *structs.Job, warnings []error, err error) {
+	// Mutators run first before validators, so validators view the final rendered job.
+	// So, mutators must handle invalid jobs.
 	out, warnings, err = j.admissionMutators(job)
 	if err != nil {
 		return nil, nil, err
@@ -99,14 +101,8 @@ func (jobCanonicalizer) Name() string {
 }
 
 func (jobCanonicalizer) Mutate(job *structs.Job) (*structs.Job, []error, error) {
-	err := job.Canonicalize()
-	if err == nil {
-		return job, nil, nil
-	}
-	if me, ok := err.(*multierror.Error); ok {
-		return job, me.Errors, nil
-	}
-	return job, []error{err}, nil
+	job.Canonicalize()
+	return job, nil, nil
 }
 
 // jobImpliedConstraints adds constraints to a job implied by other job fields
