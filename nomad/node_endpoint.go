@@ -548,16 +548,6 @@ func (n *Node) UpdateDrain(args *structs.NodeUpdateDrainRequest,
 	// Update the timestamp of when the node status was updated
 	args.UpdatedAt = now.Unix()
 
-	// COMPAT: Remove in 0.9. Attempt to upgrade the request if it is of the old
-	// format.
-	if args.Drain && args.DrainStrategy == nil {
-		args.DrainStrategy = &structs.DrainStrategy{
-			DrainSpec: structs.DrainSpec{
-				Deadline: -1 * time.Second, // Force drain
-			},
-		}
-	}
-
 	// Setup drain strategy
 	if args.DrainStrategy != nil {
 		// Mark start time for the drain
@@ -811,9 +801,8 @@ func (n *Node) GetNode(args *structs.NodeSpecificRequest,
 
 			// Setup the output
 			if out != nil {
-				// Clear the secret ID
-				reply.Node = out.Copy()
-				reply.Node.SecretID = ""
+				out = out.Sanitize()
+				reply.Node = out
 				reply.Index = out.ModifyIndex
 			} else {
 				// Use the last index that affected the nodes table
@@ -1770,10 +1759,11 @@ func (n *Node) DeriveSIToken(args *structs.DeriveSITokenRequest, reply *structs.
 						return nil
 					}
 					secret, err := n.srv.consulACLs.CreateToken(ctx, ServiceIdentityRequest{
-						TaskKind:  task.TaskKind,
-						TaskName:  task.TaskName,
-						ClusterID: clusterID,
-						AllocID:   alloc.ID,
+						ConsulNamespace: tg.Consul.GetNamespace(),
+						TaskKind:        task.TaskKind,
+						TaskName:        task.TaskName,
+						ClusterID:       clusterID,
+						AllocID:         alloc.ID,
 					})
 					if err != nil {
 						return err
@@ -1806,10 +1796,11 @@ func (n *Node) DeriveSIToken(args *structs.DeriveSITokenRequest, reply *structs.
 	for task, secret := range results {
 		tokens[task] = secret.SecretID
 		accessor := &structs.SITokenAccessor{
-			NodeID:     alloc.NodeID,
-			AllocID:    alloc.ID,
-			TaskName:   task,
-			AccessorID: secret.AccessorID,
+			ConsulNamespace: tg.Consul.GetNamespace(),
+			NodeID:          alloc.NodeID,
+			AllocID:         alloc.ID,
+			TaskName:        task,
+			AccessorID:      secret.AccessorID,
 		}
 		accessors = append(accessors, accessor)
 	}

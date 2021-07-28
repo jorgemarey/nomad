@@ -252,13 +252,7 @@ func readyNodesInDCs(state State, dcs []string) ([]*structs.Node, map[string]int
 
 		// Filter on datacenter and status
 		node := raw.(*structs.Node)
-		if node.Status != structs.NodeStatusReady {
-			continue
-		}
-		if node.Drain {
-			continue
-		}
-		if node.SchedulingEligibility != structs.NodeSchedulingEligible {
+		if !node.Ready() {
 			continue
 		}
 		if _, ok := dcMap[node.Datacenter]; !ok {
@@ -327,7 +321,7 @@ func taintedNodes(state State, allocs []*structs.Allocation) (map[string]*struct
 			out[alloc.NodeID] = nil
 			continue
 		}
-		if structs.ShouldDrainNode(node.Status) || node.Drain {
+		if structs.ShouldDrainNode(node.Status) || node.DrainStrategy != nil {
 			out[alloc.NodeID] = node
 		}
 	}
@@ -374,6 +368,11 @@ func tasksUpdated(jobA, jobB *structs.Job, taskGroup string) bool {
 
 	// Check Spreads
 	if spreadsUpdated(jobA, jobB, taskGroup) {
+		return true
+	}
+
+	// Check consul namespace updated
+	if consulNamespaceUpdated(a, b) {
 		return true
 	}
 
@@ -425,13 +424,29 @@ func tasksUpdated(jobA, jobB *structs.Job, taskGroup string) bool {
 		// Inspect the non-network resources
 		if ar, br := at.Resources, bt.Resources; ar.CPU != br.CPU {
 			return true
+		} else if ar.Cores != br.Cores {
+			return true
 		} else if ar.MemoryMB != br.MemoryMB {
+			return true
+		} else if ar.MemoryMaxMB != br.MemoryMaxMB {
 			return true
 		} else if !ar.Devices.Equals(&br.Devices) {
 			return true
 		}
 	}
 	return false
+}
+
+// consulNamespaceUpdated returns true if the Consul namespace in the task group
+// has been changed.
+//
+// This is treated as a destructive update unlike ordinary Consul service configuration
+// because Namespaces directly impact networking validity among Consul intentions.
+// Forcing the task through a reschedule is a sure way of breaking no-longer valid
+// network connections.
+func consulNamespaceUpdated(tgA, tgB *structs.TaskGroup) bool {
+	// job.ConsulNamespace is pushed down to the TGs, just check those
+	return tgA.Consul.GetNamespace() != tgB.Consul.GetNamespace()
 }
 
 // connectServiceUpdated returns true if any services with a connect stanza have
@@ -695,7 +710,8 @@ func inplaceUpdate(ctx Context, eval *structs.Evaluation, job *structs.Job,
 		ctx.Plan().AppendStoppedAlloc(update.Alloc, allocInPlace, "", "")
 
 		// Attempt to match the task group
-		option := stack.Select(update.TaskGroup, nil) // This select only looks at one node so we don't pass selectOptions
+		option := stack.Select(update.TaskGroup,
+			&SelectOptions{AllocName: update.Alloc.Name})
 
 		// Pop the allocation
 		ctx.Plan().PopUpdate(update.Alloc)
@@ -977,7 +993,7 @@ func genericAllocUpdateFn(ctx Context, stack Stack, evalID string) allocUpdateTy
 		ctx.Plan().AppendStoppedAlloc(existing, allocInPlace, "", "")
 
 		// Attempt to match the task group
-		option := stack.Select(newTG, nil) // This select only looks at one node so we don't pass selectOptions
+		option := stack.Select(newTG, &SelectOptions{AllocName: existing.Name})
 
 		// Pop the allocation
 		ctx.Plan().PopUpdate(existing)

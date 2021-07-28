@@ -1,7 +1,6 @@
 ---
 layout: docs
 page_title: network Stanza - Job Specification
-sidebar_title: network
 description: |-
   The "network" stanza specifies the networking requirements for the task group,
   including networking mode and port allocations.
@@ -264,8 +263,6 @@ If `host_network` is set for a port, Nomad will schedule the allocations on a no
 If not set the "default" host network is used which is commonly the address with a default route associated with it.
 
 When Nomad does port mapping for ports with a defined `host_network`, the port mapping rule will use the host address as the destination address.
-
-~> Note: `host_network` does not currently support task-based mapped ports such as the Docker driver's `port_map` configuration.
 
 ```hcl
 network {

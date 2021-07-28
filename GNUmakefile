@@ -7,7 +7,12 @@ GIT_COMMIT := $(shell git rev-parse HEAD)
 GIT_DIRTY := $(if $(shell git status --porcelain),+CHANGES)
 
 GO_LDFLAGS := "-X github.com/hashicorp/nomad/version.GitCommit=$(GIT_COMMIT)$(GIT_DIRTY)"
-GO_TAGS ?= codegen_generated
+
+GO_TAGS ?=
+
+ifeq ($(CI),true)
+GO_TAGS := codegen_generated $(GO_TAGS)
+endif
 
 GO_TEST_CMD = $(if $(shell command -v gotestsum 2>/dev/null),gotestsum --,go test)
 
@@ -63,8 +68,14 @@ endif
 		CC=$(CC) \
 		go build -trimpath -ldflags $(GO_LDFLAGS) -tags "$(GO_TAGS)" -o $(GO_OUT)
 
-pkg/linux_arm/nomad: CC = arm-linux-gnueabihf-gcc-5
-pkg/linux_arm64/nomad: CC = aarch64-linux-gnu-gcc-5
+ifneq (armv7l,$(THIS_ARCH))
+pkg/linux_arm/nomad: CC = arm-linux-gnueabihf-gcc
+endif
+
+ifneq (aarch64,$(THIS_ARCH))
+pkg/linux_arm64/nomad: CC = aarch64-linux-gnu-gcc
+endif
+
 pkg/windows_%/nomad: GO_OUT = $@.exe
 
 # Define package targets for each of the build targets we actually have on this system
@@ -86,21 +97,22 @@ bootstrap: deps lint-deps git-hooks # Install all dependencies
 deps:  ## Install build and development dependencies
 ## Keep versions in sync with tools/go.mod for now (see https://github.com/golang/go/issues/30515)
 	@echo "==> Updating build dependencies..."
-	GO111MODULE=on cd tools && go get github.com/hashicorp/go-bindata/go-bindata@bf7910af899725e4938903fb32048c7c0b15f12e
-	GO111MODULE=on cd tools && go get github.com/elazarl/go-bindata-assetfs/go-bindata-assetfs@234c15e7648ff35458026de92b34c637bae5e6f7
-	GO111MODULE=on cd tools && go get github.com/a8m/tree/cmd/tree@fce18e2a750ea4e7f53ee706b1c3d9cbb22de79c
-	GO111MODULE=on cd tools && go get gotest.tools/gotestsum@v0.4.2
-	GO111MODULE=on cd tools && go get github.com/hashicorp/hcl/v2/cmd/hclfmt@v2.5.1
-	GO111MODULE=on cd tools && go get github.com/golang/protobuf/protoc-gen-go@v1.3.4
-	GO111MODULE=on cd tools && go get github.com/hashicorp/go-msgpack/codec/codecgen@v1.1.5
+	go install github.com/hashicorp/go-bindata/go-bindata@bf7910af899725e4938903fb32048c7c0b15f12e
+	go install github.com/elazarl/go-bindata-assetfs/go-bindata-assetfs@234c15e7648ff35458026de92b34c637bae5e6f7
+	go install github.com/a8m/tree/cmd/tree@fce18e2a750ea4e7f53ee706b1c3d9cbb22de79c
+	go install gotest.tools/gotestsum@v0.4.2
+	go install github.com/hashicorp/hcl/v2/cmd/hclfmt@v2.5.1
+	go install github.com/golang/protobuf/protoc-gen-go@v1.3.4
+	go install github.com/hashicorp/go-msgpack/codec/codecgen@v1.1.5
+	go install github.com/bufbuild/buf/cmd/buf@v0.36.0
 
 .PHONY: lint-deps
 lint-deps: ## Install linter dependencies
 ## Keep versions in sync with tools/go.mod (see https://github.com/golang/go/issues/30515)
 	@echo "==> Updating linter dependencies..."
-	GO111MODULE=on cd tools && go get github.com/golangci/golangci-lint/cmd/golangci-lint@v1.24.0
-	GO111MODULE=on cd tools && go get github.com/client9/misspell/cmd/misspell@v0.3.4
-	GO111MODULE=on cd tools && go get github.com/hashicorp/go-hclog/hclogvet@v0.1.3
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.39.0
+	go install github.com/client9/misspell/cmd/misspell@v0.3.4
+	go install github.com/hashicorp/go-hclog/hclogvet@v0.1.3
 
 .PHONY: git-hooks
 git-dir = $(shell git rev-parse --git-dir)

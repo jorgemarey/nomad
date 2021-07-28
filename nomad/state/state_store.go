@@ -832,9 +832,9 @@ func upsertNodeTxn(txn *txn, index uint64, node *structs.Node) error {
 					SetTimestamp(time.Unix(node.StatusUpdatedAt, 0))})
 		}
 
-		node.Drain = exist.Drain                                 // Retain the drain mode
 		node.SchedulingEligibility = exist.SchedulingEligibility // Retain the eligibility
 		node.DrainStrategy = exist.DrainStrategy                 // Retain the drain strategy
+		node.LastDrain = exist.LastDrain                         // Retain the drain metadata
 	} else {
 		// Because this is the first time the node is being registered, we should
 		// also create a node registration event
@@ -951,12 +951,15 @@ func (s *StateStore) updateNodeStatusTxn(txn *txn, nodeID, status string, update
 	return nil
 }
 
-// BatchUpdateNodeDrain is used to update the drain of a node set of nodes
-func (s *StateStore) BatchUpdateNodeDrain(msgType structs.MessageType, index uint64, updatedAt int64, updates map[string]*structs.DrainUpdate, events map[string]*structs.NodeEvent) error {
+// BatchUpdateNodeDrain is used to update the drain of a node set of nodes.
+// This is currently only called when node drain is completed by the drainer.
+func (s *StateStore) BatchUpdateNodeDrain(msgType structs.MessageType, index uint64, updatedAt int64,
+	updates map[string]*structs.DrainUpdate, events map[string]*structs.NodeEvent) error {
 	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
 	for node, update := range updates {
-		if err := s.updateNodeDrainImpl(txn, index, node, update.DrainStrategy, update.MarkEligible, updatedAt, events[node]); err != nil {
+		if err := s.updateNodeDrainImpl(txn, index, node, update.DrainStrategy, update.MarkEligible, updatedAt,
+			events[node], nil, "", true); err != nil {
 			return err
 		}
 	}
@@ -964,18 +967,24 @@ func (s *StateStore) BatchUpdateNodeDrain(msgType structs.MessageType, index uin
 }
 
 // UpdateNodeDrain is used to update the drain of a node
-func (s *StateStore) UpdateNodeDrain(msgType structs.MessageType, index uint64, nodeID string, drain *structs.DrainStrategy, markEligible bool, updatedAt int64, event *structs.NodeEvent) error {
+func (s *StateStore) UpdateNodeDrain(msgType structs.MessageType, index uint64, nodeID string,
+	drain *structs.DrainStrategy, markEligible bool, updatedAt int64,
+	event *structs.NodeEvent, drainMeta map[string]string, accessorId string) error {
 
-	txn := s.db.WriteTxn(index)
+	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
-	if err := s.updateNodeDrainImpl(txn, index, nodeID, drain, markEligible, updatedAt, event); err != nil {
+	if err := s.updateNodeDrainImpl(txn, index, nodeID, drain, markEligible, updatedAt, event,
+		drainMeta, accessorId, false); err != nil {
+
 		return err
 	}
 	return txn.Commit()
 }
 
 func (s *StateStore) updateNodeDrainImpl(txn *txn, index uint64, nodeID string,
-	drain *structs.DrainStrategy, markEligible bool, updatedAt int64, event *structs.NodeEvent) error {
+	drain *structs.DrainStrategy, markEligible bool, updatedAt int64,
+	event *structs.NodeEvent, drainMeta map[string]string, accessorId string,
+	drainCompleted bool) error {
 
 	// Lookup the node
 	existing, err := txn.First("nodes", "id", nodeID)
@@ -988,27 +997,73 @@ func (s *StateStore) updateNodeDrainImpl(txn *txn, index uint64, nodeID string,
 
 	// Copy the existing node
 	existingNode := existing.(*structs.Node)
-	copyNode := existingNode.Copy()
-	copyNode.StatusUpdatedAt = updatedAt
+	updatedNode := existingNode.Copy()
+	updatedNode.StatusUpdatedAt = updatedAt
 
 	// Add the event if given
 	if event != nil {
-		appendNodeEvents(index, copyNode, []*structs.NodeEvent{event})
+		appendNodeEvents(index, updatedNode, []*structs.NodeEvent{event})
 	}
 
 	// Update the drain in the copy
-	copyNode.Drain = drain != nil // COMPAT: Remove in Nomad 0.10
-	copyNode.DrainStrategy = drain
+	updatedNode.DrainStrategy = drain
 	if drain != nil {
-		copyNode.SchedulingEligibility = structs.NodeSchedulingIneligible
+		updatedNode.SchedulingEligibility = structs.NodeSchedulingIneligible
 	} else if markEligible {
-		copyNode.SchedulingEligibility = structs.NodeSchedulingEligible
+		updatedNode.SchedulingEligibility = structs.NodeSchedulingEligible
 	}
 
-	copyNode.ModifyIndex = index
+	// Update LastDrain
+	updateTime := time.Unix(updatedAt, 0)
+
+	// if drain strategy isn't set before or after, this wasn't a drain operation
+	// in that case, we don't care about .LastDrain
+	drainNoop := existingNode.DrainStrategy == nil && updatedNode.DrainStrategy == nil
+	// otherwise, when done with this method, updatedNode.LastDrain should be set
+	// if starting a new drain operation, create a new LastDrain. otherwise, update the existing one.
+	startedDraining := existingNode.DrainStrategy == nil && updatedNode.DrainStrategy != nil
+	if !drainNoop {
+		if startedDraining {
+			updatedNode.LastDrain = &structs.DrainMetadata{
+				StartedAt: updateTime,
+				Meta:      drainMeta,
+			}
+		} else if updatedNode.LastDrain == nil {
+			// if already draining and LastDrain doesn't exist, we need to create a new one
+			// this could happen if we upgraded to 1.1.x during a drain
+			updatedNode.LastDrain = &structs.DrainMetadata{
+				// we don't have sub-second accuracy on these fields, so truncate this
+				StartedAt: time.Unix(existingNode.DrainStrategy.StartedAt.Unix(), 0),
+				Meta:      drainMeta,
+			}
+		}
+
+		updatedNode.LastDrain.UpdatedAt = updateTime
+
+		// won't have new metadata on drain complete; keep the existing operator-provided metadata
+		// also, keep existing if they didn't provide it
+		if len(drainMeta) != 0 {
+			updatedNode.LastDrain.Meta = drainMeta
+		}
+
+		// we won't have an accessor ID on drain complete, so don't overwrite the existing one
+		if accessorId != "" {
+			updatedNode.LastDrain.AccessorID = accessorId
+		}
+
+		if updatedNode.DrainStrategy != nil {
+			updatedNode.LastDrain.Status = structs.DrainStatusDraining
+		} else if drainCompleted {
+			updatedNode.LastDrain.Status = structs.DrainStatusComplete
+		} else {
+			updatedNode.LastDrain.Status = structs.DrainStatusCanceled
+		}
+	}
+
+	updatedNode.ModifyIndex = index
 
 	// Insert the node
-	if err := txn.Insert("nodes", copyNode); err != nil {
+	if err := txn.Insert("nodes", updatedNode); err != nil {
 		return fmt.Errorf("node update failed: %v", err)
 	}
 	if err := txn.Insert("index", &IndexEntry{"nodes", index}); err != nil {
@@ -2135,10 +2190,7 @@ func (s *StateStore) CSIVolumeByID(ws memdb.WatchSet, namespace, id string) (*st
 	if obj == nil {
 		return nil, nil
 	}
-	vol, ok := obj.(*structs.CSIVolume)
-	if !ok {
-		return nil, fmt.Errorf("volume row conversion error")
-	}
+	vol := obj.(*structs.CSIVolume)
 
 	// we return the volume with the plugins denormalized by default,
 	// because the scheduler needs them for feasibility checking
@@ -2479,6 +2531,23 @@ func (s *StateStore) CSIVolumeDenormalizeTxn(txn Txn, ws memdb.WatchSet, vol *st
 					State:        structs.CSIVolumeClaimStateTaken,
 				}
 			}
+		}
+	}
+
+	// COMPAT: the AccessMode and AttachmentMode fields were added to claims
+	// in 1.1.0, so claims made before that may be missing this value. In this
+	// case, the volume will already have AccessMode/AttachmentMode until it
+	// no longer has any claims, so set from those values
+	for _, claim := range vol.ReadClaims {
+		if claim.AccessMode == "" || claim.AttachmentMode == "" {
+			claim.AccessMode = vol.AccessMode
+			claim.AttachmentMode = vol.AttachmentMode
+		}
+	}
+	for _, claim := range vol.WriteClaims {
+		if claim.AccessMode == "" || claim.AttachmentMode == "" {
+			claim.AccessMode = vol.AccessMode
+			claim.AttachmentMode = vol.AttachmentMode
 		}
 	}
 
@@ -5336,6 +5405,136 @@ func (s *StateStore) BootstrapACLTokens(msgType structs.MessageType, index uint6
 	return txn.Commit()
 }
 
+// UpsertOneTimeToken is used to create or update a set of ACL
+// tokens. Validating that we're not upserting an already-expired token is
+// made the responsibility of the caller to facilitate testing.
+func (s *StateStore) UpsertOneTimeToken(msgType structs.MessageType, index uint64, token *structs.OneTimeToken) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
+	defer txn.Abort()
+
+	// we expect the RPC call to set the ExpiresAt
+	if token.ExpiresAt.IsZero() {
+		return fmt.Errorf("one-time token must have an ExpiresAt time")
+	}
+
+	// Update all the indexes
+	token.CreateIndex = index
+	token.ModifyIndex = index
+
+	// Create the token
+	if err := txn.Insert("one_time_token", token); err != nil {
+		return fmt.Errorf("upserting one-time token failed: %v", err)
+	}
+
+	// Update the indexes table
+	if err := txn.Insert("index", &IndexEntry{"one_time_token", index}); err != nil {
+		return fmt.Errorf("index update failed: %v", err)
+	}
+	return txn.Commit()
+}
+
+// DeleteOneTimeTokens deletes the tokens with the given ACLToken Accessor IDs
+func (s *StateStore) DeleteOneTimeTokens(msgType structs.MessageType, index uint64, ids []string) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
+	defer txn.Abort()
+
+	var deleted int
+	for _, id := range ids {
+		d, err := txn.DeleteAll("one_time_token", "id", id)
+		if err != nil {
+			return fmt.Errorf("deleting one-time token failed: %v", err)
+		}
+		deleted += d
+	}
+
+	if deleted > 0 {
+		if err := txn.Insert("index", &IndexEntry{"one_time_token", index}); err != nil {
+			return fmt.Errorf("index update failed: %v", err)
+		}
+	}
+	return txn.Commit()
+}
+
+// ExpireOneTimeTokens deletes tokens that have expired
+func (s *StateStore) ExpireOneTimeTokens(msgType structs.MessageType, index uint64) error {
+	txn := s.db.WriteTxnMsgT(msgType, index)
+	defer txn.Abort()
+
+	iter, err := s.oneTimeTokensExpiredTxn(txn, nil)
+	if err != nil {
+		return err
+	}
+
+	var deleted int
+	for {
+		raw := iter.Next()
+		if raw == nil {
+			break
+		}
+		ott, ok := raw.(*structs.OneTimeToken)
+		if !ok || ott == nil {
+			return fmt.Errorf("could not decode one-time token")
+		}
+		d, err := txn.DeleteAll("one_time_token", "secret", ott.OneTimeSecretID)
+		if err != nil {
+			return fmt.Errorf("deleting one-time token failed: %v", err)
+		}
+		deleted += d
+	}
+
+	if deleted > 0 {
+		if err := txn.Insert("index", &IndexEntry{"one_time_token", index}); err != nil {
+			return fmt.Errorf("index update failed: %v", err)
+		}
+	}
+	return txn.Commit()
+}
+
+// oneTimeTokensExpiredTxn returns an iterator over all expired one-time tokens
+func (s *StateStore) oneTimeTokensExpiredTxn(txn *txn, ws memdb.WatchSet) (memdb.ResultIterator, error) {
+	iter, err := txn.Get("one_time_token", "id")
+	if err != nil {
+		return nil, fmt.Errorf("one-time token lookup failed: %v", err)
+	}
+
+	ws.Add(iter.WatchCh())
+	iter = memdb.NewFilterIterator(iter, expiredOneTimeTokenFilter(time.Now()))
+	return iter, nil
+}
+
+// OneTimeTokenBySecret is used to lookup a token by secret
+func (s *StateStore) OneTimeTokenBySecret(ws memdb.WatchSet, secret string) (*structs.OneTimeToken, error) {
+	if secret == "" {
+		return nil, fmt.Errorf("one-time token lookup failed: missing secret")
+	}
+
+	txn := s.db.ReadTxn()
+
+	watchCh, existing, err := txn.FirstWatch("one_time_token", "secret", secret)
+	if err != nil {
+		return nil, fmt.Errorf("one-time token lookup failed: %v", err)
+	}
+	ws.Add(watchCh)
+
+	if existing != nil {
+		return existing.(*structs.OneTimeToken), nil
+	}
+	return nil, nil
+}
+
+// expiredOneTimeTokenFilter returns a filter function that returns only
+// expired one-time tokens
+func expiredOneTimeTokenFilter(now time.Time) func(interface{}) bool {
+	return func(raw interface{}) bool {
+		ott, ok := raw.(*structs.OneTimeToken)
+		if !ok {
+			return true
+		}
+
+		return ott.ExpiresAt.After(now)
+	}
+}
+
 // SchedulerConfig is used to get the current Scheduler configuration.
 func (s *StateStore) SchedulerConfig() (uint64, *structs.SchedulerConfiguration, error) {
 	tx := s.db.ReadTxn()
@@ -5459,7 +5658,7 @@ func (s *StateStore) schedulerSetConfigTxn(idx uint64, tx *txn, config *structs.
 }
 
 func (s *StateStore) setClusterMetadata(txn *txn, meta *structs.ClusterMetadata) error {
-	// Check for an existing config, if it exists, sanity check the cluster ID matches
+	// Check for an existing config, if it exists, verify that the cluster ID matches
 	existing, err := txn.First("cluster_meta", "id")
 	if err != nil {
 		return fmt.Errorf("failed cluster meta lookup: %v", err)
@@ -6177,6 +6376,14 @@ func (r *StateRestore) ACLPolicyRestore(policy *structs.ACLPolicy) error {
 func (r *StateRestore) ACLTokenRestore(token *structs.ACLToken) error {
 	if err := r.txn.Insert("acl_token", token); err != nil {
 		return fmt.Errorf("inserting acl token failed: %v", err)
+	}
+	return nil
+}
+
+// OneTimeTokenRestore is used to restore a one-time token
+func (r *StateRestore) OneTimeTokenRestore(token *structs.OneTimeToken) error {
+	if err := r.txn.Insert("one_time_token", token); err != nil {
+		return fmt.Errorf("inserting one-time token failed: %v", err)
 	}
 	return nil
 }

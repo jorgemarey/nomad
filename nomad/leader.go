@@ -696,6 +696,8 @@ func (s *Server) schedulePeriodic(stopCh chan struct{}) {
 	defer csiPluginGC.Stop()
 	csiVolumeClaimGC := time.NewTicker(s.config.CSIVolumeClaimGCInterval)
 	defer csiVolumeClaimGC.Stop()
+	oneTimeTokenGC := time.NewTicker(s.config.OneTimeTokenGCInterval)
+	defer oneTimeTokenGC.Stop()
 
 	// getLatest grabs the latest index from the state store. It returns true if
 	// the index was retrieved successfully.
@@ -736,7 +738,10 @@ func (s *Server) schedulePeriodic(stopCh chan struct{}) {
 			if index, ok := getLatest(); ok {
 				s.evalBroker.Enqueue(s.coreJobEval(structs.CoreJobCSIVolumeClaimGC, index))
 			}
-
+		case <-oneTimeTokenGC.C:
+			if index, ok := getLatest(); ok {
+				s.evalBroker.Enqueue(s.coreJobEval(structs.CoreJobOneTimeTokenGC, index))
+			}
 		case <-stopCh:
 			return
 		}
@@ -779,7 +784,8 @@ func (s *Server) reapFailedEvaluations(stopCh chan struct{}) {
 			updateEval := eval.Copy()
 			updateEval.Status = structs.EvalStatusFailed
 			updateEval.StatusDescription = fmt.Sprintf("evaluation reached delivery limit (%d)", s.config.EvalDeliveryLimit)
-			s.logger.Warn("eval reached delivery limit, marking as failed", "eval", updateEval.GoString())
+			s.logger.Warn("eval reached delivery limit, marking as failed",
+				"eval", log.Fmt("%#v", updateEval))
 
 			// Core job evals that fail or span leader elections will never
 			// succeed because the follow-up doesn't have the leader ACL. We
@@ -802,7 +808,8 @@ func (s *Server) reapFailedEvaluations(stopCh chan struct{}) {
 					Evals: []*structs.Evaluation{updateEval, followupEval},
 				}
 				if _, _, err := s.raftApply(structs.EvalUpdateRequestType, &req); err != nil {
-					s.logger.Error("failed to update failed eval and create a follow-up", "eval", updateEval.GoString(), "error", err)
+					s.logger.Error("failed to update failed eval and create a follow-up",
+						"eval", log.Fmt("%#v", updateEval), "error", err)
 					continue
 				}
 			}

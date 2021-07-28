@@ -126,6 +126,9 @@ type SchedulerConfiguration struct {
 	// priority jobs to place higher priority jobs.
 	PreemptionConfig PreemptionConfig
 
+	// MemoryOversubscriptionEnabled specifies whether memory oversubscription is enabled
+	MemoryOversubscriptionEnabled bool
+
 	// CreateIndex/ModifyIndex store the create/modify indexes of this configuration.
 	CreateIndex uint64
 	ModifyIndex uint64
@@ -274,15 +277,29 @@ type License struct {
 }
 
 type LicenseReply struct {
-	License *License
+	License        *License
+	ConfigOutdated bool
 	QueryMeta
 }
 
+type ApplyLicenseOptions struct {
+	Force bool
+}
+
 func (op *Operator) LicensePut(license string, q *WriteOptions) (*WriteMeta, error) {
+	return op.ApplyLicense(license, nil, q)
+}
+
+func (op *Operator) ApplyLicense(license string, opts *ApplyLicenseOptions, q *WriteOptions) (*WriteMeta, error) {
 	r, err := op.c.newRequest("PUT", "/v1/operator/license")
 	if err != nil {
 		return nil, err
 	}
+
+	if opts != nil && opts.Force {
+		r.params.Add("force", "true")
+	}
+
 	r.setWriteOptions(q)
 	r.body = strings.NewReader(license)
 
@@ -303,6 +320,7 @@ func (op *Operator) LicenseGet(q *QueryOptions) (*LicenseReply, *QueryMeta, erro
 	if err != nil {
 		return nil, nil, err
 	}
+	req.setQueryOptions(q)
 
 	var reply LicenseReply
 	rtt, resp, err := op.c.doRequest(req)

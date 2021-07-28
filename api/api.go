@@ -65,6 +65,14 @@ type QueryOptions struct {
 	// AuthToken is the secret ID of an ACL token
 	AuthToken string
 
+	// PerPage is the number of entries to be returned in queries that support
+	// paginated lists.
+	PerPage int32
+
+	// NextToken is the token used indicate where to start paging for queries
+	// that support paginated lists.
+	NextToken string
+
 	// ctx is an optional context pass through to the underlying HTTP
 	// request layer. Use Context() and WithContext() to manage this.
 	ctx context.Context
@@ -712,7 +720,7 @@ func (c *Client) doRequest(r *request) (time.Duration, *http.Response, error) {
 	}
 	start := time.Now()
 	resp, err := c.httpClient.Do(req)
-	diff := time.Now().Sub(start)
+	diff := time.Since(start)
 
 	// If the response is compressed, we swap the body's reader.
 	if resp != nil && resp.Header != nil {

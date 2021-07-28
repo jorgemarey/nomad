@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashicorp/nomad/client/lib/cgutil"
+
 	metrics "github.com/armon/go-metrics"
 	log "github.com/hashicorp/go-hclog"
 	multierror "github.com/hashicorp/go-multierror"
@@ -201,6 +203,9 @@ type TaskRunner struct {
 	// statistics
 	devicemanager devicemanager.Manager
 
+	// cpusetCgroupPathGetter is used to lookup the cgroup path if supported by the platform
+	cpusetCgroupPathGetter cgutil.CgroupPathGetter
+
 	// driverManager is used to dispense driver plugins and register event
 	// handlers
 	driverManager drivermanager.Manager
@@ -265,6 +270,9 @@ type Config struct {
 	// CSIManager is used to manage the mounting of CSI volumes into tasks
 	CSIManager csimanager.Manager
 
+	// CpusetCgroupPathGetter is used to lookup the cgroup path if supported by the platform
+	CpusetCgroupPathGetter cgutil.CgroupPathGetter
+
 	// DeviceManager is used to mount devices as well as lookup device
 	// statistics
 	DeviceManager devicemanager.Manager
@@ -303,36 +311,37 @@ func NewTaskRunner(config *Config) (*TaskRunner, error) {
 	}
 
 	tr := &TaskRunner{
-		alloc:                config.Alloc,
-		allocID:              config.Alloc.ID,
-		clientConfig:         config.ClientConfig,
-		task:                 config.Task,
-		taskDir:              config.TaskDir,
-		taskName:             config.Task.Name,
-		taskLeader:           config.Task.Leader,
-		envBuilder:           envBuilder,
-		dynamicRegistry:      config.DynamicRegistry,
-		consulServiceClient:  config.Consul,
-		consulProxiesClient:  config.ConsulProxies,
-		siClient:             config.ConsulSI,
-		vaultClient:          config.Vault,
-		state:                tstate,
-		localState:           state.NewLocalState(),
-		stateDB:              config.StateDB,
-		stateUpdater:         config.StateUpdater,
-		deviceStatsReporter:  config.DeviceStatsReporter,
-		killCtx:              killCtx,
-		killCtxCancel:        killCancel,
-		shutdownCtx:          trCtx,
-		shutdownCtxCancel:    trCancel,
-		triggerUpdateCh:      make(chan struct{}, triggerUpdateChCap),
-		waitCh:               make(chan struct{}),
-		csiManager:           config.CSIManager,
-		devicemanager:        config.DeviceManager,
-		driverManager:        config.DriverManager,
-		maxEvents:            defaultMaxEvents,
-		serversContactedCh:   config.ServersContactedCh,
-		startConditionMetCtx: config.StartConditionMetCtx,
+		alloc:                  config.Alloc,
+		allocID:                config.Alloc.ID,
+		clientConfig:           config.ClientConfig,
+		task:                   config.Task,
+		taskDir:                config.TaskDir,
+		taskName:               config.Task.Name,
+		taskLeader:             config.Task.Leader,
+		envBuilder:             envBuilder,
+		dynamicRegistry:        config.DynamicRegistry,
+		consulServiceClient:    config.Consul,
+		consulProxiesClient:    config.ConsulProxies,
+		siClient:               config.ConsulSI,
+		vaultClient:            config.Vault,
+		state:                  tstate,
+		localState:             state.NewLocalState(),
+		stateDB:                config.StateDB,
+		stateUpdater:           config.StateUpdater,
+		deviceStatsReporter:    config.DeviceStatsReporter,
+		killCtx:                killCtx,
+		killCtxCancel:          killCancel,
+		shutdownCtx:            trCtx,
+		shutdownCtxCancel:      trCancel,
+		triggerUpdateCh:        make(chan struct{}, triggerUpdateChCap),
+		waitCh:                 make(chan struct{}),
+		csiManager:             config.CSIManager,
+		cpusetCgroupPathGetter: config.CpusetCgroupPathGetter,
+		devicemanager:          config.DeviceManager,
+		driverManager:          config.DriverManager,
+		maxEvents:              defaultMaxEvents,
+		serversContactedCh:     config.ServersContactedCh,
+		startConditionMetCtx:   config.StartConditionMetCtx,
 	}
 
 	// Create the logger based on the allocation ID
@@ -368,7 +377,8 @@ func NewTaskRunner(config *Config) (*TaskRunner, error) {
 		return nil, err
 	}
 
-	// Initialize the runners hooks.
+	// Initialize the runners hooks. Must come after initDriver so hooks
+	// can use tr.driverCapabilities
 	tr.initHooks()
 
 	// Initialize base labels
@@ -487,6 +497,7 @@ func (tr *TaskRunner) Run() {
 		tr.logger.Info("task failed to restore; waiting to contact server before restarting")
 		select {
 		case <-tr.killCtx.Done():
+			tr.logger.Info("task killed while waiting for server contact")
 		case <-tr.shutdownCtx.Done():
 			return
 		case <-tr.serversContactedCh:
@@ -628,11 +639,12 @@ MAIN:
 }
 
 func (tr *TaskRunner) shouldShutdown() bool {
-	if tr.alloc.ClientTerminalStatus() {
+	alloc := tr.Alloc()
+	if alloc.ClientTerminalStatus() {
 		return true
 	}
 
-	if !tr.IsPoststopTask() && tr.alloc.ServerTerminalStatus() {
+	if !tr.IsPoststopTask() && alloc.ServerTerminalStatus() {
 		return true
 	}
 
@@ -741,6 +753,13 @@ func (tr *TaskRunner) shouldRestart() (bool, time.Duration) {
 func (tr *TaskRunner) runDriver() error {
 
 	taskConfig := tr.buildTaskConfig()
+	if tr.cpusetCgroupPathGetter != nil {
+		cpusetCgroupPath, err := tr.cpusetCgroupPathGetter(tr.killCtx)
+		if err != nil {
+			return err
+		}
+		taskConfig.Resources.LinuxResources.CpusetCgroupPath = cpusetCgroupPath
+	}
 
 	// Build hcl context variables
 	vars, errs, err := tr.envBuilder.Build().AllValues()
@@ -999,16 +1018,31 @@ func (tr *TaskRunner) buildTaskConfig() *drivers.TaskConfig {
 		}
 	}
 
+	memoryLimit := taskResources.Memory.MemoryMB
+	if max := taskResources.Memory.MemoryMaxMB; max > memoryLimit {
+		memoryLimit = max
+	}
+
+	cpusetCpus := make([]string, len(taskResources.Cpu.ReservedCores))
+	for i, v := range taskResources.Cpu.ReservedCores {
+		cpusetCpus[i] = fmt.Sprintf("%d", v)
+	}
+
 	return &drivers.TaskConfig{
 		ID:            fmt.Sprintf("%s/%s/%s", alloc.ID, task.Name, invocationid),
 		Name:          task.Name,
 		JobName:       alloc.Job.Name,
+		JobID:         alloc.Job.ID,
 		TaskGroupName: alloc.TaskGroup,
+		Namespace:     alloc.Namespace,
+		NodeName:      alloc.NodeName,
+		NodeID:        alloc.NodeID,
 		Resources: &drivers.Resources{
 			NomadResources: taskResources,
 			LinuxResources: &drivers.LinuxResources{
-				MemoryLimitBytes: taskResources.Memory.MemoryMB * 1024 * 1024,
+				MemoryLimitBytes: memoryLimit * 1024 * 1024,
 				CPUShares:        taskResources.Cpu.CpuShares,
+				CpusetCpus:       strings.Join(cpusetCpus, ","),
 				PercentTicks:     float64(taskResources.Cpu.CpuShares) / float64(tr.clientConfig.Node.NodeResources.Cpu.CpuShares),
 			},
 			Ports: &ports,
@@ -1131,6 +1165,12 @@ func (tr *TaskRunner) UpdateState(state string, event *structs.TaskEvent) {
 		// Only log the error as we persistence errors should not
 		// affect task state.
 		tr.logger.Error("error persisting task state", "error", err, "event", event, "state", state)
+	}
+
+	// Store task handle for remote tasks
+	if tr.driverCapabilities != nil && tr.driverCapabilities.RemoteTasks {
+		tr.logger.Trace("storing remote task handle state")
+		tr.localState.TaskHandle.Store(tr.state)
 	}
 
 	// Notify the alloc runner of the transition

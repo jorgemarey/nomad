@@ -19,8 +19,12 @@ module "nomad_server" {
 
   nomad_local_binary = count.index < length(var.nomad_local_binary_server) ? var.nomad_local_binary_server[count.index] : var.nomad_local_binary
 
+  nomad_url = count.index < length(var.nomad_url_server) ? var.nomad_url_server[count.index] : var.nomad_url
+
   nomad_enterprise = var.nomad_enterprise
+  nomad_license    = var.nomad_license
   nomad_acls       = var.nomad_acls
+  cluster_name     = local.random_name
 
   connection = {
     type        = "ssh"
@@ -54,8 +58,11 @@ module "nomad_client_ubuntu_bionic_amd64" {
 
   nomad_local_binary = count.index < length(var.nomad_local_binary_client_ubuntu_bionic_amd64) ? var.nomad_local_binary_client_ubuntu_bionic_amd64[count.index] : var.nomad_local_binary
 
+  nomad_url = count.index < length(var.nomad_url_client_ubuntu_bionic_amd64) ? var.nomad_url_client_ubuntu_bionic_amd64[count.index] : var.nomad_url
+
   nomad_enterprise = var.nomad_enterprise
   nomad_acls       = false
+  cluster_name     = local.random_name
 
   connection = {
     type        = "ssh"
@@ -90,8 +97,13 @@ module "nomad_client_windows_2016_amd64" {
   # if nomad_local_binary is in use, you must pass a nomad_local_binary_client_windows_2016_amd64!
   nomad_local_binary = count.index < length(var.nomad_local_binary_client_windows_2016_amd64) ? var.nomad_local_binary_client_windows_2016_amd64[count.index] : ""
 
+  # if nomad_url is in use, you must pass a nomad_url_client_windows_2016_amd64!
+  nomad_url = count.index < length(var.nomad_url_client_windows_2016_amd64) ? var.nomad_url_client_windows_2016_amd64[count.index] : ""
+
   nomad_enterprise = var.nomad_enterprise
   nomad_acls       = false
+  cluster_name     = local.random_name
+
 
   connection = {
     type        = "ssh"

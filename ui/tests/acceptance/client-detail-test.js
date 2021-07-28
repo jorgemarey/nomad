@@ -4,7 +4,7 @@ import { module, test } from 'qunit';
 import { setupApplicationTest } from 'ember-qunit';
 import { setupMirage } from 'ember-cli-mirage/test-support';
 import a11yAudit from 'nomad-ui/tests/helpers/a11y-audit';
-import { formatBytes } from 'nomad-ui/helpers/format-bytes';
+import { formatBytes, formatHertz } from 'nomad-ui/utils/units';
 import moment from 'moment';
 import ClientDetail from 'nomad-ui/tests/pages/clients/detail';
 import Clients from 'nomad-ui/tests/pages/clients/list';
@@ -16,6 +16,12 @@ let managementToken;
 let clientToken;
 
 const wasPreemptedFilter = allocation => !!allocation.preemptedByAllocation;
+
+function nonSearchPOSTS() {
+  return server.pretender.handledRequests
+    .reject(request => request.url.includes('fuzzy'))
+    .filterBy('method', 'POST');
+}
 
 module('Acceptance | client detail', function(hooks) {
   setupApplicationTest(hooks);
@@ -163,9 +169,10 @@ module('Acceptance | client detail', function(hooks) {
       Math.floor(allocStats.resourceUsage.CpuStats.TotalTicks) / cpuUsed,
       'CPU %'
     );
+    const roundedTicks = Math.floor(allocStats.resourceUsage.CpuStats.TotalTicks);
     assert.equal(
       allocationRow.cpuTooltip,
-      `${Math.floor(allocStats.resourceUsage.CpuStats.TotalTicks)} / ${cpuUsed} MHz`,
+      `${formatHertz(roundedTicks, 'MHz')} / ${formatHertz(cpuUsed, 'MHz')}`,
       'Detailed CPU information is in a tooltip'
     );
     assert.equal(
@@ -175,7 +182,10 @@ module('Acceptance | client detail', function(hooks) {
     );
     assert.equal(
       allocationRow.memTooltip,
-      `${formatBytes([allocStats.resourceUsage.MemoryStats.RSS])} / ${memoryUsed} MiB`,
+      `${formatBytes(allocStats.resourceUsage.MemoryStats.RSS)} / ${formatBytes(
+        memoryUsed,
+        'MiB'
+      )}`,
       'Detailed memory information is in a tooltip'
     );
   });
@@ -572,7 +582,7 @@ module('Acceptance | client detail', function(hooks) {
     assert.ok(ClientDetail.eligibilityToggle.isActive);
 
     ClientDetail.eligibilityToggle.toggle();
-    await waitUntil(() => server.pretender.handledRequests.findBy('method', 'POST'));
+    await waitUntil(() => nonSearchPOSTS());
 
     assert.ok(ClientDetail.eligibilityToggle.isDisabled);
     server.pretender.resolve(server.pretender.requestReferences[0].request);
@@ -582,7 +592,7 @@ module('Acceptance | client detail', function(hooks) {
     assert.notOk(ClientDetail.eligibilityToggle.isActive);
     assert.notOk(ClientDetail.eligibilityToggle.isDisabled);
 
-    const request = server.pretender.handledRequests.findBy('method', 'POST');
+    const request = nonSearchPOSTS()[0];
     assert.equal(request.url, `/v1/node/${node.id}/eligibility`);
     assert.deepEqual(JSON.parse(request.requestBody), {
       NodeID: node.id,
@@ -590,11 +600,11 @@ module('Acceptance | client detail', function(hooks) {
     });
 
     ClientDetail.eligibilityToggle.toggle();
-    await waitUntil(() => server.pretender.handledRequests.filterBy('method', 'POST').length === 2);
+    await waitUntil(() => nonSearchPOSTS().length === 2);
     server.pretender.resolve(server.pretender.requestReferences[0].request);
 
     assert.ok(ClientDetail.eligibilityToggle.isActive);
-    const request2 = server.pretender.handledRequests.filterBy('method', 'POST')[1];
+    const request2 = nonSearchPOSTS()[1];
 
     assert.equal(request2.url, `/v1/node/${node.id}/eligibility`);
     assert.deepEqual(JSON.parse(request2.requestBody), {
@@ -615,7 +625,7 @@ module('Acceptance | client detail', function(hooks) {
     await ClientDetail.drainPopover.toggle();
     await ClientDetail.drainPopover.submit();
 
-    request = server.pretender.handledRequests.filterBy('method', 'POST').pop();
+    request = nonSearchPOSTS().pop();
 
     assert.equal(request.url, `/v1/node/${node.id}/drain`);
     assert.deepEqual(
@@ -634,7 +644,7 @@ module('Acceptance | client detail', function(hooks) {
     await ClientDetail.drainPopover.deadlineToggle.toggle();
     await ClientDetail.drainPopover.submit();
 
-    request = server.pretender.handledRequests.filterBy('method', 'POST').pop();
+    request = nonSearchPOSTS().pop();
 
     assert.deepEqual(
       JSON.parse(request.requestBody),
@@ -653,7 +663,7 @@ module('Acceptance | client detail', function(hooks) {
     await ClientDetail.drainPopover.deadlineOptions.options[1].choose();
     await ClientDetail.drainPopover.submit();
 
-    request = server.pretender.handledRequests.filterBy('method', 'POST').pop();
+    request = nonSearchPOSTS().pop();
 
     assert.deepEqual(
       JSON.parse(request.requestBody),
@@ -674,7 +684,7 @@ module('Acceptance | client detail', function(hooks) {
     await ClientDetail.drainPopover.setCustomDeadline('1h40m20s');
     await ClientDetail.drainPopover.submit();
 
-    request = server.pretender.handledRequests.filterBy('method', 'POST').pop();
+    request = nonSearchPOSTS().pop();
 
     assert.deepEqual(
       JSON.parse(request.requestBody),
@@ -693,7 +703,7 @@ module('Acceptance | client detail', function(hooks) {
     await ClientDetail.drainPopover.forceDrainToggle.toggle();
     await ClientDetail.drainPopover.submit();
 
-    request = server.pretender.handledRequests.filterBy('method', 'POST').pop();
+    request = nonSearchPOSTS().pop();
 
     assert.deepEqual(
       JSON.parse(request.requestBody),
@@ -711,7 +721,7 @@ module('Acceptance | client detail', function(hooks) {
     await ClientDetail.drainPopover.systemJobsToggle.toggle();
     await ClientDetail.drainPopover.submit();
 
-    request = server.pretender.handledRequests.filterBy('method', 'POST').pop();
+    request = nonSearchPOSTS().pop();
 
     assert.deepEqual(
       JSON.parse(request.requestBody),
@@ -740,7 +750,7 @@ module('Acceptance | client detail', function(hooks) {
 
     await ClientDetail.drainPopover.cancel();
     assert.notOk(ClientDetail.drainPopover.isOpen);
-    assert.equal(server.pretender.handledRequests.filterBy('method', 'POST'), 0);
+    assert.equal(nonSearchPOSTS(), 0);
   });
 
   test('toggling eligibility is disabled while a drain is active', async function(assert) {
@@ -765,7 +775,7 @@ module('Acceptance | client detail', function(hooks) {
     await ClientDetail.stopDrain.idle();
     await ClientDetail.stopDrain.confirm();
 
-    const request = server.pretender.handledRequests.findBy('method', 'POST');
+    const request = nonSearchPOSTS()[0];
     assert.equal(request.url, `/v1/node/${node.id}/drain`);
     assert.deepEqual(JSON.parse(request.requestBody), {
       NodeID: node.id,
@@ -797,7 +807,7 @@ module('Acceptance | client detail', function(hooks) {
     await ClientDetail.drainDetails.force.idle();
     await ClientDetail.drainDetails.force.confirm();
 
-    const request = server.pretender.handledRequests.findBy('method', 'POST');
+    const request = nonSearchPOSTS()[0];
     assert.equal(request.url, `/v1/node/${node.id}/drain`);
     assert.deepEqual(JSON.parse(request.requestBody), {
       NodeID: node.id,

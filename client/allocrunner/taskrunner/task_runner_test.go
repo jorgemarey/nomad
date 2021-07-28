@@ -17,7 +17,6 @@ import (
 	"github.com/hashicorp/nomad/client/allocdir"
 	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
 	"github.com/hashicorp/nomad/client/config"
-	"github.com/hashicorp/nomad/client/consul"
 	consulapi "github.com/hashicorp/nomad/client/consul"
 	"github.com/hashicorp/nomad/client/devicemanager"
 	"github.com/hashicorp/nomad/client/pluginmanager/drivermanager"
@@ -133,6 +132,72 @@ func runTestTaskRunner(t *testing.T, alloc *structs.Allocation, taskName string)
 	return tr, config, func() {
 		tr.Kill(context.Background(), structs.NewTaskEvent("cleanup"))
 		cleanup()
+	}
+}
+
+func TestTaskRunner_BuildTaskConfig_CPU_Memory(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name                  string
+		cpu                   int64
+		memoryMB              int64
+		memoryMaxMB           int64
+		expectedLinuxMemoryMB int64
+	}{
+		{
+			name:                  "plain no max",
+			cpu:                   100,
+			memoryMB:              100,
+			memoryMaxMB:           0,
+			expectedLinuxMemoryMB: 100,
+		},
+		{
+			name:                  "plain with max=reserve",
+			cpu:                   100,
+			memoryMB:              100,
+			memoryMaxMB:           100,
+			expectedLinuxMemoryMB: 100,
+		},
+		{
+			name:                  "plain with max>reserve",
+			cpu:                   100,
+			memoryMB:              100,
+			memoryMaxMB:           200,
+			expectedLinuxMemoryMB: 200,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			alloc := mock.BatchAlloc()
+			alloc.Job.TaskGroups[0].Count = 1
+			task := alloc.Job.TaskGroups[0].Tasks[0]
+			task.Driver = "mock_driver"
+			task.Config = map[string]interface{}{
+				"run_for": "2s",
+			}
+			res := alloc.AllocatedResources.Tasks[task.Name]
+			res.Cpu.CpuShares = c.cpu
+			res.Memory.MemoryMB = c.memoryMB
+			res.Memory.MemoryMaxMB = c.memoryMaxMB
+
+			conf, cleanup := testTaskRunnerConfig(t, alloc, task.Name)
+			conf.StateDB = cstate.NewMemDB(conf.Logger) // "persist" state between task runners
+			defer cleanup()
+
+			// Run the first TaskRunner
+			tr, err := NewTaskRunner(conf)
+			require.NoError(t, err)
+
+			tc := tr.buildTaskConfig()
+			require.Equal(t, c.cpu, tc.Resources.LinuxResources.CPUShares)
+			require.Equal(t, c.expectedLinuxMemoryMB*1024*1024, tc.Resources.LinuxResources.MemoryLimitBytes)
+
+			require.Equal(t, c.cpu, tc.Resources.NomadResources.Cpu.CpuShares)
+			require.Equal(t, c.memoryMB, tc.Resources.NomadResources.Memory.MemoryMB)
+			require.Equal(t, c.memoryMaxMB, tc.Resources.NomadResources.Memory.MemoryMaxMB)
+		})
 	}
 }
 
@@ -869,7 +934,7 @@ func TestTaskRunner_ShutdownDelay(t *testing.T) {
 	tr, conf, cleanup := runTestTaskRunner(t, alloc, task.Name)
 	defer cleanup()
 
-	mockConsul := conf.Consul.(*consul.MockConsulServiceClient)
+	mockConsul := conf.Consul.(*consulapi.MockConsulServiceClient)
 
 	// Wait for the task to start
 	testWaitForTaskToStart(t, tr)
@@ -1089,9 +1154,13 @@ func TestTaskRunner_CheckWatcher_Restart(t *testing.T) {
 
 	// Replace mock Consul ServiceClient, with the real ServiceClient
 	// backed by a mock consul whose checks are always unhealthy.
-	consulAgent := agentconsul.NewMockAgent()
+	consulAgent := agentconsul.NewMockAgent(agentconsul.Features{
+		Enterprise: false,
+		Namespaces: false,
+	})
 	consulAgent.SetStatus("critical")
-	consulClient := agentconsul.NewServiceClient(consulAgent, conf.Logger, true)
+	namespacesClient := agentconsul.NewNamespacesClient(agentconsul.NewMockNamespaces(nil), consulAgent)
+	consulClient := agentconsul.NewServiceClient(consulAgent, namespacesClient, conf.Logger, true)
 	go consulClient.Run()
 	defer consulClient.Shutdown()
 
@@ -1768,8 +1837,12 @@ func TestTaskRunner_DriverNetwork(t *testing.T) {
 	defer cleanup()
 
 	// Use a mock agent to test for services
-	consulAgent := agentconsul.NewMockAgent()
-	consulClient := agentconsul.NewServiceClient(consulAgent, conf.Logger, true)
+	consulAgent := agentconsul.NewMockAgent(agentconsul.Features{
+		Enterprise: false,
+		Namespaces: false,
+	})
+	namespacesClient := agentconsul.NewNamespacesClient(agentconsul.NewMockNamespaces(nil), consulAgent)
+	consulClient := agentconsul.NewServiceClient(consulAgent, namespacesClient, conf.Logger, true)
 	defer consulClient.Shutdown()
 	go consulClient.Run()
 
@@ -1784,7 +1857,7 @@ func TestTaskRunner_DriverNetwork(t *testing.T) {
 	testWaitForTaskToStart(t, tr)
 
 	testutil.WaitForResult(func() (bool, error) {
-		services, _ := consulAgent.Services()
+		services, _ := consulAgent.ServicesWithFilterOpts("", nil)
 		if n := len(services); n != 2 {
 			return false, fmt.Errorf("expected 2 services, but found %d", n)
 		}
@@ -1835,7 +1908,7 @@ func TestTaskRunner_DriverNetwork(t *testing.T) {
 
 		return true, nil
 	}, func(err error) {
-		services, _ := consulAgent.Services()
+		services, _ := consulAgent.ServicesWithFilterOpts("", nil)
 		for _, s := range services {
 			t.Logf(pretty.Sprint("Service: ", s))
 		}

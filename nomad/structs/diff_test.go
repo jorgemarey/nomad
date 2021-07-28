@@ -1662,6 +1662,88 @@ func TestTaskGroupDiff(t *testing.T) {
 			},
 		},
 		{
+			TestCase: "Consul added",
+			Old:      &TaskGroup{},
+			New: &TaskGroup{
+				Consul: &Consul{
+					Namespace: "team1",
+				},
+			},
+			Expected: &TaskGroupDiff{
+				Type: DiffTypeEdited,
+				Objects: []*ObjectDiff{
+					{
+						Type: DiffTypeAdded,
+						Name: "Consul",
+						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeAdded,
+								Name: "Namespace",
+								Old:  "",
+								New:  "team1",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			TestCase: "Consul deleted",
+			Old: &TaskGroup{
+				Consul: &Consul{
+					Namespace: "team1",
+				},
+			},
+			New: &TaskGroup{},
+			Expected: &TaskGroupDiff{
+				Type: DiffTypeEdited,
+				Objects: []*ObjectDiff{
+					{
+						Type: DiffTypeDeleted,
+						Name: "Consul",
+						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeDeleted,
+								Name: "Namespace",
+								Old:  "team1",
+								New:  "",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			TestCase: "Consul updated",
+			Old: &TaskGroup{
+				Consul: &Consul{
+					Namespace: "team1",
+				},
+			},
+			New: &TaskGroup{
+				Consul: &Consul{
+					Namespace: "team2",
+				},
+			},
+			Expected: &TaskGroupDiff{
+				Type: DiffTypeEdited,
+				Objects: []*ObjectDiff{
+					{
+						Type: DiffTypeEdited,
+						Name: "Consul",
+						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeEdited,
+								Name: "Namespace",
+								Old:  "team1",
+								New:  "team2",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
 			TestCase: "RestartPolicy added",
 			Old:      &TaskGroup{},
 			New: &TaskGroup{
@@ -2591,6 +2673,7 @@ func TestTaskGroupDiff(t *testing.T) {
 				Services: []*Service{
 					{
 						Name:              "foo",
+						Namespace:         "team1",
 						TaskName:          "task1",
 						EnableTagOverride: false,
 						Checks: []*ServiceCheck{
@@ -2601,6 +2684,8 @@ func TestTaskGroupDiff(t *testing.T) {
 								Args:                   []string{"foo"},
 								Path:                   "foo",
 								Protocol:               "http",
+								Method:                 "POST",
+								Body:                   "{\"key\": \"value\"}",
 								Expose:                 true,
 								Interval:               1 * time.Second,
 								Timeout:                1 * time.Second,
@@ -2657,6 +2742,9 @@ func TestTaskGroupDiff(t *testing.T) {
 										SNI:      "linked1.consul",
 									}},
 								},
+								Mesh: &ConsulMeshConfigEntry{
+									// nothing
+								},
 							},
 						},
 					},
@@ -2667,6 +2755,7 @@ func TestTaskGroupDiff(t *testing.T) {
 				Services: []*Service{
 					{
 						Name:              "foo",
+						Namespace:         "team1",
 						TaskName:          "task2",
 						EnableTagOverride: true,
 						Checks: []*ServiceCheck{
@@ -2695,9 +2784,13 @@ func TestTaskGroupDiff(t *testing.T) {
 									LocalServicePort:    8080,
 									Upstreams: []ConsulUpstream{
 										{
-											DestinationName: "foo",
-											LocalBindPort:   8000,
-											Datacenter:      "dc2",
+											DestinationName:  "foo",
+											LocalBindPort:    8000,
+											Datacenter:       "dc2",
+											LocalBindAddress: "127.0.0.2",
+											MeshGateway: &ConsulMeshGateway{
+												Mode: "remote",
+											},
 										},
 									},
 									Config: map[string]interface{}{
@@ -2743,6 +2836,9 @@ func TestTaskGroupDiff(t *testing.T) {
 										SNI:      "linked2.consul",
 									}},
 								},
+								Mesh: &ConsulMeshConfigEntry{
+									// nothing
+								},
 							},
 						},
 					},
@@ -2776,6 +2872,18 @@ func TestTaskGroupDiff(t *testing.T) {
 							},
 							{
 								Type: DiffTypeNone,
+								Name: "Namespace",
+								Old:  "team1",
+								New:  "team1",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "OnUpdate",
+								Old:  "",
+								New:  "",
+							},
+							{
+								Type: DiffTypeNone,
 								Name: "PortLabel",
 								Old:  "",
 								New:  "",
@@ -2796,6 +2904,12 @@ func TestTaskGroupDiff(t *testing.T) {
 										Type: DiffTypeNone,
 										Name: "AddressMode",
 										Old:  "",
+										New:  "",
+									},
+									{
+										Type: DiffTypeDeleted,
+										Name: "Body",
+										Old:  "{\"key\": \"value\"}",
 										New:  "",
 									},
 									{
@@ -2841,9 +2955,9 @@ func TestTaskGroupDiff(t *testing.T) {
 										New:  "2000000000",
 									},
 									{
-										Type: DiffTypeNone,
+										Type: DiffTypeDeleted,
 										Name: "Method",
-										Old:  "",
+										Old:  "POST",
 										New:  "",
 									},
 									{
@@ -2851,6 +2965,12 @@ func TestTaskGroupDiff(t *testing.T) {
 										Name: "Name",
 										Old:  "foo",
 										New:  "foo",
+									},
+									{
+										Type: DiffTypeNone,
+										Name: "OnUpdate",
+										Old:  "",
+										New:  "",
 									},
 									{
 										Type: DiffTypeEdited,
@@ -2935,6 +3055,12 @@ func TestTaskGroupDiff(t *testing.T) {
 										Fields: []*FieldDiff{
 											{
 												Type: DiffTypeAdded,
+												Name: "DisableDefaultTCPCheck",
+												Old:  "",
+												New:  "false",
+											},
+											{
+												Type: DiffTypeAdded,
 												Name: "Port",
 												Old:  "",
 												New:  "http",
@@ -2976,9 +3102,29 @@ func TestTaskGroupDiff(t *testing.T) {
 															},
 															{
 																Type: DiffTypeAdded,
+																Name: "LocalBindAddress",
+																Old:  "",
+																New:  "127.0.0.2",
+															},
+															{
+																Type: DiffTypeAdded,
 																Name: "LocalBindPort",
 																Old:  "",
 																New:  "8000",
+															},
+														},
+														Objects: []*ObjectDiff{
+															{
+																Type: DiffTypeAdded,
+																Name: "MeshGateway",
+																Fields: []*FieldDiff{
+																	{
+																		Type: DiffTypeAdded,
+																		Name: "Mode",
+																		Old:  "",
+																		New:  "remote",
+																	},
+																},
 															},
 														},
 													},
@@ -3615,11 +3761,12 @@ func TestTaskGroupDiff(t *testing.T) {
 			Old:      &TaskGroup{},
 			New: &TaskGroup{
 				Volumes: map[string]*VolumeRequest{
-					"foo": &VolumeRequest{
+					"foo": {
 						Name:     "foo",
 						Type:     "host",
 						Source:   "foo-src",
 						ReadOnly: true,
+						PerAlloc: true,
 					},
 				},
 			},
@@ -3636,6 +3783,12 @@ func TestTaskGroupDiff(t *testing.T) {
 								Name: "Name",
 								Old:  "",
 								New:  "foo",
+							},
+							{
+								Type: DiffTypeAdded,
+								Name: "PerAlloc",
+								Old:  "",
+								New:  "true",
 							},
 							{
 								Type: DiffTypeAdded,
@@ -3665,7 +3818,7 @@ func TestTaskGroupDiff(t *testing.T) {
 			TestCase: "TaskGroup volumes edited",
 			Old: &TaskGroup{
 				Volumes: map[string]*VolumeRequest{
-					"foo": &VolumeRequest{
+					"foo": {
 						Name:     "foo",
 						Type:     "csi",
 						Source:   "foo-src1",
@@ -3675,7 +3828,7 @@ func TestTaskGroupDiff(t *testing.T) {
 							MountFlags: []string{"relatime", "rw"},
 						},
 					},
-					"bar": &VolumeRequest{
+					"bar": {
 						Name:     "bar",
 						Type:     "host",
 						Source:   "bar-src",
@@ -3685,7 +3838,7 @@ func TestTaskGroupDiff(t *testing.T) {
 			},
 			New: &TaskGroup{
 				Volumes: map[string]*VolumeRequest{
-					"foo": &VolumeRequest{
+					"foo": {
 						Name:     "foo",
 						Type:     "csi",
 						Source:   "foo-src2",
@@ -3695,7 +3848,7 @@ func TestTaskGroupDiff(t *testing.T) {
 							MountFlags: []string{"relatime", "rw", "nosuid"},
 						},
 					},
-					"bar": &VolumeRequest{ // untouched
+					"bar": { // untouched
 						Name:     "bar",
 						Type:     "host",
 						Source:   "bar-src",
@@ -3760,8 +3913,7 @@ func TestTaskGroupDiff(t *testing.T) {
 				require.Error(t, err, "case %q expected error", c.TestCase)
 			case false:
 				require.NoError(t, err, "case %q expected no error", c.TestCase)
-				require.True(t, reflect.DeepEqual(result, c.Expected),
-					"case %q got\n%#v\nwant:\n%#v\n", c.TestCase, result, c.Expected)
+				require.Equal(t, c.Expected, result)
 			}
 		})
 	}
@@ -4498,6 +4650,12 @@ func TestTaskDiff(t *testing.T) {
 								New:  "200",
 							},
 							{
+								Type: DiffTypeNone,
+								Name: "Cores",
+								Old:  "0",
+								New:  "0",
+							},
+							{
 								Type: DiffTypeEdited,
 								Name: "DiskMB",
 								Old:  "100",
@@ -4514,6 +4672,115 @@ func TestTaskDiff(t *testing.T) {
 								Name: "MemoryMB",
 								Old:  "100",
 								New:  "100",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "MemoryMaxMB",
+								Old:  "0",
+								New:  "0",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name: "Resources edited memory_max",
+			Old: &Task{
+				Resources: &Resources{
+					CPU:         100,
+					MemoryMB:    100,
+					MemoryMaxMB: 200,
+					DiskMB:      100,
+				},
+			},
+			New: &Task{
+				Resources: &Resources{
+					CPU:         100,
+					MemoryMB:    100,
+					MemoryMaxMB: 300,
+					DiskMB:      100,
+				},
+			},
+			Expected: &TaskDiff{
+				Type: DiffTypeEdited,
+				Objects: []*ObjectDiff{
+					{
+						Type: DiffTypeEdited,
+						Name: "Resources",
+						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeEdited,
+								Name: "MemoryMaxMB",
+								Old:  "200",
+								New:  "300",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			Name:       "Resources edited memory_max with context",
+			Contextual: true,
+			Old: &Task{
+				Resources: &Resources{
+					CPU:         100,
+					MemoryMB:    100,
+					MemoryMaxMB: 200,
+					DiskMB:      100,
+				},
+			},
+			New: &Task{
+				Resources: &Resources{
+					CPU:         100,
+					MemoryMB:    100,
+					MemoryMaxMB: 300,
+					DiskMB:      100,
+				},
+			},
+			Expected: &TaskDiff{
+				Type: DiffTypeEdited,
+				Objects: []*ObjectDiff{
+					{
+						Type: DiffTypeEdited,
+						Name: "Resources",
+						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeNone,
+								Name: "CPU",
+								Old:  "100",
+								New:  "100",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "Cores",
+								Old:  "0",
+								New:  "0",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "DiskMB",
+								Old:  "100",
+								New:  "100",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "IOPS",
+								Old:  "0",
+								New:  "0",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "MemoryMB",
+								Old:  "100",
+								New:  "100",
+							},
+							{
+								Type: DiffTypeEdited,
+								Name: "MemoryMaxMB",
+								Old:  "200",
+								New:  "300",
 							},
 						},
 					},
@@ -4852,6 +5119,12 @@ func TestTaskDiff(t *testing.T) {
 							},
 							{
 								Type: DiffTypeNone,
+								Name: "Cores",
+								Old:  "0",
+								New:  "0",
+							},
+							{
+								Type: DiffTypeNone,
 								Name: "DiskMB",
 								Old:  "100",
 								New:  "100",
@@ -4867,6 +5140,12 @@ func TestTaskDiff(t *testing.T) {
 								Name: "MemoryMB",
 								Old:  "100",
 								New:  "100",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "MemoryMaxMB",
+								Old:  "0",
+								New:  "0",
 							},
 						},
 						Objects: []*ObjectDiff{
@@ -5303,6 +5582,18 @@ func TestTaskDiff(t *testing.T) {
 								New:  "foo",
 							},
 							{
+								Type: DiffTypeNone,
+								Name: "Namespace",
+								Old:  "",
+								New:  "",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "OnUpdate",
+								Old:  "",
+								New:  "",
+							},
+							{
 								Type: DiffTypeEdited,
 								Name: "PortLabel",
 								Old:  "foo",
@@ -5442,6 +5733,14 @@ func TestTaskDiff(t *testing.T) {
 							},
 							{
 								Type: DiffTypeNone,
+								Name: "Namespace",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "OnUpdate",
+							},
+							{
+								Type: DiffTypeNone,
 								Name: "PortLabel",
 							},
 							{
@@ -5495,6 +5794,14 @@ func TestTaskDiff(t *testing.T) {
 									{
 										Type: DiffTypeAdded,
 										Name: "SidecarService",
+										Fields: []*FieldDiff{
+											{
+												Type: DiffTypeAdded,
+												Name: "DisableDefaultTCPCheck",
+												Old:  "",
+												New:  "false",
+											},
+										},
 									},
 								},
 							},
@@ -5881,6 +6188,7 @@ func TestTaskDiff(t *testing.T) {
 								},
 								SuccessBeforePassing:   4,
 								FailuresBeforeCritical: 5,
+								OnUpdate:               "require_healthy",
 							},
 						},
 					},
@@ -5907,6 +6215,7 @@ func TestTaskDiff(t *testing.T) {
 									"Eggs": {"spam"},
 								},
 								SuccessBeforePassing: 4,
+								OnUpdate:             "ignore_warnings",
 							},
 						},
 					},
@@ -5939,6 +6248,16 @@ func TestTaskDiff(t *testing.T) {
 							},
 							{
 								Type: DiffTypeNone,
+								Name: "Namespace",
+								Old:  "",
+								New:  "",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "OnUpdate",
+							},
+							{
+								Type: DiffTypeNone,
 								Name: "PortLabel",
 								Old:  "",
 								New:  "",
@@ -5958,6 +6277,12 @@ func TestTaskDiff(t *testing.T) {
 									{
 										Type: DiffTypeNone,
 										Name: "AddressMode",
+										Old:  "",
+										New:  "",
+									},
+									{
+										Type: DiffTypeNone,
+										Name: "Body",
 										Old:  "",
 										New:  "",
 									},
@@ -6014,6 +6339,12 @@ func TestTaskDiff(t *testing.T) {
 										Name: "Name",
 										Old:  "foo",
 										New:  "foo",
+									},
+									{
+										Type: DiffTypeEdited,
+										Name: "OnUpdate",
+										Old:  "require_healthy",
+										New:  "ignore_warnings",
 									},
 									{
 										Type: DiffTypeNone,
@@ -6854,20 +7185,14 @@ func TestTaskDiff(t *testing.T) {
 
 	for i, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {
-			actual, err := c.Old.Diff(c.New, c.Contextual)
-			if c.Error && err == nil {
-				t.Fatalf("case %d: expected errored", i+1)
-			} else if err != nil {
-				if !c.Error {
-					t.Fatalf("case %d: errored %#v", i+1, err)
-				} else {
-					return
-				}
-			}
+			t.Logf("running case: %d %v", i, c.Name)
 
-			if !reflect.DeepEqual(actual, c.Expected) {
-				t.Errorf("case %d: got:\n%#v\n want:\n%#v\n",
-					i+1, actual, c.Expected)
+			actual, err := c.Old.Diff(c.New, c.Contextual)
+			if c.Error {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, c.Expected, actual)
 			}
 		})
 	}

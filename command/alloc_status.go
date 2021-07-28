@@ -9,12 +9,13 @@ import (
 	"time"
 
 	humanize "github.com/dustin/go-humanize"
+	"github.com/posener/complete"
+
 	"github.com/hashicorp/nomad/api"
 	"github.com/hashicorp/nomad/api/contexts"
 	"github.com/hashicorp/nomad/client/allocrunner/taskrunner/restarts"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/nomad/structs"
-	"github.com/posener/complete"
 )
 
 type AllocStatusCommand struct {
@@ -562,15 +563,27 @@ func (c *AllocStatusCommand) outputTaskResources(alloc *api.Allocation, task str
 	}
 
 	var resourcesOutput []string
-	resourcesOutput = append(resourcesOutput, "CPU|Memory|Disk|Addresses")
+	cpuHeader := "CPU"
+	if resource.Cores != nil && *resource.Cores > 0 {
+		cpuHeader = fmt.Sprintf("CPU (%v cores)", *resource.Cores)
+	}
+	resourcesOutput = append(resourcesOutput, fmt.Sprintf("%s|Memory|Disk|Addresses", cpuHeader))
 	firstAddr := ""
+	secondAddr := ""
 	if len(addr) > 0 {
 		firstAddr = addr[0]
+	}
+	if len(addr) > 1 {
+		secondAddr = addr[1]
 	}
 
 	// Display the rolled up stats. If possible prefer the live statistics
 	cpuUsage := strconv.Itoa(*resource.CPU)
 	memUsage := humanize.IBytes(uint64(*resource.MemoryMB * bytesPerMegabyte))
+	memMax := ""
+	if max := resource.MemoryMaxMB; max != nil && *max != 0 && *max != *resource.MemoryMB {
+		memMax = "Max: " + humanize.IBytes(uint64(*resource.MemoryMaxMB*bytesPerMegabyte))
+	}
 	var deviceStats []*api.DeviceGroupStats
 
 	if stats != nil {
@@ -595,7 +608,10 @@ func (c *AllocStatusCommand) outputTaskResources(alloc *api.Allocation, task str
 		memUsage,
 		humanize.IBytes(uint64(*alloc.Resources.DiskMB*bytesPerMegabyte)),
 		firstAddr))
-	for i := 1; i < len(addr); i++ {
+	if memMax != "" || secondAddr != "" {
+		resourcesOutput = append(resourcesOutput, fmt.Sprintf("|%v||%v", memMax, secondAddr))
+	}
+	for i := 2; i < len(addr); i++ {
 		resourcesOutput = append(resourcesOutput, fmt.Sprintf("|||%v", addr[i]))
 	}
 	c.Ui.Output(formatListWithSpaces(resourcesOutput))

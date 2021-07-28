@@ -800,11 +800,77 @@ func TestDockerDriver_Labels(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	// expect to see 1 additional standard labels
+	// expect to see 1 additional standard labels (allocID)
 	require.Equal(t, len(cfg.Labels)+1, len(container.Config.Labels))
 	for k, v := range cfg.Labels {
 		require.Equal(t, v, container.Config.Labels[k])
 	}
+}
+
+func TestDockerDriver_ExtraLabels(t *testing.T) {
+	if !tu.IsCI() {
+		t.Parallel()
+	}
+	testutil.DockerCompatible(t)
+
+	task, cfg, ports := dockerTask(t)
+	defer freeport.Return(ports)
+
+	require.NoError(t, task.EncodeConcreteDriverConfig(cfg))
+
+	dockerClientConfig := make(map[string]interface{})
+
+	dockerClientConfig["extra_labels"] = []string{"task*", "job_name"}
+	client, d, handle, cleanup := dockerSetup(t, task, dockerClientConfig)
+	defer cleanup()
+	require.NoError(t, d.WaitUntilStarted(task.ID, 5*time.Second))
+
+	container, err := client.InspectContainer(handle.containerID)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	expectedLabels := map[string]string{
+		"com.hashicorp.nomad.alloc_id":        task.AllocID,
+		"com.hashicorp.nomad.task_name":       task.Name,
+		"com.hashicorp.nomad.task_group_name": task.TaskGroupName,
+		"com.hashicorp.nomad.job_name":        task.JobName,
+	}
+
+	// expect to see 4 labels (allocID by default, task_name and task_group_name due to task*, and job_name)
+	require.Equal(t, 4, len(container.Config.Labels))
+	for k, v := range expectedLabels {
+		require.Equal(t, v, container.Config.Labels[k])
+	}
+}
+
+func TestDockerDriver_LoggingConfiguration(t *testing.T) {
+	if !tu.IsCI() {
+		t.Parallel()
+	}
+	testutil.DockerCompatible(t)
+
+	task, cfg, ports := dockerTask(t)
+	defer freeport.Return(ports)
+
+	require.NoError(t, task.EncodeConcreteDriverConfig(cfg))
+
+	dockerClientConfig := make(map[string]interface{})
+	loggerConfig := map[string]string{"gelf-address": "udp://1.2.3.4:12201", "tag": "gelf"}
+
+	dockerClientConfig["logging"] = LoggingConfig{
+		Type:   "gelf",
+		Config: loggerConfig,
+	}
+	client, d, handle, cleanup := dockerSetup(t, task, dockerClientConfig)
+	defer cleanup()
+	require.NoError(t, d.WaitUntilStarted(task.ID, 5*time.Second))
+
+	container, err := client.InspectContainer(handle.containerID)
+	require.NoError(t, err)
+
+	require.Equal(t, "gelf", container.HostConfig.LogConfig.Type)
+	require.Equal(t, loggerConfig, container.HostConfig.LogConfig.Config)
 }
 
 func TestDockerDriver_ForcePull(t *testing.T) {
@@ -1066,7 +1132,7 @@ func TestDockerDriver_CreateContainerConfig_Labels(t *testing.T) {
 	expectedLabels := map[string]string{
 		// user provided labels
 		"user_label": "user_value",
-		// default labels
+		// default label
 		"com.hashicorp.nomad.alloc_id": task.AllocID,
 	}
 
@@ -1330,7 +1396,7 @@ func TestDockerDriver_Capabilities(t *testing.T) {
 		},
 		{
 			Name:    "default-allowlist-drop-existing",
-			CapDrop: []string{"FOWNER", "MKNOD", "NET_RAW"},
+			CapDrop: []string{"fowner", "mknod", "net_raw"},
 		},
 		{
 			Name:      "restrictive-allowlist-drop-all",
@@ -1340,8 +1406,8 @@ func TestDockerDriver_Capabilities(t *testing.T) {
 		{
 			Name:      "restrictive-allowlist-add-allowed",
 			CapAdd:    []string{"fowner", "mknod"},
-			CapDrop:   []string{"ALL"},
-			Allowlist: "fowner,mknod",
+			CapDrop:   []string{"all"},
+			Allowlist: "mknod,fowner",
 		},
 		{
 			Name:       "restrictive-allowlist-add-forbidden",
@@ -1352,8 +1418,8 @@ func TestDockerDriver_Capabilities(t *testing.T) {
 		},
 		{
 			Name:      "permissive-allowlist",
-			CapAdd:    []string{"net_admin", "mknod"},
-			Allowlist: "ALL",
+			CapAdd:    []string{"mknod", "net_admin"},
+			Allowlist: "all",
 		},
 		{
 			Name:      "permissive-allowlist-add-all",
@@ -2790,17 +2856,57 @@ func TestDockerDriver_CreateContainerConfig_CPUHardLimit(t *testing.T) {
 func TestDockerDriver_memoryLimits(t *testing.T) {
 	t.Parallel()
 
-	t.Run("driver hard limit not set", func(t *testing.T) {
-		memory, memoryReservation := new(Driver).memoryLimits(0, 256*1024*1024)
-		require.Equal(t, int64(256*1024*1024), memory)
-		require.Equal(t, int64(0), memoryReservation)
-	})
+	cases := []struct {
+		name           string
+		driverMemoryMB int64
+		taskResources  drivers.MemoryResources
+		expectedHard   int64
+		expectedSoft   int64
+	}{
+		{
+			"plain request",
+			0,
+			drivers.MemoryResources{MemoryMB: 10},
+			10 * 1024 * 1024,
+			0,
+		},
+		{
+			"with driver max",
+			20,
+			drivers.MemoryResources{MemoryMB: 10},
+			20 * 1024 * 1024,
+			10 * 1024 * 1024,
+		},
+		{
+			"with resources max",
+			20,
+			drivers.MemoryResources{MemoryMB: 10, MemoryMaxMB: 20},
+			20 * 1024 * 1024,
+			10 * 1024 * 1024,
+		},
+		{
+			"with driver and resources max: higher driver",
+			30,
+			drivers.MemoryResources{MemoryMB: 10, MemoryMaxMB: 20},
+			30 * 1024 * 1024,
+			10 * 1024 * 1024,
+		},
+		{
+			"with driver and resources max: higher resources",
+			20,
+			drivers.MemoryResources{MemoryMB: 10, MemoryMaxMB: 30},
+			30 * 1024 * 1024,
+			10 * 1024 * 1024,
+		},
+	}
 
-	t.Run("driver hard limit is set", func(t *testing.T) {
-		memory, memoryReservation := new(Driver).memoryLimits(512, 256*1024*1024)
-		require.Equal(t, int64(512*1024*1024), memory)
-		require.Equal(t, int64(256*1024*1024), memoryReservation)
-	})
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hard, soft := memoryLimits(c.driverMemoryMB, c.taskResources)
+			require.Equal(t, c.expectedHard, hard)
+			require.Equal(t, c.expectedSoft, soft)
+		})
+	}
 }
 
 func TestDockerDriver_parseSignal(t *testing.T) {
@@ -2927,11 +3033,10 @@ func TestDockerDriver_StopSignal(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, d.WaitUntilStarted(task.ID, 5*time.Second))
 
+			stopErr := make(chan error, 1)
 			go func() {
 				err := d.StopTask(task.ID, 1*time.Second, c.jobKillSignal)
-				if err != nil {
-					t.Errorf("stop task failed: %v", err)
-				}
+				stopErr <- err
 			}()
 
 			timeout := time.After(10 * time.Second)
@@ -2949,6 +3054,8 @@ func TestDockerDriver_StopSignal(t *testing.T) {
 							break WAIT
 						}
 					}
+				case err := <-stopErr:
+					require.NoError(t, err, "stop task failed")
 				case <-timeout:
 					// timeout waiting for signals
 					require.Equal(t, c.expectedSignals, receivedSignals, "timed out waiting for expected signals")
@@ -2956,170 +3063,4 @@ func TestDockerDriver_StopSignal(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestDockerCaps_normalizeCaps(t *testing.T) {
-	t.Run("empty", func(t *testing.T) {
-		result := normalizeCaps(nil)
-		require.Len(t, result, 0)
-	})
-
-	t.Run("mixed", func(t *testing.T) {
-		result := normalizeCaps([]string{
-			"DAC_OVERRIDE", "sys_chroot", "kill", "KILL",
-		})
-		require.Equal(t, []string{
-			"DAC_OVERRIDE", "KILL", "SYS_CHROOT",
-		}, result)
-	})
-}
-
-func TestDockerCaps_missingCaps(t *testing.T) {
-	allowed := []string{
-		"DAC_OVERRIDE", "SYS_CHROOT", "KILL", "CHOWN",
-	}
-
-	t.Run("none missing", func(t *testing.T) {
-		result := missingCaps(allowed, []string{
-			"SYS_CHROOT", "chown", "KILL",
-		})
-		require.Equal(t, []string(nil), result)
-	})
-
-	t.Run("some missing", func(t *testing.T) {
-		result := missingCaps(allowed, []string{
-			"chown", "audit_write", "SETPCAP", "dac_override",
-		})
-		require.Equal(t, []string{"AUDIT_WRITE", "SETPCAP"}, result)
-	})
-}
-
-func TestDockerCaps_expandAllowCaps(t *testing.T) {
-	t.Run("empty", func(t *testing.T) {
-		result := expandAllowCaps(nil)
-		require.Empty(t, result)
-	})
-
-	t.Run("manual", func(t *testing.T) {
-		result := expandAllowCaps([]string{
-			"DAC_OVERRIDE", "SYS_CHROOT", "KILL", "CHOWN",
-		})
-		require.Equal(t, []string{
-			"CHOWN", "DAC_OVERRIDE", "KILL", "SYS_CHROOT",
-		}, result)
-	})
-
-	t.Run("all", func(t *testing.T) {
-		result := expandAllowCaps([]string{"all"})
-		exp := normalizeCaps(executor.SupportedCaps(true))
-		sort.Strings(exp)
-		require.Equal(t, exp, result)
-	})
-}
-
-func TestDockerCaps_capDrops(t *testing.T) {
-	// docker default caps is always the same, task configured drop_caps and
-	// plugin config allow_caps may be altered
-
-	// This is the 90% use case, where NET_RAW is dropped, as Nomad's default
-	// capability allow-list is a subset of the docker default cap list.
-	t.Run("defaults", func(t *testing.T) {
-		result := capDrops(nil, nomadDefaultCaps())
-		require.Equal(t, []string{"NET_RAW"}, result)
-	})
-
-	// Users want to use ICMP (ping).
-	t.Run("enable net_raw", func(t *testing.T) {
-		result := capDrops(nil, append(nomadDefaultCaps(), "net_raw"))
-		require.Empty(t, result)
-	})
-
-	// The plugin is reduced in ability.
-	t.Run("enable minimal", func(t *testing.T) {
-		allow := []string{"setgid", "setuid", "chown", "kill"}
-		exp := []string{"AUDIT_WRITE", "DAC_OVERRIDE", "FOWNER", "FSETID", "MKNOD", "NET_BIND_SERVICE", "NET_RAW", "SETFCAP", "SETPCAP", "SYS_CHROOT"}
-		result := capDrops(nil, allow)
-		require.Equal(t, exp, result)
-	})
-
-	// The task drops abilities.
-	t.Run("task drops", func(t *testing.T) {
-		drops := []string{"audit_write", "fowner", "kill", "chown"}
-		exp := []string{"AUDIT_WRITE", "CHOWN", "FOWNER", "KILL", "NET_RAW"}
-		result := capDrops(drops, nomadDefaultCaps())
-		require.Equal(t, exp, result)
-	})
-
-	// Drop all mixed with others.
-	t.Run("task drops mix", func(t *testing.T) {
-		drops := []string{"audit_write", "all", "chown"}
-		exp := []string{"ALL"} // minimized
-		result := capDrops(drops, nomadDefaultCaps())
-		require.Equal(t, exp, result)
-	})
-}
-
-func TestDockerCaps_getCaps(t *testing.T) {
-	testutil.ExecCompatible(t) // tests require linux
-
-	t.Run("defaults", func(t *testing.T) {
-		d := Driver{config: &DriverConfig{
-			AllowCaps: nomadDefaultCaps(),
-		}}
-		add, drop, err := d.getCaps(&TaskConfig{
-			CapAdd: nil, CapDrop: nil,
-		})
-		require.NoError(t, err)
-		require.Empty(t, add)
-		require.Equal(t, []string{"NET_RAW"}, drop)
-	})
-
-	t.Run("enable net_raw", func(t *testing.T) {
-		d := Driver{config: &DriverConfig{
-			AllowCaps: append(nomadDefaultCaps(), "net_raw"),
-		}}
-		add, drop, err := d.getCaps(&TaskConfig{
-			CapAdd: nil, CapDrop: nil,
-		})
-		require.NoError(t, err)
-		require.Empty(t, add)
-		require.Empty(t, drop)
-	})
-
-	t.Run("block sys_time", func(t *testing.T) {
-		d := Driver{config: &DriverConfig{
-			AllowCaps: nomadDefaultCaps(),
-		}}
-		_, _, err := d.getCaps(&TaskConfig{
-			CapAdd:  []string{"SYS_TIME"},
-			CapDrop: nil,
-		})
-		require.EqualError(t, err, `Docker driver does not have the following caps allow-listed on this Nomad agent: [SYS_TIME]`)
-	})
-
-	t.Run("enable sys_time", func(t *testing.T) {
-		d := Driver{config: &DriverConfig{
-			AllowCaps: append(nomadDefaultCaps(), "sys_time"),
-		}}
-		add, drop, err := d.getCaps(&TaskConfig{
-			CapAdd:  []string{"SYS_TIME"},
-			CapDrop: nil,
-		})
-		require.NoError(t, err)
-		require.Equal(t, []string{"SYS_TIME"}, add)
-		require.Equal(t, []string{"NET_RAW"}, drop)
-	})
-
-	t.Run("task drops chown", func(t *testing.T) {
-		d := Driver{config: &DriverConfig{
-			AllowCaps: nomadDefaultCaps(),
-		}}
-		add, drop, err := d.getCaps(&TaskConfig{
-			CapAdd:  nil,
-			CapDrop: []string{"chown"},
-		})
-		require.NoError(t, err)
-		require.Empty(t, add)
-		require.Equal(t, []string{"CHOWN", "NET_RAW"}, drop)
-	})
 }

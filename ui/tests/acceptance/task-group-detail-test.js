@@ -3,7 +3,12 @@ import { module, test } from 'qunit';
 import { setupApplicationTest } from 'ember-qunit';
 import { setupMirage } from 'ember-cli-mirage/test-support';
 import a11yAudit from 'nomad-ui/tests/helpers/a11y-audit';
-import { formatBytes } from 'nomad-ui/helpers/format-bytes';
+import {
+  formatBytes,
+  formatHertz,
+  formatScheduledBytes,
+  formatScheduledHertz,
+} from 'nomad-ui/utils/units';
 import TaskGroup from 'nomad-ui/tests/pages/jobs/job/task-group';
 import Layout from 'nomad-ui/tests/pages/layout';
 import pageSizeSelect from './behaviors/page-size-select';
@@ -77,6 +82,9 @@ module('Acceptance | task group detail', function(hooks) {
   test('/jobs/:id/:task-group should list high-level metrics for the allocation', async function(assert) {
     const totalCPU = tasks.mapBy('resources.CPU').reduce(sum, 0);
     const totalMemory = tasks.mapBy('resources.MemoryMB').reduce(sum, 0);
+    const totalMemoryMax = tasks
+      .map(t => t.resources.MemoryMaxMB || t.resources.MemoryMB)
+      .reduce(sum, 0);
     const totalDisk = taskGroup.ephemeralDisk.SizeMB;
 
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
@@ -84,17 +92,24 @@ module('Acceptance | task group detail', function(hooks) {
     assert.equal(TaskGroup.tasksCount, `# Tasks ${tasks.length}`, '# Tasks');
     assert.equal(
       TaskGroup.cpu,
-      `Reserved CPU ${totalCPU} MHz`,
+      `Reserved CPU ${formatScheduledHertz(totalCPU, 'MHz')}`,
       'Aggregated CPU reservation for all tasks'
     );
+
+    let totalMemoryMaxAddendum = '';
+
+    if (totalMemoryMax > totalMemory) {
+      totalMemoryMaxAddendum = ` (${formatScheduledBytes(totalMemoryMax, 'MiB')} Max)`;
+    }
+
     assert.equal(
       TaskGroup.mem,
-      `Reserved Memory ${totalMemory} MiB`,
+      `Reserved Memory ${formatScheduledBytes(totalMemory, 'MiB')}${totalMemoryMaxAddendum}`,
       'Aggregated Memory reservation for all tasks'
     );
     assert.equal(
       TaskGroup.disk,
-      `Reserved Disk ${totalDisk} MiB`,
+      `Reserved Disk ${formatScheduledBytes(totalDisk, 'MiB')}`,
       'Aggregated Disk reservation for all tasks'
     );
 
@@ -209,9 +224,10 @@ module('Acceptance | task group detail', function(hooks) {
       'CPU %'
     );
 
+    const roundedTicks = Math.floor(allocStats.resourceUsage.CpuStats.TotalTicks);
     assert.equal(
       allocationRow.cpuTooltip,
-      `${Math.floor(allocStats.resourceUsage.CpuStats.TotalTicks)} / ${cpuUsed} MHz`,
+      `${formatHertz(roundedTicks, 'MHz')} / ${formatHertz(cpuUsed, 'MHz')}`,
       'Detailed CPU information is in a tooltip'
     );
 
@@ -223,7 +239,10 @@ module('Acceptance | task group detail', function(hooks) {
 
     assert.equal(
       allocationRow.memTooltip,
-      `${formatBytes([allocStats.resourceUsage.MemoryStats.RSS])} / ${memoryUsed} MiB`,
+      `${formatBytes(allocStats.resourceUsage.MemoryStats.RSS)} / ${formatBytes(
+        memoryUsed,
+        'MiB'
+      )}`,
       'Detailed memory information is in a tooltip'
     );
   });

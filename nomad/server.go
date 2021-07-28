@@ -805,6 +805,10 @@ func (s *Server) Reload(newConfig *Config) error {
 		}
 	}
 
+	if newConfig.LicenseEnv != "" || newConfig.LicensePath != "" {
+		s.EnterpriseState.ReloadLicense(newConfig)
+	}
+
 	return mErr.ErrorOrNil()
 }
 
@@ -1017,7 +1021,7 @@ func (s *Server) setupDeploymentWatcher() error {
 		raftShim,
 		s.staticEndpoints.Deployment,
 		s.staticEndpoints.Job,
-		deploymentwatcher.LimitStateQueriesPerSecond,
+		s.config.DeploymentQueryRateLimit,
 		deploymentwatcher.CrossDeploymentUpdateBatchDuration,
 	)
 

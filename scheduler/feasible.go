@@ -227,23 +227,30 @@ func (c *CSIVolumeChecker) SetNamespace(namespace string) {
 	c.namespace = namespace
 }
 
-func (c *CSIVolumeChecker) SetVolumes(volumes map[string]*structs.VolumeRequest) {
+func (c *CSIVolumeChecker) SetVolumes(allocName string, volumes map[string]*structs.VolumeRequest) {
+
 	xs := make(map[string]*structs.VolumeRequest)
+
 	// Filter to only CSI Volumes
 	for alias, req := range volumes {
 		if req.Type != structs.VolumeTypeCSI {
 			continue
 		}
-
-		xs[alias] = req
+		if req.PerAlloc {
+			// provide a unique volume source per allocation
+			copied := req.Copy()
+			copied.Source = copied.Source + structs.AllocSuffix(allocName)
+			xs[alias] = copied
+		} else {
+			xs[alias] = req
+		}
 	}
 	c.volumes = xs
 }
 
 func (c *CSIVolumeChecker) Feasible(n *structs.Node) bool {
-	hasPlugins, failReason := c.hasPlugins(n)
-
-	if hasPlugins {
+	ok, failReason := c.isFeasible(n)
+	if ok {
 		return true
 	}
 
@@ -251,7 +258,7 @@ func (c *CSIVolumeChecker) Feasible(n *structs.Node) bool {
 	return false
 }
 
-func (c *CSIVolumeChecker) hasPlugins(n *structs.Node) (bool, string) {
+func (c *CSIVolumeChecker) isFeasible(n *structs.Node) (bool, string) {
 	// We can mount the volume if
 	// - if required, a healthy controller plugin is running the driver
 	// - the volume has free claims, or this job owns the claims
@@ -382,15 +389,20 @@ func (c *NetworkChecker) Feasible(option *structs.Node) bool {
 func (c *NetworkChecker) hasHostNetworks(option *structs.Node) bool {
 	for _, port := range c.ports {
 		if port.HostNetwork != "" {
+			hostNetworkValue, hostNetworkOk := resolveTarget(port.HostNetwork, option)
+			if !hostNetworkOk {
+				c.ctx.Metrics().FilterNode(option, fmt.Sprintf("invalid host network %q template for port %q", port.HostNetwork, port.Label))
+				return false
+			}
 			found := false
 			for _, net := range option.NodeResources.NodeNetworks {
-				if net.HasAlias(port.HostNetwork) {
+				if net.HasAlias(hostNetworkValue.(string)) {
 					found = true
 					break
 				}
 			}
 			if !found {
-				c.ctx.Metrics().FilterNode(option, fmt.Sprintf("missing host network %q for port %q", port.HostNetwork, port.Label))
+				c.ctx.Metrics().FilterNode(option, fmt.Sprintf("missing host network %q for port %q", hostNetworkValue.(string), port.Label))
 				return false
 			}
 		}

@@ -34,6 +34,7 @@ func parseServices(serviceObjs *ast.ObjectList) ([]*api.Service, error) {
 	}
 	return services, nil
 }
+
 func parseService(o *ast.ObjectItem) (*api.Service, error) {
 	// Check for invalid keys
 	valid := []string{
@@ -549,6 +550,7 @@ func parseSidecarService(o *ast.ObjectItem) (*api.ConsulSidecarService, error) {
 		"port",
 		"proxy",
 		"tags",
+		"disable_default_tcp_check",
 	}
 
 	if err := checkHCLKeys(o.Val, valid); err != nil {

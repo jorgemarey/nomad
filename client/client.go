@@ -7,6 +7,7 @@ import (
 	"net/rpc"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	"github.com/hashicorp/nomad/client/devicemanager"
 	"github.com/hashicorp/nomad/client/dynamicplugins"
 	"github.com/hashicorp/nomad/client/fingerprint"
+	"github.com/hashicorp/nomad/client/lib/cgutil"
 	"github.com/hashicorp/nomad/client/pluginmanager"
 	"github.com/hashicorp/nomad/client/pluginmanager/csimanager"
 	"github.com/hashicorp/nomad/client/pluginmanager/drivermanager"
@@ -285,7 +287,7 @@ type Client struct {
 	batchNodeUpdates *batchNodeUpdates
 
 	// fpInitialized chan is closed when the first batch of fingerprints are
-	// applied to the node and the server is updated
+	// applied to the node
 	fpInitialized chan struct{}
 
 	// serversContactedCh is closed when GetClientAllocs and runAllocs have
@@ -296,6 +298,9 @@ type Client struct {
 	// dynamicRegistry provides access to plugins that are dynamically registered
 	// with a nomad client. Currently only used for CSI.
 	dynamicRegistry dynamicplugins.Registry
+
+	// cpusetManager configures cpusets on supported platforms
+	cpusetManager cgutil.CpusetManager
 
 	// EnterpriseClient is used to set and check enterprise features for clients
 	EnterpriseClient *EnterpriseClient
@@ -308,8 +313,12 @@ var (
 	noServersErr = errors.New("no servers")
 )
 
-// NewClient is used to create a new client from the given configuration
-func NewClient(cfg *config.Config, consulCatalog consul.CatalogAPI, consulProxies consulApi.SupportedProxiesAPI, consulService consulApi.ConsulServiceAPI) (*Client, error) {
+// NewClient is used to create a new client from the given configuration.
+// `rpcs` is a map of RPC names to RPC structs that, if non-nil, will be
+// registered via https://golang.org/pkg/net/rpc/#Server.RegisterName in place
+// of the client's normal RPC handlers. This allows server tests to override
+// the behavior of the client.
+func NewClient(cfg *config.Config, consulCatalog consul.CatalogAPI, consulProxies consulApi.SupportedProxiesAPI, consulService consulApi.ConsulServiceAPI, rpcs map[string]interface{}) (*Client, error) {
 	// Create the tls wrapper
 	var tlsWrap tlsutil.RegionWrapper
 	if cfg.TLSConfig.EnableRPC {
@@ -352,6 +361,7 @@ func NewClient(cfg *config.Config, consulCatalog consul.CatalogAPI, consulProxie
 		invalidAllocs:        make(map[string]struct{}),
 		serversContactedCh:   make(chan struct{}),
 		serversContactedOnce: sync.Once{},
+		cpusetManager:        cgutil.NewCpusetManager(cfg.CgroupParent, logger.Named("cpuset_manager")),
 		EnterpriseClient:     newEnterpriseClient(logger),
 	}
 
@@ -384,7 +394,7 @@ func NewClient(cfg *config.Config, consulCatalog consul.CatalogAPI, consulProxie
 		})
 
 	// Setup the clients RPC server
-	c.setupClientRpc()
+	c.setupClientRpc(rpcs)
 
 	// Initialize the ACL state
 	if err := c.clientACLResolver.init(); err != nil {
@@ -514,7 +524,7 @@ func NewClient(cfg *config.Config, consulCatalog consul.CatalogAPI, consulProxie
 
 	// wait until drivers are healthy before restoring or registering with servers
 	select {
-	case <-c.Ready():
+	case <-c.fpInitialized:
 	case <-time.After(batchFirstFingerprintsProcessingGrace):
 		logger.Warn("batch fingerprint operation timed out; proceeding to register with fingerprinted plugins so far")
 	}
@@ -556,7 +566,7 @@ func NewClient(cfg *config.Config, consulCatalog consul.CatalogAPI, consulProxie
 
 // Ready returns a chan that is closed when the client is fully initialized
 func (c *Client) Ready() <-chan struct{} {
-	return c.fpInitialized
+	return c.serversContactedCh
 }
 
 // init is used to initialize the client and perform any setup
@@ -628,6 +638,17 @@ func (c *Client) init() error {
 	}
 
 	c.logger.Info("using alloc directory", "alloc_dir", c.config.AllocDir)
+
+	// Ensure cgroups are created on linux platform
+	if runtime.GOOS == "linux" && c.cpusetManager != nil {
+		err := c.cpusetManager.Init()
+		if err != nil {
+			// if the client cannot initialize the cgroup then reserved cores will not be reported and the cpuset manager
+			// will be disabled. this is common when running in dev mode under a non-root user for example
+			c.logger.Warn("could not initialize cpuset cgroup subsystem, cpuset management disabled", "error", err)
+			c.cpusetManager = cgutil.NoopCpusetManager()
+		}
+	}
 	return nil
 }
 
@@ -1111,6 +1132,7 @@ func (c *Client) restoreState() error {
 			PrevAllocMigrator:   prevAllocMigrator,
 			DynamicRegistry:     c.dynamicRegistry,
 			CSIManager:          c.csimanager,
+			CpusetManager:       c.cpusetManager,
 			DeviceManager:       c.devicemanager,
 			DriverManager:       c.drivermanager,
 			ServersContactedCh:  c.serversContactedCh,
@@ -2217,7 +2239,6 @@ func (c *Client) runAllocs(update *allocUpdates) {
 
 	// Update the existing allocations
 	for _, update := range diff.updated {
-		c.logger.Trace("updating alloc", "alloc_id", update.ID, "index", update.AllocModifyIndex)
 		c.updateAlloc(update)
 	}
 
@@ -2405,6 +2426,7 @@ func (c *Client) addAlloc(alloc *structs.Allocation, migrateToken string) error 
 		PrevAllocMigrator:   prevAllocMigrator,
 		DynamicRegistry:     c.dynamicRegistry,
 		CSIManager:          c.csimanager,
+		CpusetManager:       c.cpusetManager,
 		DeviceManager:       c.devicemanager,
 		DriverManager:       c.drivermanager,
 		RPCClient:           c,

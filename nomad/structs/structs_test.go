@@ -1088,7 +1088,7 @@ func TestTaskGroup_Validate(t *testing.T) {
 		},
 	}
 	err = tg.Validate(&Job{})
-	require.Contains(t, err.Error(), `Volume foo has unrecognised type nothost`)
+	require.Contains(t, err.Error(), `volume has unrecognized type nothost`)
 
 	tg = &TaskGroup{
 		Volumes: map[string]*VolumeRequest{
@@ -1104,7 +1104,31 @@ func TestTaskGroup_Validate(t *testing.T) {
 		},
 	}
 	err = tg.Validate(&Job{})
-	require.Contains(t, err.Error(), `Volume foo has an empty source`)
+	require.Contains(t, err.Error(), `volume has an empty source`)
+
+	tg = &TaskGroup{
+		Name: "group-a",
+		Update: &UpdateStrategy{
+			Canary: 1,
+		},
+		Volumes: map[string]*VolumeRequest{
+			"foo": {
+				Type:     "csi",
+				PerAlloc: true,
+			},
+		},
+		Tasks: []*Task{
+			{
+				Name:      "task-a",
+				Resources: &Resources{},
+			},
+		},
+	}
+	err = tg.Validate(&Job{})
+	require.Contains(t, err.Error(), `volume has an empty source`)
+	require.Contains(t, err.Error(), `volume cannot be per_alloc when canaries are in use`)
+	require.Contains(t, err.Error(), `CSI volumes must have an attachment mode`)
+	require.Contains(t, err.Error(), `CSI volumes must have an access mode`)
 
 	tg = &TaskGroup{
 		Volumes: map[string]*VolumeRequest{
@@ -1452,6 +1476,7 @@ func TestTask_Validate_Resources(t *testing.T) {
 	cases := []struct {
 		name string
 		res  *Resources
+		err  string
 	}{
 		{
 			name: "Minimum",
@@ -1464,9 +1489,10 @@ func TestTask_Validate_Resources(t *testing.T) {
 		{
 			name: "Full",
 			res: &Resources{
-				CPU:      1000,
-				MemoryMB: 1000,
-				IOPS:     1000,
+				CPU:         1000,
+				MemoryMB:    1000,
+				MemoryMaxMB: 2000,
+				IOPS:        1000,
 				Networks: []*NetworkResource{
 					{
 						Mode:   "host",
@@ -1499,12 +1525,43 @@ func TestTask_Validate_Resources(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "too little cpu",
+			res: &Resources{
+				CPU:      0,
+				MemoryMB: 200,
+			},
+			err: "minimum CPU value is 1",
+		},
+		{
+			name: "too little memory",
+			res: &Resources{
+				CPU:      100,
+				MemoryMB: 1,
+			},
+			err: "minimum MemoryMB value is 10; got 1",
+		},
+		{
+			name: "too little memory max",
+			res: &Resources{
+				CPU:         100,
+				MemoryMB:    200,
+				MemoryMaxMB: 10,
+			},
+			err: "MemoryMaxMB value (10) should be larger than MemoryMB value (200",
+		},
 	}
 
 	for i := range cases {
 		tc := cases[i]
 		t.Run(tc.name, func(t *testing.T) {
-			require.NoError(t, tc.res.Validate())
+			err := tc.res.Validate()
+			if tc.err == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.err)
+			}
 		})
 	}
 }
@@ -2599,32 +2656,6 @@ func TestResource_NetIndex(t *testing.T) {
 	}
 }
 
-func TestResource_Superset(t *testing.T) {
-	r1 := &Resources{
-		CPU:      2000,
-		MemoryMB: 2048,
-		DiskMB:   10000,
-	}
-	r2 := &Resources{
-		CPU:      2000,
-		MemoryMB: 1024,
-		DiskMB:   5000,
-	}
-
-	if s, _ := r1.Superset(r1); !s {
-		t.Fatalf("bad")
-	}
-	if s, _ := r1.Superset(r2); !s {
-		t.Fatalf("bad")
-	}
-	if s, _ := r2.Superset(r1); s {
-		t.Fatalf("bad")
-	}
-	if s, _ := r2.Superset(r2); !s {
-		t.Fatalf("bad")
-	}
-}
-
 func TestResource_Add(t *testing.T) {
 	r1 := &Resources{
 		CPU:      2000,
@@ -2711,10 +2742,12 @@ func TestComparableResources_Subtract(t *testing.T) {
 	r1 := &ComparableResources{
 		Flattened: AllocatedTaskResources{
 			Cpu: AllocatedCpuResources{
-				CpuShares: 2000,
+				CpuShares:     2000,
+				ReservedCores: []uint16{0, 1},
 			},
 			Memory: AllocatedMemoryResources{
-				MemoryMB: 2048,
+				MemoryMB:    2048,
+				MemoryMaxMB: 3048,
 			},
 			Networks: []*NetworkResource{
 				{
@@ -2732,10 +2765,12 @@ func TestComparableResources_Subtract(t *testing.T) {
 	r2 := &ComparableResources{
 		Flattened: AllocatedTaskResources{
 			Cpu: AllocatedCpuResources{
-				CpuShares: 1000,
+				CpuShares:     1000,
+				ReservedCores: []uint16{0},
 			},
 			Memory: AllocatedMemoryResources{
-				MemoryMB: 1024,
+				MemoryMB:    1024,
+				MemoryMaxMB: 1524,
 			},
 			Networks: []*NetworkResource{
 				{
@@ -2754,10 +2789,12 @@ func TestComparableResources_Subtract(t *testing.T) {
 	expect := &ComparableResources{
 		Flattened: AllocatedTaskResources{
 			Cpu: AllocatedCpuResources{
-				CpuShares: 1000,
+				CpuShares:     1000,
+				ReservedCores: []uint16{1},
 			},
 			Memory: AllocatedMemoryResources{
-				MemoryMB: 1024,
+				MemoryMB:    1024,
+				MemoryMaxMB: 1524,
 			},
 			Networks: []*NetworkResource{
 				{
@@ -2774,6 +2811,29 @@ func TestComparableResources_Subtract(t *testing.T) {
 
 	require := require.New(t)
 	require.Equal(expect, r1)
+}
+
+func TestMemoryResources_Add(t *testing.T) {
+	r := &AllocatedMemoryResources{}
+
+	// adding plain no max
+	r.Add(&AllocatedMemoryResources{
+		MemoryMB: 100,
+	})
+	require.Equal(t, &AllocatedMemoryResources{
+		MemoryMB:    100,
+		MemoryMaxMB: 100,
+	}, r)
+
+	// adding with max
+	r.Add(&AllocatedMemoryResources{
+		MemoryMB:    100,
+		MemoryMaxMB: 200,
+	})
+	require.Equal(t, &AllocatedMemoryResources{
+		MemoryMB:    200,
+		MemoryMaxMB: 300,
+	}, r)
 }
 
 func TestEncodeDecode(t *testing.T) {
@@ -5461,7 +5521,11 @@ func TestNode_Canonicalize(t *testing.T) {
 	require.Equal(NodeSchedulingEligible, node.SchedulingEligibility)
 
 	node = &Node{
-		Drain: true,
+		DrainStrategy: &DrainStrategy{
+			DrainSpec: DrainSpec{
+				Deadline: 30000,
+			},
+		},
 	}
 	node.Canonicalize()
 	require.Equal(NodeSchedulingIneligible, node.SchedulingEligibility)
@@ -5510,7 +5574,9 @@ func TestNode_Copy(t *testing.T) {
 		},
 		NodeResources: &NodeResources{
 			Cpu: NodeCpuResources{
-				CpuShares: 4000,
+				CpuShares:          4000,
+				TotalCpuCores:      4,
+				ReservableCpuCores: []uint16{0, 1, 2, 3},
 			},
 			Memory: NodeMemoryResources{
 				MemoryMB: 8192,
@@ -5528,7 +5594,8 @@ func TestNode_Copy(t *testing.T) {
 		},
 		ReservedResources: &NodeReservedResources{
 			Cpu: NodeReservedCpuResources{
-				CpuShares: 100,
+				CpuShares:        100,
+				ReservedCpuCores: []uint16{0},
 			},
 			Memory: NodeReservedMemoryResources{
 				MemoryMB: 256,
@@ -5573,6 +5640,31 @@ func TestNode_Copy(t *testing.T) {
 	require.Equal(node.Events, node2.Events)
 	require.Equal(node.DrainStrategy, node2.DrainStrategy)
 	require.Equal(node.Drivers, node2.Drivers)
+}
+
+func TestNode_Sanitize(t *testing.T) {
+	require := require.New(t)
+
+	testCases := []*Node{
+		nil,
+		{
+			ID:       uuid.Generate(),
+			SecretID: "",
+		},
+		{
+			ID:       uuid.Generate(),
+			SecretID: uuid.Generate(),
+		},
+	}
+	for _, tc := range testCases {
+		sanitized := tc.Sanitize()
+		if tc == nil {
+			require.Nil(sanitized)
+		} else {
+			require.NotNil(sanitized)
+			require.Empty(sanitized.SecretID)
+		}
+	}
 }
 
 func TestSpread_Validate(t *testing.T) {
@@ -5781,7 +5873,8 @@ func TestMultiregion_CopyCanonicalize(t *testing.T) {
 func TestNodeResources_Merge(t *testing.T) {
 	res := &NodeResources{
 		Cpu: NodeCpuResources{
-			CpuShares: int64(32000),
+			CpuShares:     int64(32000),
+			TotalCpuCores: 32,
 		},
 		Memory: NodeMemoryResources{
 			MemoryMB: int64(64000),
@@ -5794,6 +5887,7 @@ func TestNodeResources_Merge(t *testing.T) {
 	}
 
 	res.Merge(&NodeResources{
+		Cpu: NodeCpuResources{ReservableCpuCores: []uint16{0, 1, 2, 3}},
 		Memory: NodeMemoryResources{
 			MemoryMB: int64(100000),
 		},
@@ -5806,7 +5900,9 @@ func TestNodeResources_Merge(t *testing.T) {
 
 	require.Exactly(t, &NodeResources{
 		Cpu: NodeCpuResources{
-			CpuShares: int64(32000),
+			CpuShares:          int64(32000),
+			TotalCpuCores:      32,
+			ReservableCpuCores: []uint16{0, 1, 2, 3},
 		},
 		Memory: NodeMemoryResources{
 			MemoryMB: int64(100000),
@@ -6026,6 +6122,69 @@ func TestTaskGroup_validateScriptChecksInGroupServices(t *testing.T) {
 		mErrOK := tgOK.validateScriptChecksInGroupServices()
 		require.Nil(t, mErrOK)
 	})
+}
+
+func TestComparableResources_Superset(t *testing.T) {
+	base := &ComparableResources{
+		Flattened: AllocatedTaskResources{
+			Cpu: AllocatedCpuResources{
+				CpuShares:     4000,
+				ReservedCores: []uint16{0, 1, 2, 3},
+			},
+			Memory: AllocatedMemoryResources{MemoryMB: 4096},
+		},
+		Shared: AllocatedSharedResources{DiskMB: 10000},
+	}
+	cases := []struct {
+		a         *ComparableResources
+		b         *ComparableResources
+		dimension string
+	}{
+		{
+			a: base,
+			b: &ComparableResources{
+				Flattened: AllocatedTaskResources{
+					Cpu: AllocatedCpuResources{CpuShares: 1000, ReservedCores: []uint16{0}},
+				},
+			},
+		},
+		{
+			a: base,
+			b: &ComparableResources{
+				Flattened: AllocatedTaskResources{
+					Cpu: AllocatedCpuResources{CpuShares: 4000, ReservedCores: []uint16{0, 1, 2, 3}},
+				},
+			},
+		},
+		{
+			a: base,
+			b: &ComparableResources{
+				Flattened: AllocatedTaskResources{
+					Cpu: AllocatedCpuResources{CpuShares: 5000},
+				},
+			},
+			dimension: "cpu",
+		},
+		{
+			a: base,
+			b: &ComparableResources{
+				Flattened: AllocatedTaskResources{
+					Cpu: AllocatedCpuResources{CpuShares: 1000, ReservedCores: []uint16{3, 4}},
+				},
+			},
+			dimension: "cores",
+		},
+	}
+
+	for _, c := range cases {
+		fit, dim := c.a.Superset(c.b)
+		if c.dimension == "" {
+			require.True(t, fit)
+		} else {
+			require.False(t, fit)
+			require.Equal(t, c.dimension, dim)
+		}
+	}
 }
 
 func requireErrors(t *testing.T, err error, expected ...string) {

@@ -22,10 +22,22 @@ variable "nomad_local_binary" {
   default     = ""
 }
 
+variable "nomad_url" {
+  type        = string
+  description = "URL to Nomad binary (ex. \"https://circleci.com/.../linux_amd64.zip\")"
+  default     = ""
+}
+
 variable "nomad_enterprise" {
   type        = bool
   description = "If nomad_sha is used, deploy Nomad Enterprise"
   default     = false
+}
+
+variable "nomad_license" {
+  type        = string
+  description = "The enterprise license to use. overrides Nomad temporary license"
+  default     = ""
 }
 
 variable "nomad_acls" {
@@ -49,6 +61,12 @@ variable "role" {
 variable "index" {
   type        = string # note that we have string here so we can default to ""
   description = "The count of this instance for indexed configurations"
+  default     = ""
+}
+
+variable "cluster_name" {
+  type        = string
+  description = "The random name assigned to the cluster"
   default     = ""
 }
 

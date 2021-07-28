@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,14 +22,15 @@ import (
 	plugin "github.com/hashicorp/go-plugin"
 	"github.com/hashicorp/nomad/client/taskenv"
 	"github.com/hashicorp/nomad/drivers/docker/docklog"
+	"github.com/hashicorp/nomad/drivers/shared/capabilities"
 	"github.com/hashicorp/nomad/drivers/shared/eventer"
-	"github.com/hashicorp/nomad/drivers/shared/executor"
+	"github.com/hashicorp/nomad/drivers/shared/hostnames"
 	"github.com/hashicorp/nomad/drivers/shared/resolvconf"
-	"github.com/hashicorp/nomad/helper"
 	nstructs "github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/plugins/base"
 	"github.com/hashicorp/nomad/plugins/drivers"
 	pstructs "github.com/hashicorp/nomad/plugins/shared/structs"
+	"github.com/ryanuber/go-glob"
 )
 
 var (
@@ -73,7 +73,14 @@ var (
 )
 
 const (
-	dockerLabelAllocID = "com.hashicorp.nomad.alloc_id"
+	dockerLabelAllocID       = "com.hashicorp.nomad.alloc_id"
+	dockerLabelJobName       = "com.hashicorp.nomad.job_name"
+	dockerLabelJobID         = "com.hashicorp.nomad.job_id"
+	dockerLabelTaskGroupName = "com.hashicorp.nomad.task_group_name"
+	dockerLabelTaskName      = "com.hashicorp.nomad.task_name"
+	dockerLabelNamespace     = "com.hashicorp.nomad.namespace"
+	dockerLabelNodeName      = "com.hashicorp.nomad.node_name"
+	dockerLabelNodeID        = "com.hashicorp.nomad.node_id"
 )
 
 type Driver struct {
@@ -341,6 +348,12 @@ CREATE:
 	} else {
 		d.logger.Debug("re-attaching to container", "container_id",
 			container.ID, "container_state", container.State.String())
+	}
+
+	if containerCfg.HostConfig.CPUSet == "" && cfg.Resources.LinuxResources.CpusetCgroupPath != "" {
+		if err := setCPUSetCgroup(cfg.Resources.LinuxResources.CpusetCgroupPath, container.State.Pid); err != nil {
+			return nil, nil, fmt.Errorf("failed to set the cpuset cgroup for container: %v", err)
+		}
 	}
 
 	collectingLogs := !d.config.DisableLogCollection
@@ -733,8 +746,8 @@ func parseSecurityOpts(securityOpts []string) ([]string, error) {
 }
 
 // memoryLimits computes the memory and memory_reservation values passed along to
-// the docker host config. These fields represent hard and soft memory limits from
-// docker's perspective, respectively.
+// the docker host config. These fields represent hard and soft/reserved memory
+// limits from docker's perspective, respectively.
 //
 // The memory field on the task configuration can be interpreted as a hard or soft
 // limit. Before Nomad v0.11.3, it was always a hard limit. Now, it is interpreted
@@ -749,11 +762,18 @@ func parseSecurityOpts(securityOpts []string) ([]string, error) {
 // unset.
 //
 // Returns (memory (hard), memory_reservation (soft)) values in bytes.
-func (_ *Driver) memoryLimits(driverHardLimitMB, taskMemoryLimitBytes int64) (int64, int64) {
-	if driverHardLimitMB <= 0 {
-		return taskMemoryLimitBytes, 0
+func memoryLimits(driverHardLimitMB int64, taskMemory drivers.MemoryResources) (memory, reserve int64) {
+	softBytes := taskMemory.MemoryMB * 1024 * 1024
+
+	hard := driverHardLimitMB
+	if taskMemory.MemoryMaxMB > hard {
+		hard = taskMemory.MemoryMaxMB
 	}
-	return driverHardLimitMB * 1024 * 1024, taskMemoryLimitBytes
+
+	if hard <= 0 {
+		return softBytes, 0
+	}
+	return hard * 1024 * 1024, softBytes
 }
 
 func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *TaskConfig,
@@ -804,7 +824,7 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		return c, fmt.Errorf("requested runtime %q is not allowed", containerRuntime)
 	}
 
-	memory, memoryReservation := d.memoryLimits(driverConfig.MemoryHardLimit, task.Resources.LinuxResources.MemoryLimitBytes)
+	memory, memoryReservation := memoryLimits(driverConfig.MemoryHardLimit, task.Resources.NomadResources.Memory)
 
 	hostConfig := &docker.HostConfig{
 		Memory:            memory,            // hard limit
@@ -827,6 +847,8 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 
 	// This translates to docker create/run --cpuset-cpus option.
 	// --cpuset-cpus limit the specific CPUs or cores a container can use.
+	// Nomad natively manages cpusets, setting this option will override
+	// Nomad managed cpusets.
 	if driverConfig.CPUSetCPUs != "" {
 		hostConfig.CPUSetCPUs = driverConfig.CPUSetCPUs
 	}
@@ -871,12 +893,9 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	}
 
 	if hostConfig.LogConfig.Type == "" && hostConfig.LogConfig.Config == nil {
-		logger.Trace("no docker log driver provided, defaulting to json-file")
-		hostConfig.LogConfig.Type = "json-file"
-		hostConfig.LogConfig.Config = map[string]string{
-			"max-file": "2",
-			"max-size": "2m",
-		}
+		logger.Trace("no docker log driver provided, defaulting to plugin config")
+		hostConfig.LogConfig.Type = d.config.Logging.Type
+		hostConfig.LogConfig.Config = d.config.Logging.Config
 	}
 
 	logger.Debug("configured resources",
@@ -893,8 +912,9 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	hostConfig.Privileged = driverConfig.Privileged
 
 	// set add/drop capabilities
-	hostConfig.CapAdd, hostConfig.CapDrop, err = d.getCaps(driverConfig)
-	if err != nil {
+	if hostConfig.CapAdd, hostConfig.CapDrop, err = capabilities.Delta(
+		capabilities.DockerDefaults(), d.config.AllowCaps, driverConfig.CapAdd, driverConfig.CapDrop,
+	); err != nil {
 		return c, err
 	}
 
@@ -933,6 +953,33 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 			return c, err
 		}
 		hostConfig.Mounts = append(hostConfig.Mounts, *hm)
+	}
+
+	// Setup /etc/hosts
+	// If the task's network_mode is unset our hostname and IP will come from
+	// the Nomad-owned network (if in use), so we need to generate an
+	// /etc/hosts file that matches the network rather than the default one
+	// that comes from the pause container
+	if task.NetworkIsolation != nil && driverConfig.NetworkMode == "" {
+		etcHostMount, err := hostnames.GenerateEtcHostsMount(
+			task.TaskDir().Dir, task.NetworkIsolation, driverConfig.ExtraHosts)
+		if err != nil {
+			return c, fmt.Errorf("failed to build mount for /etc/hosts: %v", err)
+		}
+		if etcHostMount != nil {
+			// erase the extra_hosts field if we have a mount so we don't get
+			// conflicting options error from dockerd
+			driverConfig.ExtraHosts = nil
+			hostConfig.Mounts = append(hostConfig.Mounts, docker.HostMount{
+				Target:   etcHostMount.TaskPath,
+				Source:   etcHostMount.HostPath,
+				Type:     "bind",
+				ReadOnly: etcHostMount.Readonly,
+				BindOptions: &docker.BindOptions{
+					Propagation: etcHostMount.PropagationMode,
+				},
+			})
+		}
 	}
 
 	// Setup DNS
@@ -1091,13 +1138,40 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	for k, v := range driverConfig.Labels {
 		labels[k] = v
 	}
+	// main mandatory label
 	labels[dockerLabelAllocID] = task.AllocID
+
+	//optional labels, as configured in plugin configuration
+	for _, configurationExtraLabel := range d.config.ExtraLabels {
+		if glob.Glob(configurationExtraLabel, "job_name") {
+			labels[dockerLabelJobName] = task.JobName
+		}
+		if glob.Glob(configurationExtraLabel, "job_id") {
+			labels[dockerLabelJobID] = task.JobID
+		}
+		if glob.Glob(configurationExtraLabel, "task_group_name") {
+			labels[dockerLabelTaskGroupName] = task.TaskGroupName
+		}
+		if glob.Glob(configurationExtraLabel, "task_name") {
+			labels[dockerLabelTaskName] = task.Name
+		}
+		if glob.Glob(configurationExtraLabel, "namespace") {
+			labels[dockerLabelNamespace] = task.Namespace
+		}
+		if glob.Glob(configurationExtraLabel, "node_name") {
+			labels[dockerLabelNodeName] = task.NodeName
+		}
+		if glob.Glob(configurationExtraLabel, "node_id") {
+			labels[dockerLabelNodeID] = task.NodeID
+		}
+	}
+
 	config.Labels = labels
 	logger.Debug("applied labels on the container", "labels", config.Labels)
 
 	config.Env = task.EnvList()
 
-	containerName := fmt.Sprintf("%s-%s", strings.Replace(task.Name, "/", "_", -1), task.AllocID)
+	containerName := fmt.Sprintf("%s-%s", strings.ReplaceAll(task.Name, "/", "_"), task.AllocID)
 	logger.Debug("setting container name", "container_name", containerName)
 
 	var networkingConfig *docker.NetworkingConfig
@@ -1135,119 +1209,6 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		HostConfig:       hostConfig,
 		NetworkingConfig: networkingConfig,
 	}, nil
-}
-
-// getCaps computes the capabilities to supply to the --add-cap and --drop-cap
-// options to the docker driver, which override the default capabilities enabled
-// by docker itself.
-func (d *Driver) getCaps(taskConfig *TaskConfig) ([]string, []string, error) {
-
-	// capabilities allowable by client docker plugin configuration
-	allowCaps := expandAllowCaps(d.config.AllowCaps)
-
-	// capabilities the task docker config is asking for based on the default
-	// capabilities allowable by nomad
-	desiredCaps, err := tweakCapabilities(nomadDefaultCaps(), taskConfig.CapAdd, taskConfig.CapDrop)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// capabilities the task is requesting that are NOT allowed by the docker plugin
-	if missing := missingCaps(allowCaps, desiredCaps); len(missing) > 0 {
-		return nil, nil, fmt.Errorf("Docker driver does not have the following caps allow-listed on this Nomad agent: %s", missing)
-	}
-
-	// capabilities that should be dropped relative to the docker default capabilities
-	dropCaps := capDrops(taskConfig.CapDrop, allowCaps)
-
-	return taskConfig.CapAdd, dropCaps, nil
-}
-
-// capDrops will compute the total dropped capabilities set
-//
-// {task cap_drop} U ({docker defaults} \ {driver allow caps})
-func capDrops(dropCaps []string, allowCaps []string) []string {
-	dropSet := make(map[string]struct{})
-
-	for _, c := range normalizeCaps(dropCaps) {
-		dropSet[c] = struct{}{}
-	}
-
-	// if dropCaps includes ALL, no need to iterate every capability
-	if _, exists := dropSet["ALL"]; exists {
-		return []string{"ALL"}
-	}
-
-	dockerDefaults := helper.SliceStringToSet(normalizeCaps(dockerDefaultCaps()))
-	allowedCaps := helper.SliceStringToSet(normalizeCaps(allowCaps))
-
-	// find the docker default caps not in allowed caps
-	for dCap := range dockerDefaults {
-		if _, exists := allowedCaps[dCap]; !exists {
-			dropSet[dCap] = struct{}{}
-		}
-	}
-
-	drops := make([]string, 0, len(dropSet))
-	for c := range dropSet {
-		drops = append(drops, c)
-	}
-	sort.Strings(drops)
-	return drops
-}
-
-// expandAllowCaps returns the normalized set of allowable capabilities set
-// for the docker plugin configuration.
-func expandAllowCaps(allowCaps []string) []string {
-	if len(allowCaps) == 0 {
-		return nil
-	}
-
-	set := make(map[string]struct{}, len(allowCaps))
-
-	for _, rawCap := range allowCaps {
-		capability := strings.ToUpper(rawCap)
-		if capability == "ALL" {
-			for _, defCap := range normalizeCaps(executor.SupportedCaps(true)) {
-				set[defCap] = struct{}{}
-			}
-		} else {
-			set[capability] = struct{}{}
-		}
-	}
-
-	result := make([]string, 0, len(set))
-	for capability := range set {
-		result = append(result, capability)
-	}
-	sort.Strings(result)
-	return result
-}
-
-// missingCaps returns the set of elements in desired that are not present in
-// allowed. The elements in desired are first upper-cased before comparison.
-// The elements in allowed are assumed to be upper-cased.
-func missingCaps(allowed, desired []string) []string {
-	_, missing := helper.SliceStringIsSubset(allowed, normalizeCaps(desired))
-	sort.Strings(missing)
-	return missing
-}
-
-// normalizeCaps returns a copy of caps with duplicate elements removed and all
-// elements upper-cased.
-func normalizeCaps(caps []string) []string {
-	set := make(map[string]struct{}, len(caps))
-	for _, c := range caps {
-		normal := strings.TrimPrefix(strings.ToUpper(c), "CAP_")
-		set[strings.ToUpper(normal)] = struct{}{}
-	}
-
-	result := make([]string, 0, len(set))
-	for c := range set {
-		result = append(result, c)
-	}
-	sort.Strings(result)
-	return result
 }
 
 func (d *Driver) toDockerMount(m *DockerMount, task *drivers.TaskConfig) (*docker.HostMount, error) {
