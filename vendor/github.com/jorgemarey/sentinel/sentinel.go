@@ -17,7 +17,7 @@ func New(cfg *Config) *Sentinel {
 	// ctx, ctxCancel := context.WithCancel(context.Background())
 
 	s := &Sentinel{
-		evalTimeout: 3 * time.Second,
+		evalTimeout: 30 * time.Second,
 		// cancelFunc:  ctxCancel,
 	}
 
