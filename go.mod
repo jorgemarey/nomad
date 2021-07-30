@@ -89,7 +89,7 @@ require (
 	github.com/hpcloud/tail v1.0.1-0.20170814160653-37f427138745
 	github.com/ishidawataru/sctp v0.0.0-20191218070446-00ab2ac2db07 // indirect
 	github.com/jorgemarey/autopilot v0.2.1
-	github.com/jorgemarey/sentinel v0.1.2
+	github.com/jorgemarey/sentinel v0.1.3
 	github.com/joyent/triton-go v0.0.0-20190112182421-51ffac552869 // indirect
 	github.com/kr/pretty v0.2.0
 	github.com/kr/pty v1.1.5

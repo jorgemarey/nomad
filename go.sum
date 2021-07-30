@@ -510,8 +510,8 @@ github.com/jmespath/go-jmespath/internal/testify v1.5.1 h1:shLQSRRSCCPj3f2gpwzGw
 github.com/jmespath/go-jmespath/internal/testify v1.5.1/go.mod h1:L3OGu8Wl2/fWfCI6z80xFu9LTZmf1ZRjMHUOPmWr69U=
 github.com/jorgemarey/autopilot v0.2.1 h1:gkYf2oPVuBcxdRqnGE7V0HhSQd87xz/Y7Ae3x9PDvgY=
 github.com/jorgemarey/autopilot v0.2.1/go.mod h1:DNRWLSaD36RQBIlIGUoNHcjq/++uIQxoNQBg54pZT+Y=
-github.com/jorgemarey/sentinel v0.1.2 h1:e3Q/OjMaoA591/dbXrWJNcRu19vFolRMgvJnjSSUXRQ=
-github.com/jorgemarey/sentinel v0.1.2/go.mod h1:hb0TSFfCS/HZzuVY05wdS37En1AcaKOubvJdgy/xb2k=
+github.com/jorgemarey/sentinel v0.1.3 h1:FPEs1S2vImxLswNkARS5lsbP7krwODDZjG5ov7ISaFQ=
+github.com/jorgemarey/sentinel v0.1.3/go.mod h1:hb0TSFfCS/HZzuVY05wdS37En1AcaKOubvJdgy/xb2k=
 github.com/joyent/triton-go v0.0.0-20180628001255-830d2b111e62/go.mod h1:U+RSyWxWd04xTqnuOQxnai7XGS2PrPY2cfGoDKtMHjA=
 github.com/joyent/triton-go v0.0.0-20190112182421-51ffac552869 h1:BvV6PYcRz0yGnWXNZrd5wginNT1GfFfPvvWpPbjfFL8=
 github.com/joyent/triton-go v0.0.0-20190112182421-51ffac552869/go.mod h1:U+RSyWxWd04xTqnuOQxnai7XGS2PrPY2cfGoDKtMHjA=
