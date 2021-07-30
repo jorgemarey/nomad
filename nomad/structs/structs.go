@@ -397,6 +397,9 @@ type WriteRequest struct {
 	// AuthToken is secret portion of the ACL token used for the request
 	AuthToken string
 
+	// IdempotencyToken can be used to ensure the write is idempotent.
+	IdempotencyToken string
+
 	InternalRpcInfo
 }
 
@@ -4028,6 +4031,10 @@ type Job struct {
 	// parameterized job.
 	Dispatched bool
 
+	// DispatchIdempotencyToken is optionally used to ensure that a dispatched job does not have any
+	// non-terminal siblings which have the same token value.
+	DispatchIdempotencyToken string
+
 	// Payload is the payload supplied when the job was dispatched.
 	Payload []byte
 
@@ -6372,13 +6379,11 @@ func (tg *TaskGroup) validateNetworks() error {
 	return mErr.ErrorOrNil()
 }
 
-// validateServices runs Service.Validate() on group-level services,
-// checks that group services do not conflict with task services and that
+// validateServices runs Service.Validate() on group-level services, checks
 // group service checks that refer to tasks only refer to tasks that exist.
 func (tg *TaskGroup) validateServices() error {
 	var mErr multierror.Error
 	knownTasks := make(map[string]struct{})
-	knownServices := make(map[string]struct{})
 
 	// Create a map of known tasks and their services so we can compare
 	// vs the group-level services and checks
@@ -6388,15 +6393,11 @@ func (tg *TaskGroup) validateServices() error {
 			continue
 		}
 		for _, service := range task.Services {
-			// if _, ok := knownServices[service.Name+service.PortLabel]; ok {
-			// 	mErr.Errors = append(mErr.Errors, fmt.Errorf("Service %s is duplicate", service.Name))
-			// }
 			for _, check := range service.Checks {
 				if check.TaskName != "" {
 					mErr.Errors = append(mErr.Errors, fmt.Errorf("Check %s is invalid: only task group service checks can be assigned tasks", check.Name))
 				}
 			}
-			knownServices[service.Name+service.PortLabel] = struct{}{}
 		}
 	}
 	for i, service := range tg.Services {
@@ -6411,10 +6412,6 @@ func (tg *TaskGroup) validateServices() error {
 		if service.AddressMode == AddressModeDriver {
 			mErr.Errors = append(mErr.Errors, fmt.Errorf("service %q cannot use address_mode=\"driver\", only services defined in a \"task\" block can use this mode", service.Name))
 		}
-		// if _, ok := knownServices[service.Name+service.PortLabel]; ok {
-		// 	mErr.Errors = append(mErr.Errors, fmt.Errorf("Service %s is duplicate", service.Name))
-		// }
-		knownServices[service.Name+service.PortLabel] = struct{}{}
 		for _, check := range service.Checks {
 			if check.TaskName != "" {
 				if check.Type != ServiceCheckScript && check.Type != ServiceCheckGRPC {
@@ -8288,10 +8285,9 @@ type Constraint struct {
 	LTarget string // Left-hand target
 	RTarget string // Right-hand target
 	Operand string // Constraint operand (<=, <, =, !=, >, >=), contains, near
-	str     string // Memoized string
 }
 
-// Equals checks if two constraints are equal
+// Equals checks if two constraints are equal.
 func (c *Constraint) Equals(o *Constraint) bool {
 	return c == o ||
 		c.LTarget == o.LTarget &&
@@ -8299,6 +8295,7 @@ func (c *Constraint) Equals(o *Constraint) bool {
 			c.Operand == o.Operand
 }
 
+// Equal is like Equals but with one less s.
 func (c *Constraint) Equal(o *Constraint) bool {
 	return c.Equals(o)
 }
@@ -8307,17 +8304,15 @@ func (c *Constraint) Copy() *Constraint {
 	if c == nil {
 		return nil
 	}
-	nc := new(Constraint)
-	*nc = *c
-	return nc
+	return &Constraint{
+		LTarget: c.LTarget,
+		RTarget: c.RTarget,
+		Operand: c.Operand,
+	}
 }
 
 func (c *Constraint) String() string {
-	if c.str != "" {
-		return c.str
-	}
-	c.str = fmt.Sprintf("%s %s %s", c.LTarget, c.Operand, c.RTarget)
-	return c.str
+	return fmt.Sprintf("%s %s %s", c.LTarget, c.Operand, c.RTarget)
 }
 
 func (c *Constraint) Validate() error {
@@ -8411,10 +8406,9 @@ type Affinity struct {
 	RTarget string // Right-hand target
 	Operand string // Affinity operand (<=, <, =, !=, >, >=), set_contains_all, set_contains_any
 	Weight  int8   // Weight applied to nodes that match the affinity. Can be negative
-	str     string // Memoized string
 }
 
-// Equal checks if two affinities are equal
+// Equals checks if two affinities are equal.
 func (a *Affinity) Equals(o *Affinity) bool {
 	return a == o ||
 		a.LTarget == o.LTarget &&
@@ -8431,17 +8425,16 @@ func (a *Affinity) Copy() *Affinity {
 	if a == nil {
 		return nil
 	}
-	na := new(Affinity)
-	*na = *a
-	return na
+	return &Affinity{
+		LTarget: a.LTarget,
+		RTarget: a.RTarget,
+		Operand: a.Operand,
+		Weight:  a.Weight,
+	}
 }
 
 func (a *Affinity) String() string {
-	if a.str != "" {
-		return a.str
-	}
-	a.str = fmt.Sprintf("%s %s %s %v", a.LTarget, a.Operand, a.RTarget, a.Weight)
-	return a.str
+	return fmt.Sprintf("%s %s %s %v", a.LTarget, a.Operand, a.RTarget, a.Weight)
 }
 
 func (a *Affinity) Validate() error {

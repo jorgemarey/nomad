@@ -2,23 +2,19 @@
 @import '~@hashicorp/mktg-global-styles/style.css';
 @import '~@hashicorp/mktg-global-styles/_temporary-to-remove/layout.css';
 @import '~@hashicorp/mktg-global-styles/_temporary-to-remove/tables.css';
-@import '~@hashicorp/nextjs-scripts/prism/style.css';
 
 :root {
   --highlight-color: var(--nomad);
 }
 
 /* Global Transpiled Components */
-@import '~@hashicorp/react-alert/dist/style.css';
 @import '~@hashicorp/react-alert-banner/style.css';
 @import '~@hashicorp/react-button/styles/index.css';
 @import '~@hashicorp/react-call-to-action/style.css';
-@import '~@hashicorp/react-code-block/style.css';
 @import '~@hashicorp/react-consent-manager/style.css';
 @import '~@hashicorp/react-toggle/style.css';
 @import '~@hashicorp/react-content/style.css';
 @import '~@hashicorp/react-docs-page/style.css';
-@import '~@hashicorp/react-enterprise-alert/style.css';
 @import '~@hashicorp/react-featured-slider/style.css';
 @import '~@hashicorp/react-hero/style.css';
 @import '~@hashicorp/react-learn-callout/style.css';

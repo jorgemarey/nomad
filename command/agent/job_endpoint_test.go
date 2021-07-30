@@ -9,13 +9,14 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
+	"github.com/kr/pretty"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	api "github.com/hashicorp/nomad/api"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
-	"github.com/kr/pretty"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestHTTP_JobsList(t *testing.T) {
@@ -1454,8 +1455,9 @@ func TestHTTP_JobDispatch(t *testing.T) {
 		respW := httptest.NewRecorder()
 		args2 := structs.JobDispatchRequest{
 			WriteRequest: structs.WriteRequest{
-				Region:    "global",
-				Namespace: structs.DefaultNamespace,
+				Region:           "global",
+				Namespace:        structs.DefaultNamespace,
+				IdempotencyToken: "foo",
 			},
 		}
 		buf := encodeReq(args2)
@@ -1841,6 +1843,77 @@ func TestJobs_RegionForJob(t *testing.T) {
 				job, tc.queryRegion, tc.apiRegion, agentRegion)
 			require.Equal(t, tc.expectedRequestRegion, requestRegion)
 			require.Equal(t, tc.expectedJobRegion, jobRegion)
+		})
+	}
+}
+
+func TestJobs_NamespaceForJob(t *testing.T) {
+	t.Parallel()
+
+	// test namespace for pointer inputs
+	ns := "dev"
+
+	cases := []struct {
+		name           string
+		job            *api.Job
+		queryNamespace string
+		apiNamespace   string
+		expected       string
+	}{
+		{
+			name:     "no namespace provided",
+			job:      &api.Job{},
+			expected: structs.DefaultNamespace,
+		},
+
+		{
+			name:     "jobspec has namespace",
+			job:      &api.Job{Namespace: &ns},
+			expected: "dev",
+		},
+
+		{
+			name:           "-namespace flag overrides empty job namespace",
+			job:            &api.Job{},
+			queryNamespace: "prod",
+			expected:       "prod",
+		},
+
+		{
+			name:           "-namespace flag overrides job namespace",
+			job:            &api.Job{Namespace: &ns},
+			queryNamespace: "prod",
+			expected:       "prod",
+		},
+
+		{
+			name:           "-namespace flag overrides job namespace even if default",
+			job:            &api.Job{Namespace: &ns},
+			queryNamespace: structs.DefaultNamespace,
+			expected:       structs.DefaultNamespace,
+		},
+
+		{
+			name:         "API param overrides empty job namespace",
+			job:          &api.Job{},
+			apiNamespace: "prod",
+			expected:     "prod",
+		},
+
+		{
+			name:           "-namespace flag overrides API param",
+			job:            &api.Job{Namespace: &ns},
+			queryNamespace: "prod",
+			apiNamespace:   "whatever",
+			expected:       "prod",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expected,
+				namespaceForJob(tc.job.Namespace, tc.queryNamespace, tc.apiNamespace),
+			)
 		})
 	}
 }

@@ -9,7 +9,7 @@ import formatHost from 'nomad-ui/utils/format-host';
 
 export function findLeader(schema) {
   const agent = schema.agents.first();
-  return formatHost(agent.address, agent.tags.port);
+  return formatHost(agent.member.Address, agent.member.Tags.port);
 }
 
 export function filesForPath(allocFiles, filterPath) {
@@ -182,6 +182,27 @@ export default function() {
     return okEmpty();
   });
 
+  this.post('/job/:id/dispatch', function(schema, { params }) {
+    // Create the child job
+    const parent = schema.jobs.find(params.id);
+
+    // Use the server instead of the schema to leverage the job factory
+    let dispatched = server.create('job', 'parameterizedChild', {
+      parentId: parent.id,
+      namespaceId: parent.namespaceId,
+      namespace: parent.namespace,
+      createAllocations: parent.createAllocations,
+    });
+
+    return new Response(
+      200,
+      {},
+      JSON.stringify({
+        DispatchedJobID: dispatched.id,
+      })
+    );
+  });
+
   this.post('/job/:id/revert', function({ jobs }, { requestBody }) {
     const { JobID, JobVersion } = JSON.parse(requestBody);
     const job = jobs.find(JobID);
@@ -335,14 +356,12 @@ export default function() {
     const firstRegion = regions.first();
     return {
       ServerRegion: firstRegion ? firstRegion.id : null,
-      Members: this.serialize(agents.all()),
+      Members: this.serialize(agents.all()).map(({ member }) => ({ ...member })),
     };
   });
 
   this.get('/agent/self', function({ agents }) {
-    return {
-      member: this.serialize(agents.first()),
-    };
+    return agents.first();
   });
 
   this.get('/agent/monitor', function({ agents, nodes }, { queryParams }) {

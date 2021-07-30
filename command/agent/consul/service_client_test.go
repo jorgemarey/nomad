@@ -1,6 +1,7 @@
 package consul
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -598,4 +599,44 @@ func TestSyncLogic_proxyUpstreamsDifferent(t *testing.T) {
 			upstream2(),
 		}
 	})
+}
+
+func TestSyncReason_String(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "periodic", fmt.Sprintf("%s", syncPeriodic))
+	require.Equal(t, "shutdown", fmt.Sprintf("%s", syncShutdown))
+	require.Equal(t, "operations", fmt.Sprintf("%s", syncNewOps))
+	require.Equal(t, "unexpected", fmt.Sprintf("%s", syncReason(128)))
+}
+
+func TestSyncOps_empty(t *testing.T) {
+	t.Parallel()
+
+	try := func(ops *operations, exp bool) {
+		require.Equal(t, exp, ops.empty())
+	}
+
+	try(&operations{regServices: make([]*api.AgentServiceRegistration, 1)}, false)
+	try(&operations{regChecks: make([]*api.AgentCheckRegistration, 1)}, false)
+	try(&operations{deregServices: make([]string, 1)}, false)
+	try(&operations{deregChecks: make([]string, 1)}, false)
+	try(&operations{}, true)
+	try(nil, true)
+}
+
+func TestSyncLogic_maybeSidecarProxyCheck(t *testing.T) {
+	try := func(input string, exp bool) {
+		result := maybeSidecarProxyCheck(input)
+		require.Equal(t, exp, result)
+	}
+
+	try("service:_nomad-task-2f5fb517-57d4-44ee-7780-dc1cb6e103cd-group-api-count-api-9001-sidecar-proxy", true)
+	try("service:_nomad-task-2f5fb517-57d4-44ee-7780-dc1cb6e103cd-group-api-count-api-9001-sidecar-proxy:1", true)
+	try("service:_nomad-task-2f5fb517-57d4-44ee-7780-dc1cb6e103cd-group-api-count-api-9001-sidecar-proxy:2", true)
+	try("service:_nomad-task-2f5fb517-57d4-44ee-7780-dc1cb6e103cd-group-api-count-api-9001", false)
+	try("_nomad-task-2f5fb517-57d4-44ee-7780-dc1cb6e103cd-group-api-count-api-9001-sidecar-proxy:1", false)
+	try("service:_nomad-task-2f5fb517-57d4-44ee-7780-dc1cb6e103cd-group-api-count-api-9001-sidecar-proxy:X", false)
+	try("service:_nomad-task-2f5fb517-57d4-44ee-7780-dc1cb6e103cd-group-api-count-api-9001-sidecar-proxy: ", false)
+	try("service", false)
 }

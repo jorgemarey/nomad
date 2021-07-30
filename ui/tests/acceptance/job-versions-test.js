@@ -175,4 +175,50 @@ module('Acceptance | job versions (with client token)', function(hooks) {
 
     window.localStorage.clear();
   });
+
+  test('reversion buttons are available when the client token has permissions', async function(assert) {
+    const REVERT_NAMESPACE = 'revert-namespace';
+    window.localStorage.clear();
+    const clientToken = server.create('token');
+
+    server.create('namespace', { id: REVERT_NAMESPACE });
+
+    const job = server.create('job', {
+      groupCount: 0,
+      createAllocations: false,
+      shallow: true,
+      noActiveDeployment: true,
+      namespaceId: REVERT_NAMESPACE,
+    });
+
+    const policy = server.create('policy', {
+      id: 'something',
+      name: 'something',
+      rulesJSON: {
+        Namespaces: [
+          {
+            Name: REVERT_NAMESPACE,
+            Capabilities: ['submit-job'],
+          },
+        ],
+      },
+    });
+
+    clientToken.policyIds = [policy.id];
+    clientToken.save();
+
+    window.localStorage.nomadTokenSecret = clientToken.secretId;
+
+    versions = server.db.jobVersions.where({ jobId: job.id });
+    await Versions.visit({ id: job.id, namespace: REVERT_NAMESPACE });
+    const versionRowWithReversion = Versions.versions.filter(
+      versionRow => versionRow.revertToButton.isPresent
+    )[0];
+
+    if (versionRowWithReversion) {
+      assert.ok(versionRowWithReversion.revertToButtonIsDisabled);
+    } else {
+      assert.expect(0);
+    }
+  });
 });
