@@ -2707,6 +2707,67 @@ func TestClientEndpoint_CreateNodeEvals(t *testing.T) {
 	}
 }
 
+// TestClientEndpoint_CreateNodeEvals_MultipleNSes asserts that evals are made
+// for all jobs across namespaces
+func TestClientEndpoint_CreateNodeEvals_MultipleNSes(t *testing.T) {
+	t.Parallel()
+
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
+	testutil.WaitForLeader(t, s1.RPC)
+
+	state := s1.fsm.State()
+
+	idx := uint64(3)
+	ns1 := mock.Namespace()
+	err := state.UpsertNamespaces(idx, []*structs.Namespace{ns1})
+	require.NoError(t, err)
+	idx++
+
+	node := mock.Node()
+	err = state.UpsertNode(structs.MsgTypeTestSetup, idx, node)
+	require.NoError(t, err)
+	idx++
+
+	// Inject a fake system job.
+	defaultJob := mock.SystemJob()
+	err = state.UpsertJob(structs.MsgTypeTestSetup, idx, defaultJob)
+	require.NoError(t, err)
+	idx++
+
+	nsJob := mock.SystemJob()
+	nsJob.ID = defaultJob.ID
+	nsJob.Namespace = ns1.Name
+	err = state.UpsertJob(structs.MsgTypeTestSetup, idx, nsJob)
+	require.NoError(t, err)
+	idx++
+
+	// Create some evaluations
+	evalIDs, index, err := s1.staticEndpoints.Node.createNodeEvals(node.ID, 1)
+	require.NoError(t, err)
+	require.NotZero(t, index)
+	require.Len(t, evalIDs, 2)
+
+	byNS := map[string]*structs.Evaluation{}
+	for _, evalID := range evalIDs {
+		eval, err := state.EvalByID(nil, evalID)
+		require.NoError(t, err)
+		byNS[eval.Namespace] = eval
+	}
+
+	require.Len(t, byNS, 2)
+
+	defaultNSEval := byNS[defaultJob.Namespace]
+	require.NotNil(t, defaultNSEval)
+	require.Equal(t, defaultJob.ID, defaultNSEval.JobID)
+	require.Equal(t, defaultJob.Namespace, defaultNSEval.Namespace)
+
+	otherNSEval := byNS[nsJob.Namespace]
+	require.NotNil(t, otherNSEval)
+	require.Equal(t, nsJob.ID, otherNSEval.JobID)
+	require.Equal(t, nsJob.Namespace, otherNSEval.Namespace)
+}
+
 func TestClientEndpoint_Evaluate(t *testing.T) {
 	t.Parallel()
 
@@ -3603,98 +3664,55 @@ func TestClientEndpoint_EmitEvents(t *testing.T) {
 	require.False(len(out.Events) < 2)
 }
 
-func TestClientEndpoint_GetAllocs_ACL_Pro(t *testing.T) {
-	t.Parallel()
-	s1, root, cleanupS1 := TestACLServer(t, nil)
-	defer cleanupS1()
-	codec := rpcClient(t, s1)
-	testutil.WaitForLeader(t, s1.RPC)
-	assert := assert.New(t)
+func TestClientEndpoint_ShouldCreateNodeEval(t *testing.T) {
+	t.Run("spurious changes don't require eval", func(t *testing.T) {
+		n1 := mock.Node()
+		n2 := n1.Copy()
+		n2.SecretID = uuid.Generate()
+		n2.Links["vault"] = "links don't get interpolated"
+		n2.ModifyIndex++
 
-	// Create the namespaces
-	ns1 := mock.Namespace()
-	ns2 := mock.Namespace()
-	ns1.Name = "altnamespace"
-	ns2.Name = "should-only-be-displayed-for-root-ns"
+		require.False(t, shouldCreateNodeEval(n1, n2))
+	})
 
-	// Create the allocs
-	allocDefaultNS := mock.Alloc()
-	allocAltNS := mock.Alloc()
-	allocAltNS.Namespace = ns1.Name
-	allocOtherNS := mock.Alloc()
-	allocOtherNS.Namespace = ns2.Name
-
-	node := mock.Node()
-	allocDefaultNS.NodeID = node.ID
-	allocAltNS.NodeID = node.ID
-	allocOtherNS.NodeID = node.ID
-	state := s1.fsm.State()
-	assert.Nil(state.UpsertNamespaces(1, []*structs.Namespace{ns1, ns2}), "UpsertNamespaces")
-	assert.Nil(state.UpsertNode(2, node), "UpsertNode")
-	assert.Nil(state.UpsertJobSummary(3, mock.JobSummary(allocDefaultNS.JobID)), "UpsertJobSummary")
-	assert.Nil(state.UpsertJobSummary(4, mock.JobSummary(allocAltNS.JobID)), "UpsertJobSummary")
-	assert.Nil(state.UpsertJobSummary(5, mock.JobSummary(allocOtherNS.JobID)), "UpsertJobSummary")
-	allocs := []*structs.Allocation{allocDefaultNS, allocAltNS, allocOtherNS}
-	assert.Nil(state.UpsertAllocs(6, allocs), "UpsertAllocs")
-
-	// Create the namespace policy and tokens
-	validDefaultToken := mock.CreatePolicyAndToken(t, state, 1001, "test-default-valid", mock.NodePolicy(acl.PolicyRead)+
-		mock.NamespacePolicy(structs.DefaultNamespace, "", []string{acl.NamespaceCapabilityReadJob}))
-	validNoNSToken := mock.CreatePolicyAndToken(t, state, 1003, "test-alt-valid", mock.NodePolicy(acl.PolicyRead))
-	invalidToken := mock.CreatePolicyAndToken(t, state, 1004, "test-invalid",
-		mock.NamespacePolicy(structs.DefaultNamespace, "", []string{acl.NamespaceCapabilityReadJob}))
-
-	// Lookup the node without a token and expect failure
-	req := &structs.NodeSpecificRequest{
-		NodeID:       node.ID,
-		QueryOptions: structs.QueryOptions{Region: "global"},
-	}
-	{
-		var resp structs.NodeAllocsResponse
-		err := msgpackrpc.CallWithCodec(codec, "Node.GetAllocs", req, &resp)
-		assert.NotNil(err, "RPC")
-		assert.Equal(err.Error(), structs.ErrPermissionDenied.Error())
+	positiveCases := []struct {
+		name     string
+		updateFn func(n *structs.Node)
+	}{
+		{
+			"data center changes",
+			func(n *structs.Node) { n.Datacenter += "u" },
+		},
+		{
+			"attribute change",
+			func(n *structs.Node) { n.Attributes["test.attribute"] = "something" },
+		},
+		{
+			"meta change",
+			func(n *structs.Node) { n.Meta["test.meta"] = "something" },
+		},
+		{
+			"drivers health changed",
+			func(n *structs.Node) { n.Drivers["exec"].Detected = false },
+		},
+		{
+			"new drivers",
+			func(n *structs.Node) {
+				n.Drivers["newdriver"] = &structs.DriverInfo{
+					Detected: true,
+					Healthy:  true,
+				}
+			},
+		},
 	}
 
-	// Try with a valid token for the default namespace
-	req.AuthToken = validDefaultToken.SecretID
-	{
-		var resp structs.NodeAllocsResponse
-		assert.Nil(msgpackrpc.CallWithCodec(codec, "Node.GetAllocs", req, &resp), "RPC")
-		assert.Len(resp.Allocs, 1)
-		assert.Equal(allocDefaultNS.ID, resp.Allocs[0].ID)
-	}
+	for _, c := range positiveCases {
+		t.Run(c.name, func(t *testing.T) {
+			n1 := mock.Node()
+			n2 := n1.Copy()
+			c.updateFn(n2)
 
-	// Try with a valid token for a namespace with no allocs on this node
-	req.AuthToken = validNoNSToken.SecretID
-	{
-		var resp structs.NodeAllocsResponse
-		assert.Nil(msgpackrpc.CallWithCodec(codec, "Node.GetAllocs", req, &resp), "RPC")
-		assert.Len(resp.Allocs, 0)
-	}
-
-	// Try with a invalid token
-	req.AuthToken = invalidToken.SecretID
-	{
-		var resp structs.NodeAllocsResponse
-		err := msgpackrpc.CallWithCodec(codec, "Node.GetAllocs", req, &resp)
-		assert.NotNil(err, "RPC")
-		assert.Equal(err.Error(), structs.ErrPermissionDenied.Error())
-	}
-
-	// Try with a root token
-	req.AuthToken = root.SecretID
-	{
-		var resp structs.NodeAllocsResponse
-		assert.Nil(msgpackrpc.CallWithCodec(codec, "Node.GetAllocs", req, &resp), "RPC")
-		assert.Len(resp.Allocs, 3)
-		for _, alloc := range resp.Allocs {
-			switch alloc.ID {
-			case allocDefaultNS.ID, allocAltNS.ID, allocOtherNS.ID:
-				// expected
-			default:
-				t.Errorf("unexpected alloc %q for namespace %q", alloc.ID, alloc.Namespace)
-			}
-		}
+			require.Truef(t, shouldCreateNodeEval(n1, n2), "node changed but without node eval: %v", pretty.Diff(n1, n2))
+		})
 	}
 }

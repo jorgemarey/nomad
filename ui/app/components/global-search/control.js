@@ -46,6 +46,7 @@ export default class GlobalSearchControl extends Component {
       body: JSON.stringify({
         Text: string,
         Context: 'all',
+        Namespace: '*',
       }),
     });
 
@@ -63,7 +64,7 @@ export default class GlobalSearchControl extends Component {
         type: 'job',
         id,
         namespace,
-        label: name,
+        label: `${namespace} > ${name}`,
       }));
 
     const nodeResults = allNodeResults
@@ -76,10 +77,10 @@ export default class GlobalSearchControl extends Component {
 
     const allocationResults = allAllocationResults
       .slice(0, MAXIMUM_RESULTS)
-      .map(({ ID: name, Scope: [, id] }) => ({
+      .map(({ ID: name, Scope: [namespace, id] }) => ({
         type: 'allocation',
         id,
-        label: name,
+        label: `${namespace} > ${name}`,
       }));
 
     const taskGroupResults = allTaskGroupResults
@@ -89,7 +90,7 @@ export default class GlobalSearchControl extends Component {
         id,
         namespace,
         jobId,
-        label: id,
+        label: `${namespace} > ${jobId} > ${id}`,
       }));
 
     const csiPluginResults = allCSIPluginResults.slice(0, MAXIMUM_RESULTS).map(({ ID: id }) => ({
