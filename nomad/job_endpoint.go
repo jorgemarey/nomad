@@ -295,13 +295,17 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 
 	for ns, entries := range args.Job.ConfigEntries() {
 		for service, entry := range entries.Ingress {
-			if errCE := j.srv.consulConfigEntries.SetIngressCE(ctx, ns, service, entry); errCE != nil {
-				return errCE
+			if entry != nil && len(entry.Listeners) > 0 { // Only configure the gateway when there's config, if not, leave the it untouched
+				if errCE := j.srv.consulConfigEntries.SetIngressCE(ctx, ns, service, entry); errCE != nil {
+					return errCE
+				}
 			}
 		}
 		for service, entry := range entries.Terminating {
-			if errCE := j.srv.consulConfigEntries.SetTerminatingCE(ctx, ns, service, entry); errCE != nil {
-				return errCE
+			if entry != nil && len(entry.Services) > 0 { // Only configure the gateway when there's config, if not, leave the it untouched
+				if errCE := j.srv.consulConfigEntries.SetTerminatingCE(ctx, ns, service, entry); errCE != nil {
+					return errCE
+				}
 			}
 		}
 	}
