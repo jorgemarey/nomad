@@ -1259,6 +1259,7 @@ func ApiServicesToStructs(in []*api.Service, group bool) []*structs.Service {
 			AddressMode:       s.AddressMode,
 			Meta:              helper.CopyMapStringString(s.Meta),
 			CanaryMeta:        helper.CopyMapStringString(s.CanaryMeta),
+			TaggedAddresses:   helper.CopyMapStringString(s.TaggedAddresses),
 			OnUpdate:          s.OnUpdate,
 		}
 

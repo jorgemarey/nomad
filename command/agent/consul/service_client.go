@@ -215,6 +215,8 @@ func different(wanted *api.AgentServiceRegistration, existing *api.AgentService,
 		return true
 	case !reflect.DeepEqual(wanted.Meta, existing.Meta):
 		return true
+	case !reflect.DeepEqual(wanted.TaggedAddresses, existing.TaggedAddresses):
+		return true
 	case tagsDifferent(wanted.Tags, existing.Tags):
 		return true
 	case connectSidecarDifferent(wanted, sidecar):
@@ -1138,6 +1140,19 @@ func (c *ServiceClient) serviceRegs(ops *operations, service *structs.Service, w
 		}
 	}
 
+	var taggedAddresses map[string]api.ServiceAddress
+	for k, v := range service.TaggedAddresses {
+		sa, err := parseAddress(v)
+		if err != nil {
+			c.logger.Warn("failed to parse advertise address", "name", k, "adrress", v)
+			continue
+		}
+		if taggedAddresses == nil {
+			taggedAddresses = make(map[string]api.ServiceAddress)
+		}
+		taggedAddresses[k] = sa
+	}
+
 	// Build the Consul Service registration request
 	serviceReg := &api.AgentServiceRegistration{
 		Kind:              kind,
@@ -1149,6 +1164,7 @@ func (c *ServiceClient) serviceRegs(ops *operations, service *structs.Service, w
 		Address:           ip,
 		Port:              port,
 		Meta:              meta,
+		TaggedAddresses:   taggedAddresses,
 		Connect:           connect, // will be nil if no Connect stanza
 		Proxy:             gateway, // will be nil if no Connect Gateway stanza
 	}

@@ -141,6 +141,20 @@ func parseService(o *ast.ObjectItem) (*api.Service, error) {
 		}
 	}
 
+	// Parse out tagged_addresses fields. These are in HCL as a list so we need
+	// to iterate over them and merge them.
+	if taO := listVal.Filter("tagged_addresses"); len(taO.Items) > 0 {
+		for _, o := range taO.Elem().Items {
+			var m map[string]interface{}
+			if err := hcl.DecodeObject(&m, o.Val); err != nil {
+				return nil, err
+			}
+			if err := mapstructure.WeakDecode(m, &service.TaggedAddresses); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	return &service, nil
 }
 
