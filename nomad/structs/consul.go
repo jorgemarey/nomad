@@ -78,9 +78,10 @@ func (j *Job) ConsulUsages() map[string]*ConsulUsage {
 			for _, service := range task.Services {
 				m[namespace].Services = append(m[namespace].Services, service.Name)
 			}
-			if len(task.Templates) > 0 {
-				m[namespace].KV = true
-			}
+			// MEIGAS: todo, temporarily disable KV check so clients can keep using current tokens
+			// if len(task.Templates) > 0 {
+			// 	m[namespace].KV = true
+			// }
 		}
 	}
 
