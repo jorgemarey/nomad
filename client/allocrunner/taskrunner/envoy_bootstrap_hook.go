@@ -270,6 +270,7 @@ func (h *envoyBootstrapHook) Prestart(ctx context.Context, req *ifs.TaskPrestart
 
 	bootstrap := h.newEnvoyBootstrapArgs(h.alloc.TaskGroup, service, grpcAddr, envoyAdminBind, envoyReadyBind, siToken, bootstrapFilePath)
 	bootstrapArgs := bootstrap.args()
+	// TODO: meigas req.TaskEnv.List()...
 	bootstrapEnv := bootstrap.env(append(os.Environ(), h.groupEnv()...))
 
 	// keep track of latest error returned from exec-ing consul envoy bootstrap
