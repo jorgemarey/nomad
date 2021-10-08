@@ -1904,7 +1904,8 @@ func (e *ConsulIngressConfigEntry) Validate() error {
 	}
 
 	if len(e.Listeners) == 0 {
-		return fmt.Errorf("Consul Ingress Gateway requires at least one listener")
+		return nil
+		// return fmt.Errorf("Consul Ingress Gateway requires at least one listener")
 	}
 
 	for _, listener := range e.Listeners {
@@ -2058,7 +2059,8 @@ func (e *ConsulTerminatingConfigEntry) Validate() error {
 	}
 
 	if len(e.Services) == 0 {
-		return fmt.Errorf("Consul Terminating Gateway requires at least one service")
+		return nil
+		// return fmt.Errorf("Consul Terminating Gateway requires at least one service")
 	}
 
 	for _, service := range e.Services {
