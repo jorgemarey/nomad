@@ -50,6 +50,7 @@ func parseService(o *ast.ObjectItem) (*api.Service, error) {
 		"task",
 		"meta",
 		"canary_meta",
+		"tagged_addresses",
 		"on_update",
 	}
 	if err := checkHCLKeys(o.Val, valid); err != nil {
@@ -67,6 +68,7 @@ func parseService(o *ast.ObjectItem) (*api.Service, error) {
 	delete(m, "connect")
 	delete(m, "meta")
 	delete(m, "canary_meta")
+	delete(m, "tagged_addresses")
 
 	if err := mapstructure.WeakDecode(m, &service); err != nil {
 		return nil, err
