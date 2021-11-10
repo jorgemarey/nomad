@@ -521,10 +521,13 @@ func (s *Service) Canonicalize(job string, taskGroup string, task string) {
 	}
 
 	s.Name = args.ReplaceEnv(s.Name, map[string]string{
-		"JOB":       job,
-		"TASKGROUP": taskGroup,
-		"TASK":      task,
-		"BASE":      fmt.Sprintf("%s-%s-%s", job, taskGroup, task),
+		"JOB":              job,
+		"NOMAD_JOB_NAME":   job,
+		"TASKGROUP":        taskGroup,
+		"NOMAD_GROUP_NAME": taskGroup,
+		"TASK":             task,
+		"NOMAD_TASK_NAME":  task,
+		"BASE":             fmt.Sprintf("%s-%s-%s", job, taskGroup, task),
 	})
 
 	for _, check := range s.Checks {
