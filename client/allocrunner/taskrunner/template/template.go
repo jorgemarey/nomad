@@ -107,6 +107,9 @@ type TaskTemplateManagerConfig struct {
 
 	// MaxTemplateEventRate is the maximum rate at which we should emit events.
 	MaxTemplateEventRate time.Duration
+
+	// retryRate is only used for testing and is used to increase the retry rate
+	retryRate time.Duration
 }
 
 // Validate validates the configuration.
@@ -823,18 +826,18 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 			}
 			if cc.TemplateConfig.WaitBounds.Min != nil {
 				if tmpl.Wait.Min != nil && *tmpl.Wait.Min < *cc.TemplateConfig.WaitBounds.Min {
-					tmpl.Wait.Min = &*cc.TemplateConfig.WaitBounds.Min
+					tmpl.Wait.Min = cc.TemplateConfig.WaitBounds.Min
 				}
 			}
 			if cc.TemplateConfig.WaitBounds.Max != nil {
 				if tmpl.Wait.Max != nil && *tmpl.Wait.Max > *cc.TemplateConfig.WaitBounds.Max {
-					tmpl.Wait.Max = &*cc.TemplateConfig.WaitBounds.Max
+					tmpl.Wait.Max = cc.TemplateConfig.WaitBounds.Max
 				}
 			}
 		}
 	}
+
 	retryAttemps := 10000 // ~ one week
-	conf.Consul.Retry.Attempts = &retryAttemps
 
 	// Set up the Consul config
 	if cc.ConsulConfig != nil {
@@ -861,7 +864,7 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 		if cc.ConsulConfig.Auth != "" {
 			parts := strings.SplitN(cc.ConsulConfig.Auth, ":", 2)
 			if len(parts) != 2 {
-				return nil, fmt.Errorf("Failed to parse Consul Auth config")
+				return nil, fmt.Errorf("failed to parse Consul Auth config")
 			}
 
 			conf.Consul.Auth = &ctconf.AuthConfig{
@@ -884,6 +887,9 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 			}
 		}
 	}
+	if conf.Consul.Retry.Attempts == nil {
+		conf.Consul.Retry.Attempts = &retryAttemps
+	}
 
 	// Get the Consul namespace from job/group config. This is the higher level
 	// of precedence if set (above agent config).
@@ -896,7 +902,6 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 	emptyStr := ""
 	conf.Vault.RenewToken = helper.BoolToPtr(false)
 	conf.Vault.Token = &emptyStr
-	conf.Vault.Retry.Attempts = &retryAttemps
 	if cc.VaultConfig != nil && cc.VaultConfig.IsEnabled() {
 		conf.Vault.Address = &cc.VaultConfig.Addr
 		conf.Vault.Token = &config.VaultToken
@@ -945,6 +950,9 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 				return nil, err
 			}
 		}
+	}
+	if conf.Vault.Retry.Attempts == nil {
+		conf.Vault.Retry.Attempts = &retryAttemps
 	}
 
 	conf.Finalize()

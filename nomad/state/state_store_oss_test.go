@@ -41,7 +41,7 @@ func TestStateStore_UpsertNamespaces(t *testing.T) {
 	assert.Nil(err)
 	assert.Equal(ns2, out)
 
-	index, err := state.Index(TableNamespace)
+	index, err := state.Index(TableNamespaces)
 	assert.Nil(err)
 	assert.EqualValues(1000, index)
 	assert.False(watchFired(ws))
@@ -72,7 +72,7 @@ func TestStateStore_DeleteNamespaces(t *testing.T) {
 	assert.Nil(err)
 	assert.Nil(out)
 
-	index, err := state.Index(TableNamespace)
+	index, err := state.Index(TableNamespaces)
 	assert.Nil(err)
 	assert.EqualValues(1001, index)
 	assert.False(watchFired(ws))
@@ -100,7 +100,7 @@ func TestStateStore_DeleteNamespaces_NonTerminalJobs(t *testing.T) {
 
 	job := mock.Job()
 	job.Namespace = ns.Name
-	assert.Nil(state.UpsertJob(1001, job))
+	assert.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 1001, job))
 
 	// Create a watchset so we can test that delete fires the watch
 	ws := memdb.NewWatchSet()
@@ -117,7 +117,7 @@ func TestStateStore_DeleteNamespaces_NonTerminalJobs(t *testing.T) {
 	assert.Nil(err)
 	assert.NotNil(out)
 
-	index, err := state.Index(TableNamespace)
+	index, err := state.Index(TableNamespaces)
 	assert.Nil(err)
 	assert.EqualValues(1000, index)
 	assert.False(watchFired(ws))
@@ -263,8 +263,8 @@ func TestStateStore_UpsertAlloc_AllocsByNamespace(t *testing.T) {
 	alloc4.Job.Namespace = ns2.Name
 
 	assert.Nil(state.UpsertNamespaces(998, []*structs.Namespace{ns1, ns2}))
-	assert.Nil(state.UpsertJob(999, alloc1.Job))
-	assert.Nil(state.UpsertJob(1000, alloc3.Job))
+	assert.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 999, alloc1.Job))
+	assert.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 1000, alloc3.Job))
 
 	// Create watchsets so we can test that update fires the watch
 	watches := []memdb.WatchSet{memdb.NewWatchSet(), memdb.NewWatchSet()}
@@ -273,7 +273,7 @@ func TestStateStore_UpsertAlloc_AllocsByNamespace(t *testing.T) {
 	_, err = state.AllocsByNamespace(watches[1], ns2.Name)
 	assert.Nil(err)
 
-	assert.Nil(state.UpsertAllocs(1001, []*structs.Allocation{alloc1, alloc2, alloc3, alloc4}))
+	assert.Nil(state.UpsertAllocs(structs.MsgTypeTestSetup, 1001, []*structs.Allocation{alloc1, alloc2, alloc3, alloc4}))
 	assert.True(watchFired(watches[0]))
 	assert.True(watchFired(watches[1]))
 
@@ -417,10 +417,10 @@ func TestStateStore_JobsByNamespace(t *testing.T) {
 	_, err = state.JobsByNamespace(watches[1], ns2.Name)
 	assert.Nil(err)
 
-	assert.Nil(state.UpsertJob(1001, job1))
-	assert.Nil(state.UpsertJob(1002, job2))
-	assert.Nil(state.UpsertJob(1003, job3))
-	assert.Nil(state.UpsertJob(1004, job4))
+	assert.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 1001, job1))
+	assert.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 1002, job2))
+	assert.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 1003, job3))
+	assert.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 1004, job4))
 	assert.True(watchFired(watches[0]))
 	assert.True(watchFired(watches[1]))
 
@@ -490,7 +490,7 @@ func TestStateStore_UpsertEvals_Namespace(t *testing.T) {
 	_, err = state.EvalsByNamespace(watches[1], ns2.Name)
 	assert.Nil(err)
 
-	assert.Nil(state.UpsertEvals(1001, []*structs.Evaluation{eval1, eval2, eval3, eval4}))
+	assert.Nil(state.UpsertEvals(structs.MsgTypeTestSetup, 1001, []*structs.Evaluation{eval1, eval2, eval3, eval4}))
 	assert.True(watchFired(watches[0]))
 	assert.True(watchFired(watches[1]))
 
@@ -551,7 +551,7 @@ func TestStateStore_EvalsByIDPrefix_Namespaces(t *testing.T) {
 	eval2.Namespace = ns2.Name
 
 	assert.Nil(state.UpsertNamespaces(998, []*structs.Namespace{ns1, ns2}))
-	assert.Nil(state.UpsertEvals(1000, []*structs.Evaluation{eval1, eval2}))
+	assert.Nil(state.UpsertEvals(structs.MsgTypeTestSetup, 1000, []*structs.Evaluation{eval1, eval2}))
 
 	gatherEvals := func(iter memdb.ResultIterator) []*structs.Evaluation {
 		var evals []*structs.Evaluation
@@ -654,8 +654,8 @@ func TestStateStore_JobsByIDPrefix_Namespaces(t *testing.T) {
 	job2.Namespace = ns2.Name
 
 	assert.Nil(state.UpsertNamespaces(998, []*structs.Namespace{ns1, ns2}))
-	assert.Nil(state.UpsertJob(1000, job1))
-	assert.Nil(state.UpsertJob(1001, job2))
+	assert.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 1000, job1))
+	assert.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 1001, job2))
 
 	gatherJobs := func(iter memdb.ResultIterator) []*structs.Job {
 		var jobs []*structs.Job
@@ -696,7 +696,7 @@ func TestStateStore_JobsByIDPrefix_Namespaces(t *testing.T) {
 	job3 := mock.Job()
 	job3.ID = "riak"
 	job3.Namespace = ns1.Name
-	assert.Nil(state.UpsertJob(1003, job3))
+	assert.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 1003, job3))
 	assert.True(watchFired(ws))
 
 	ws = memdb.NewWatchSet()
@@ -736,7 +736,7 @@ func TestStateStore_AllocsByIDPrefix_Namespaces(t *testing.T) {
 	alloc2.Namespace = ns2.Name
 
 	assert.Nil(state.UpsertNamespaces(998, []*structs.Namespace{ns1, ns2}))
-	assert.Nil(state.UpsertAllocs(1000, []*structs.Allocation{alloc1, alloc2}))
+	assert.Nil(state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc1, alloc2}))
 
 	gatherAllocs := func(iter memdb.ResultIterator) []*structs.Allocation {
 		var allocs []*structs.Allocation
