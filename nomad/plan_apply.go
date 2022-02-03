@@ -475,9 +475,18 @@ func evaluatePlanPlacements(pool *EvaluatePool, snap *state.StateSnapshot, plan 
 			return true
 		}
 		if !fit {
+			metrics.IncrCounterWithLabels([]string{"nomad", "plan", "node_rejected"}, 1, []metrics.Label{{Name: "node_id", Value: nodeID}})
+
 			// Log the reason why the node's allocations could not be made
 			if reason != "" {
-				logger.Debug("plan for node rejected", "node_id", nodeID, "reason", reason, "eval_id", plan.EvalID)
+				//TODO This was debug level and should return
+				//to debug level in the future. However until
+				//https://github.com/hashicorp/nomad/issues/9506
+				//is resolved this log line is the only way to
+				//monitor the disagreement between workers and
+				//the plan applier.
+				logger.Info("plan for node rejected, refer to https://www.nomadproject.io/s/port-plan-failure for more information",
+					"node_id", nodeID, "reason", reason, "eval_id", plan.EvalID)
 			}
 			// Set that this is a partial commit
 			partialCommit = true

@@ -1,4 +1,4 @@
-import { currentURL } from '@ember/test-helpers';
+import { currentURL, waitFor } from '@ember/test-helpers';
 import { module, test } from 'qunit';
 import { setupApplicationTest } from 'ember-qunit';
 import { setupMirage } from 'ember-cli-mirage/test-support';
@@ -57,26 +57,27 @@ module('Acceptance | task detail', function(hooks) {
     const job = server.db.jobs.find(jobId);
 
     const shortId = allocation.id.split('-')[0];
-
     assert.equal(Layout.breadcrumbFor('jobs.index').text, 'Jobs', 'Jobs is the first breadcrumb');
+
+    await waitFor('[data-test-job-breadcrumb]');
     assert.equal(
       Layout.breadcrumbFor('jobs.job.index').text,
-      job.name,
+      `Job ${job.name}`,
       'Job is the second breadcrumb'
     );
     assert.equal(
       Layout.breadcrumbFor('jobs.job.task-group').text,
-      taskGroup,
+      `Task Group ${taskGroup}`,
       'Task Group is the third breadcrumb'
     );
     assert.equal(
       Layout.breadcrumbFor('allocations.allocation').text,
-      shortId,
+      `Allocation ${shortId}`,
       'Allocation short id is the fourth breadcrumb'
     );
     assert.equal(
       Layout.breadcrumbFor('allocations.allocation.task').text,
-      task.name,
+      `Task ${task.name}`,
       'Task name is the fifth breadcrumb'
     );
 
@@ -298,7 +299,7 @@ module('Acceptance | task detail (different namespace)', function(hooks) {
     const job = server.db.jobs.find(jobId);
 
     await Layout.breadcrumbFor('jobs.index').visit();
-    assert.equal(currentURL(), '/jobs?namespace=default', 'Jobs breadcrumb links correctly');
+    assert.equal(currentURL(), '/jobs?namespace=*', 'Jobs breadcrumb links correctly');
 
     await Task.visit({ id: allocation.id, name: task.name });
     await Layout.breadcrumbFor('jobs.job.index').visit();

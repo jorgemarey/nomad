@@ -114,7 +114,8 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 	reply.Warnings = structs.MergeMultierrorWarnings(warnings...)
 
 	// Check job submission permissions
-	if aclObj, err := j.srv.ResolveToken(args.AuthToken); err != nil {
+	var aclObj *acl.ACL
+	if aclObj, err = j.srv.ResolveToken(args.AuthToken); err != nil {
 		return err
 	} else if aclObj != nil {
 		if !aclObj.AllowNsOp(args.RequestNamespace(), acl.NamespaceCapabilitySubmitJob) {
@@ -173,6 +174,11 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 			}
 			j.logger.Warn("policy override set for job", "job", args.Job.ID)
 		}
+	}
+
+	if ok, err := registrationsAreAllowed(aclObj, j.srv.State()); !ok || err != nil {
+		j.logger.Warn("job registration is currently disabled for non-management ACL")
+		return structs.ErrJobRegistrationDisabled
 	}
 
 	// Lookup the job
@@ -361,10 +367,18 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 
 	// If the job is periodic or parameterized, we don't create an eval.
 	if !(args.Job.IsPeriodic() || args.Job.IsParameterized()) {
+
+		// Initially set the eval priority to that of the job priority. If the
+		// user supplied an eval priority override, we subsequently use this.
+		evalPriority := args.Job.Priority
+		if args.EvalPriority > 0 {
+			evalPriority = args.EvalPriority
+		}
+
 		eval = &structs.Evaluation{
 			ID:          uuid.Generate(),
 			Namespace:   args.RequestNamespace(),
-			Priority:    args.Job.Priority,
+			Priority:    evalPriority,
 			Type:        args.Job.Type,
 			TriggeredBy: structs.EvalTriggerJobRegister,
 			JobID:       args.Job.ID,
@@ -836,10 +850,25 @@ func (j *Job) Deregister(args *structs.JobDeregisterRequest, reply *structs.JobD
 
 	// If the job is periodic or parameterized, we don't create an eval.
 	if job == nil || !(job.IsPeriodic() || job.IsParameterized()) {
+
+		// The evaluation priority is determined by several factors. It
+		// defaults to the job default priority and is overridden by the
+		// priority set on the job specification.
+		//
+		// If the user supplied an eval priority override, we subsequently
+		// use this.
+		priority := structs.JobDefaultPriority
+		if job != nil {
+			priority = job.Priority
+		}
+		if args.EvalPriority > 0 {
+			priority = args.EvalPriority
+		}
+
 		eval = &structs.Evaluation{
 			ID:          uuid.Generate(),
 			Namespace:   args.RequestNamespace(),
-			Priority:    structs.JobDefaultPriority,
+			Priority:    priority,
 			Type:        structs.JobTypeService,
 			TriggeredBy: structs.EvalTriggerJobDeregister,
 			JobID:       args.JobID,
@@ -1004,6 +1033,11 @@ func (j *Job) Scale(args *structs.JobScaleRequest, reply *structs.JobRegisterRes
 		}
 	}
 
+	if ok, err := registrationsAreAllowed(aclObj, j.srv.State()); !ok || err != nil {
+		j.logger.Warn("job scaling is currently disabled for non-management ACL")
+		return structs.ErrJobRegistrationDisabled
+	}
+
 	// Validate args
 	err = args.Validate()
 	if err != nil {
@@ -1085,31 +1119,7 @@ func (j *Job) Scale(args *structs.JobScaleRequest, reply *structs.JobRegisterRes
 		}
 
 		if deployment != nil && deployment.Active() && deployment.JobCreateIndex == job.CreateIndex {
-			msg := "job scaling blocked due to active deployment"
-			_, _, err := j.srv.raftApply(
-				structs.ScalingEventRegisterRequestType,
-				&structs.ScalingEventRequest{
-					Namespace: job.Namespace,
-					JobID:     job.ID,
-					TaskGroup: groupName,
-					ScalingEvent: &structs.ScalingEvent{
-						Time:          now,
-						PreviousCount: prevCount,
-						Message:       msg,
-						Error:         true,
-						Meta: map[string]interface{}{
-							"OriginalMessage": args.Message,
-							"OriginalCount":   *args.Count,
-							"OriginalMeta":    args.Meta,
-						},
-					},
-				},
-			)
-			if err != nil {
-				// just log the error, this was a best-effort attempt
-				j.logger.Error("scaling event create failed during block scaling action", "error", err)
-			}
-			return structs.NewErrRPCCoded(400, msg)
+			return structs.NewErrRPCCoded(400, "job scaling blocked due to active deployment")
 		}
 
 		// Commit the job update
@@ -1134,7 +1144,7 @@ func (j *Job) Scale(args *structs.JobScaleRequest, reply *structs.JobRegisterRes
 			eval := &structs.Evaluation{
 				ID:             uuid.Generate(),
 				Namespace:      namespace,
-				Priority:       structs.JobDefaultPriority,
+				Priority:       job.Priority, // Safe as nil check performed above.
 				Type:           structs.JobTypeService,
 				TriggeredBy:    structs.EvalTriggerScaling,
 				JobID:          args.JobID,
@@ -1308,6 +1318,22 @@ func allowedNSes(aclObj *acl.ACL, state *state.StateStore, allow func(ns string)
 	}
 
 	return r, nil
+}
+
+// registrationsAreAllowed checks that the scheduler is not in
+// RejectJobRegistration mode for load-shedding.
+func registrationsAreAllowed(aclObj *acl.ACL, state *state.StateStore) (bool, error) {
+	_, cfg, err := state.SchedulerConfig()
+	if err != nil {
+		return false, err
+	}
+	if cfg != nil && !cfg.RejectJobRegistration {
+		return true, nil
+	}
+	if aclObj != nil && aclObj.IsManagement() {
+		return true, nil
+	}
+	return false, nil
 }
 
 // List is used to list the jobs registered in the system
@@ -1764,7 +1790,7 @@ func (j *Job) Plan(args *structs.JobPlanRequest, reply *structs.JobPlanResponse)
 	}
 
 	// Create the scheduler and run it
-	sched, err := scheduler.NewScheduler(eval.Type, j.logger, snap, planner)
+	sched, err := scheduler.NewScheduler(eval.Type, j.logger, j.srv.workersEventCh, snap, planner)
 	if err != nil {
 		return err
 	}
@@ -1858,10 +1884,17 @@ func (j *Job) Dispatch(args *structs.JobDispatchRequest, reply *structs.JobDispa
 	defer metrics.MeasureSince([]string{"nomad", "job", "dispatch"}, time.Now())
 
 	// Check for submit-job permissions
-	if aclObj, err := j.srv.ResolveToken(args.AuthToken); err != nil {
+	var aclObj *acl.ACL
+	var err error
+	if aclObj, err = j.srv.ResolveToken(args.AuthToken); err != nil {
 		return err
 	} else if aclObj != nil && !aclObj.AllowNsOp(args.RequestNamespace(), acl.NamespaceCapabilityDispatchJob) {
 		return structs.ErrPermissionDenied
+	}
+
+	if ok, err := registrationsAreAllowed(aclObj, j.srv.State()); !ok || err != nil {
+		j.logger.Warn("job dispatch is currently disabled for non-management ACL")
+		return structs.ErrJobRegistrationDisabled
 	}
 
 	// Lookup the parameterized job

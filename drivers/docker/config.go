@@ -289,6 +289,7 @@ var (
 			hclspec.NewAttr("pull_activity_timeout", "string", false),
 			hclspec.NewLiteral(`"2m"`),
 		),
+		"pids_limit": hclspec.NewAttr("pids_limit", "number", false),
 		// disable_log_collection indicates whether docker driver should collect logs of docker
 		// task containers.  If true, nomad doesn't start docker_logger/logmon processes
 		"disable_log_collection": hclspec.NewAttr("disable_log_collection", "bool", false),
@@ -354,6 +355,7 @@ var (
 		"extra_hosts":        hclspec.NewAttr("extra_hosts", "list(string)", false),
 		"force_pull":         hclspec.NewAttr("force_pull", "bool", false),
 		"hostname":           hclspec.NewAttr("hostname", "string", false),
+		"init":               hclspec.NewAttr("init", "bool", false),
 		"interactive":        hclspec.NewAttr("interactive", "bool", false),
 		"ipc_mode":           hclspec.NewAttr("ipc_mode", "string", false),
 		"ipv4_address":       hclspec.NewAttr("ipv4_address", "string", false),
@@ -434,6 +436,7 @@ type TaskConfig struct {
 	ExtraHosts        []string           `codec:"extra_hosts"`
 	ForcePull         bool               `codec:"force_pull"`
 	Hostname          string             `codec:"hostname"`
+	Init              bool               `codec:"init"`
 	Interactive       bool               `codec:"interactive"`
 	IPCMode           string             `codec:"ipc_mode"`
 	IPv4Address       string             `codec:"ipv4_address"`
@@ -621,6 +624,7 @@ type DriverConfig struct {
 	infraImagePullTimeoutDuration time.Duration `codec:"-"`
 	DisableLogCollection          bool          `codec:"disable_log_collection"`
 	PullActivityTimeout           string        `codec:"pull_activity_timeout"`
+	PidsLimit                     int64         `codec:"pids_limit"`
 	pullActivityTimeoutDuration   time.Duration `codec:"-"`
 	ExtraLabels                   []string      `codec:"extra_labels"`
 	Logging                       LoggingConfig `codec:"logging"`

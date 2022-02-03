@@ -264,7 +264,7 @@ func (s *StateStore) Abandon() {
 	close(s.abandonCh)
 }
 
-// StopStopEventBroker calls the cancel func for the state stores event
+// StopEventBroker calls the cancel func for the state stores event
 // publisher. It should be called during server shutdown.
 func (s *StateStore) StopEventBroker() {
 	s.stopEventBroker()
@@ -1600,7 +1600,7 @@ func (s *StateStore) upsertJobImpl(index uint64, job *structs.Job, keepVersion b
 	}
 
 	if err := s.updateJobCSIPlugins(index, job, existingJob, txn); err != nil {
-		return fmt.Errorf("unable to update job scaling policies: %v", err)
+		return fmt.Errorf("unable to update job csi plugins: %v", err)
 	}
 
 	// Insert the job
@@ -2036,7 +2036,7 @@ func (s *StateStore) JobsByScheduler(ws memdb.WatchSet, schedulerType string) (m
 	return iter, nil
 }
 
-// JobsByGC returns an iterator over all jobs eligible or uneligible for garbage
+// JobsByGC returns an iterator over all jobs eligible or ineligible for garbage
 // collection.
 func (s *StateStore) JobsByGC(ws memdb.WatchSet, gc bool) (memdb.ResultIterator, error) {
 	txn := s.db.ReadTxn()
@@ -2051,7 +2051,7 @@ func (s *StateStore) JobsByGC(ws memdb.WatchSet, gc bool) (memdb.ResultIterator,
 	return iter, nil
 }
 
-// JobSummary returns a job summary object which matches a specific id.
+// JobSummaryByID returns a job summary object which matches a specific id.
 func (s *StateStore) JobSummaryByID(ws memdb.WatchSet, namespace, jobID string) (*structs.JobSummary, error) {
 	txn := s.db.ReadTxn()
 
@@ -2194,11 +2194,11 @@ func (s *StateStore) CSIVolumeByID(ws memdb.WatchSet, namespace, id string) (*st
 
 	// we return the volume with the plugins denormalized by default,
 	// because the scheduler needs them for feasibility checking
-	return s.CSIVolumeDenormalizePluginsTxn(txn, vol.Copy())
+	return s.csiVolumeDenormalizePluginsTxn(txn, vol.Copy())
 }
 
-// CSIVolumes looks up csi_volumes by pluginID. Caller should snapshot if it
-// wants to also denormalize the plugins.
+// CSIVolumesByPluginID looks up csi_volumes by pluginID. Caller should
+// snapshot if it wants to also denormalize the plugins.
 func (s *StateStore) CSIVolumesByPluginID(ws memdb.WatchSet, namespace, prefix, pluginID string) (memdb.ResultIterator, error) {
 	txn := s.db.ReadTxn()
 
@@ -2326,11 +2326,11 @@ func (s *StateStore) CSIVolumeClaim(index uint64, namespace, id string, claim *s
 		}
 	}
 
-	volume, err := s.CSIVolumeDenormalizePluginsTxn(txn, orig.Copy())
+	volume, err := s.csiVolumeDenormalizePluginsTxn(txn, orig.Copy())
 	if err != nil {
 		return err
 	}
-	volume, err = s.CSIVolumeDenormalizeTxn(txn, nil, volume)
+	volume, err = s.csiVolumeDenormalizeTxn(txn, nil, volume)
 	if err != nil {
 		return err
 	}
@@ -2375,7 +2375,7 @@ func (s *StateStore) CSIVolumeDeregister(index uint64, namespace string, ids []s
 	defer txn.Abort()
 
 	for _, id := range ids {
-		existing, err := txn.First("csi_volumes", "id_prefix", namespace, id)
+		existing, err := txn.First("csi_volumes", "id", namespace, id)
 		if err != nil {
 			return fmt.Errorf("volume lookup failed: %s: %v", id, err)
 		}
@@ -2414,7 +2414,7 @@ func (s *StateStore) CSIVolumeDeregister(index uint64, namespace string, ids []s
 // volSafeToForce checks if the any of the remaining allocations
 // are in a non-terminal state.
 func (s *StateStore) volSafeToForce(txn Txn, v *structs.CSIVolume) bool {
-	vol, err := s.CSIVolumeDenormalizeTxn(txn, nil, v)
+	vol, err := s.csiVolumeDenormalizeTxn(txn, nil, v)
 	if err != nil {
 		return false
 	}
@@ -2443,15 +2443,12 @@ func (s *StateStore) CSIVolumeDenormalizePlugins(ws memdb.WatchSet, vol *structs
 	}
 	txn := s.db.ReadTxn()
 	defer txn.Abort()
-	return s.CSIVolumeDenormalizePluginsTxn(txn, vol)
+	return s.csiVolumeDenormalizePluginsTxn(txn, vol)
 }
 
-// CSIVolumeDenormalizePluginsTxn returns a CSIVolume with current health and
-// plugins, but without allocations.
-// Use this for current volume metadata, handling lists of volumes.
-// Use CSIVolumeDenormalize for volumes containing both health and current
-// allocations.
-func (s *StateStore) CSIVolumeDenormalizePluginsTxn(txn Txn, vol *structs.CSIVolume) (*structs.CSIVolume, error) {
+// csiVolumeDenormalizePluginsTxn implements
+// CSIVolumeDenormalizePlugins, inside a transaction.
+func (s *StateStore) csiVolumeDenormalizePluginsTxn(txn Txn, vol *structs.CSIVolume) (*structs.CSIVolume, error) {
 	if vol == nil {
 		return nil, nil
 	}
@@ -2484,54 +2481,83 @@ func (s *StateStore) CSIVolumeDenormalizePluginsTxn(txn Txn, vol *structs.CSIVol
 	return vol, nil
 }
 
-// CSIVolumeDenormalize returns a CSIVolume with allocations
+// CSIVolumeDenormalize returns a CSIVolume with its current
+// Allocations and Claims, including creating new PastClaims for
+// terminal or garbage collected allocations. This ensures we have a
+// consistent state. Note that it mutates the original volume and so
+// should always be called on a Copy after reading from the state
+// store.
 func (s *StateStore) CSIVolumeDenormalize(ws memdb.WatchSet, vol *structs.CSIVolume) (*structs.CSIVolume, error) {
 	txn := s.db.ReadTxn()
-	return s.CSIVolumeDenormalizeTxn(txn, ws, vol)
+	return s.csiVolumeDenormalizeTxn(txn, ws, vol)
 }
 
-// CSIVolumeDenormalizeTxn populates a CSIVolume with allocations
-func (s *StateStore) CSIVolumeDenormalizeTxn(txn Txn, ws memdb.WatchSet, vol *structs.CSIVolume) (*structs.CSIVolume, error) {
+// csiVolumeDenormalizeTxn implements CSIVolumeDenormalize inside a transaction
+func (s *StateStore) csiVolumeDenormalizeTxn(txn Txn, ws memdb.WatchSet, vol *structs.CSIVolume) (*structs.CSIVolume, error) {
 	if vol == nil {
 		return nil, nil
 	}
-	for id := range vol.ReadAllocs {
-		a, err := s.allocByIDImpl(txn, ws, id)
-		if err != nil {
-			return nil, err
-		}
-		if a != nil {
-			vol.ReadAllocs[id] = a
-			// COMPAT(1.0): the CSIVolumeClaim fields were added
-			// after 0.11.1, so claims made before that may be
-			// missing this value. (same for WriteAlloc below)
-			if _, ok := vol.ReadClaims[id]; !ok {
-				vol.ReadClaims[id] = &structs.CSIVolumeClaim{
+
+	// note: denormalize mutates the maps we pass in!
+	denormalize := func(
+		currentAllocs map[string]*structs.Allocation,
+		currentClaims, pastClaims map[string]*structs.CSIVolumeClaim,
+		fallbackMode structs.CSIVolumeClaimMode) error {
+
+		for id := range currentAllocs {
+			a, err := s.allocByIDImpl(txn, ws, id)
+			if err != nil {
+				return err
+			}
+			pastClaim := pastClaims[id]
+			currentClaim := currentClaims[id]
+			if currentClaim == nil {
+				// COMPAT(1.4.0): the CSIVolumeClaim fields were added
+				// after 0.11.1, so claims made before that may be
+				// missing this value. No clusters should see this
+				// anymore, so warn nosily in the logs so that
+				// operators ask us about it. Remove this block and
+				// the now-unused fallbackMode parameter, and return
+				// an error if currentClaim is nil in 1.4.0
+				s.logger.Warn("volume was missing claim for allocation",
+					"volume_id", vol.ID, "alloc", id)
+				currentClaim = &structs.CSIVolumeClaim{
 					AllocationID: a.ID,
 					NodeID:       a.NodeID,
-					Mode:         structs.CSIVolumeClaimRead,
+					Mode:         fallbackMode,
 					State:        structs.CSIVolumeClaimStateTaken,
 				}
+				currentClaims[id] = currentClaim
 			}
+
+			currentAllocs[id] = a
+			if (a == nil || a.TerminalStatus()) && pastClaim == nil {
+				// the alloc is garbage collected but nothing has written a PastClaim,
+				// so create one now
+				pastClaim = &structs.CSIVolumeClaim{
+					AllocationID:   id,
+					NodeID:         currentClaim.NodeID,
+					Mode:           currentClaim.Mode,
+					State:          structs.CSIVolumeClaimStateUnpublishing,
+					AccessMode:     currentClaim.AccessMode,
+					AttachmentMode: currentClaim.AttachmentMode,
+				}
+				pastClaims[id] = pastClaim
+			}
+
 		}
+		return nil
 	}
 
-	for id := range vol.WriteAllocs {
-		a, err := s.allocByIDImpl(txn, ws, id)
-		if err != nil {
-			return nil, err
-		}
-		if a != nil {
-			vol.WriteAllocs[id] = a
-			if _, ok := vol.WriteClaims[id]; !ok {
-				vol.WriteClaims[id] = &structs.CSIVolumeClaim{
-					AllocationID: a.ID,
-					NodeID:       a.NodeID,
-					Mode:         structs.CSIVolumeClaimWrite,
-					State:        structs.CSIVolumeClaimStateTaken,
-				}
-			}
-		}
+	err := denormalize(vol.ReadAllocs, vol.ReadClaims, vol.PastClaims,
+		structs.CSIVolumeClaimRead)
+	if err != nil {
+		return nil, err
+	}
+	err = denormalize(vol.WriteAllocs, vol.WriteClaims, vol.PastClaims,
+		structs.CSIVolumeClaimWrite)
+	if err != nil {
+		return nil, err
 	}
 
 	// COMPAT: the AccessMode and AttachmentMode fields were added to claims
@@ -2811,8 +2837,8 @@ func (s *StateStore) UpsertEvals(msgType structs.MessageType, index uint64, eval
 	return err
 }
 
-// UpsertEvals is used to upsert a set of evaluations, like UpsertEvals
-// but in a transaction.  Useful for when making multiple modifications atomically
+// UpsertEvalsTxn is used to upsert a set of evaluations, like UpsertEvals but
+// in a transaction.  Useful for when making multiple modifications atomically.
 func (s *StateStore) UpsertEvalsTxn(index uint64, evals []*structs.Evaluation, txn Txn) error {
 	// Do a nested upsert
 	jobs := make(map[structs.NamespacedID]string, len(evals))
@@ -3371,7 +3397,7 @@ func (s *StateStore) UpdateAllocsDesiredTransitions(msgType structs.MessageType,
 
 	// Handle each of the updated allocations
 	for id, transition := range allocs {
-		if err := s.nestedUpdateAllocDesiredTransition(txn, index, id, transition); err != nil {
+		if err := s.UpdateAllocDesiredTransitionTxn(txn, index, id, transition); err != nil {
 			return err
 		}
 	}
@@ -3390,9 +3416,9 @@ func (s *StateStore) UpdateAllocsDesiredTransitions(msgType structs.MessageType,
 	return txn.Commit()
 }
 
-// nestedUpdateAllocDesiredTransition is used to nest an update of an
+// UpdateAllocDesiredTransitionTxn is used to nest an update of an
 // allocations desired transition
-func (s *StateStore) nestedUpdateAllocDesiredTransition(
+func (s *StateStore) UpdateAllocDesiredTransitionTxn(
 	txn *txn, index uint64, allocID string,
 	transition *structs.DesiredTransition) error {
 
@@ -3414,8 +3440,9 @@ func (s *StateStore) nestedUpdateAllocDesiredTransition(
 	// Merge the desired transitions
 	copyAlloc.DesiredTransition.Merge(transition)
 
-	// Update the modify index
+	// Update the modify indexes
 	copyAlloc.ModifyIndex = index
+	copyAlloc.AllocModifyIndex = index
 
 	// Update the allocation
 	if err := txn.Insert("allocs", copyAlloc); err != nil {
@@ -3478,7 +3505,7 @@ func allocNamespaceFilter(namespace string) func(interface{}) bool {
 	}
 }
 
-// AllocsByIDPrefix is used to lookup allocs by prefix
+// AllocsByIDPrefixAllNSs is used to lookup allocs by prefix.
 func (s *StateStore) AllocsByIDPrefixAllNSs(ws memdb.WatchSet, prefix string) (memdb.ResultIterator, error) {
 	txn := s.db.ReadTxn()
 
@@ -3520,7 +3547,8 @@ func allocsByNodeTxn(txn ReadTxn, ws memdb.WatchSet, node string) ([]*structs.Al
 	return out, nil
 }
 
-// AllocsByNode returns all the allocations by node and terminal status
+// AllocsByNodeTerminal returns all the allocations by node and terminal
+// status.
 func (s *StateStore) AllocsByNodeTerminal(ws memdb.WatchSet, node string, terminal bool) ([]*structs.Allocation, error) {
 	txn := s.db.ReadTxn()
 
@@ -3666,7 +3694,7 @@ func (s *StateStore) allocsByNamespaceImpl(ws memdb.WatchSet, txn *txn, namespac
 	return iter, nil
 }
 
-// UpsertVaultAccessors is used to register a set of Vault Accessors
+// UpsertVaultAccessor is used to register a set of Vault Accessors.
 func (s *StateStore) UpsertVaultAccessor(index uint64, accessors []*structs.VaultAccessor) error {
 	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
@@ -4258,7 +4286,7 @@ func (s *StateStore) UpdateDeploymentAllocHealth(msgType structs.MessageType, in
 	return txn.Commit()
 }
 
-// LastIndex returns the greatest index value for all indexes
+// LatestIndex returns the greatest index value for all indexes.
 func (s *StateStore) LatestIndex() (uint64, error) {
 	indexes, err := s.Indexes()
 	if err != nil {
@@ -4605,12 +4633,13 @@ func (s *StateStore) setJobSummary(txn *txn, updated *structs.Job, index uint64,
 
 func (s *StateStore) getJobStatus(txn *txn, job *structs.Job, evalDelete bool) (string, error) {
 	// System, Periodic and Parameterized jobs are running until explicitly
-	// stopped
-	if job.Type == structs.JobTypeSystem || job.IsParameterized() || job.IsPeriodic() {
+	// stopped.
+	if job.Type == structs.JobTypeSystem ||
+		job.IsParameterized() ||
+		job.IsPeriodic() {
 		if job.Stop {
 			return structs.JobStatusDead, nil
 		}
-
 		return structs.JobStatusRunning, nil
 	}
 
@@ -5368,7 +5397,7 @@ func (s *StateStore) CanBootstrapACLToken() (bool, uint64, error) {
 	return false, out.(*IndexEntry).Value, nil
 }
 
-// BootstrapACLToken is used to create an initial ACL token
+// BootstrapACLTokens is used to create an initial ACL token.
 func (s *StateStore) BootstrapACLTokens(msgType structs.MessageType, index uint64, resetIndex uint64, token *structs.ACLToken) error {
 	txn := s.db.WriteTxnMsgT(msgType, index)
 	defer txn.Abort()
@@ -5680,7 +5709,7 @@ func (s *StateStore) setClusterMetadata(txn *txn, meta *structs.ClusterMetadata)
 	return nil
 }
 
-// UpsertScalingPolicy is used to insert a new scaling policy.
+// UpsertScalingPolicies is used to insert a new scaling policy.
 func (s *StateStore) UpsertScalingPolicies(index uint64, scalingPolicies []*structs.ScalingPolicy) error {
 	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
@@ -5692,7 +5721,7 @@ func (s *StateStore) UpsertScalingPolicies(index uint64, scalingPolicies []*stru
 	return txn.Commit()
 }
 
-// upsertScalingPolicy is used to insert a new scaling policy.
+// UpsertScalingPoliciesTxn is used to insert a new scaling policy.
 func (s *StateStore) UpsertScalingPoliciesTxn(index uint64, scalingPolicies []*structs.ScalingPolicy,
 	txn *txn) error {
 
@@ -5830,7 +5859,7 @@ func (s *StateStore) NamespaceNames() ([]string, error) {
 	return nses, nil
 }
 
-// UpsertNamespace is used to register or update a set of namespaces
+// UpsertNamespaces is used to register or update a set of namespaces.
 func (s *StateStore) UpsertNamespaces(index uint64, namespaces []*structs.Namespace) error {
 	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
@@ -5961,7 +5990,7 @@ func (s *StateStore) DeleteScalingPolicies(index uint64, ids []string) error {
 	return err
 }
 
-// DeleteScalingPolicies is used to delete a set of scaling policies by ID
+// DeleteScalingPoliciesTxn is used to delete a set of scaling policies by ID.
 func (s *StateStore) DeleteScalingPoliciesTxn(index uint64, ids []string, txn *txn) error {
 	if len(ids) == 0 {
 		return nil
@@ -6267,13 +6296,13 @@ type StateRestore struct {
 }
 
 // Abort is used to abort the restore operation
-func (s *StateRestore) Abort() {
-	s.txn.Abort()
+func (r *StateRestore) Abort() {
+	r.txn.Abort()
 }
 
 // Commit is used to commit the restore operation
-func (s *StateRestore) Commit() error {
-	return s.txn.Commit()
+func (r *StateRestore) Commit() error {
+	return r.txn.Commit()
 }
 
 // NodeRestore is used to restore a node

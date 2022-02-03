@@ -65,7 +65,9 @@ export default class AllocationRow extends Component {
     do {
       if (this.stats) {
         try {
-          yield this.get('stats.poll').perform();
+          yield this.get('stats.poll')
+            .linked()
+            .perform();
           this.set('statsError', false);
         } catch (error) {
           this.set('statsError', true);
@@ -84,7 +86,7 @@ async function qualifyAllocation() {
   // Make sure the allocation is a complete record and not a partial so we
   // can show information such as preemptions and rescheduled allocation.
   if (allocation.isPartial) {
-    await allocation.reload();
+    await this.store.findRecord('allocation', allocation.id, { backgroundReload: false });
   }
 
   if (allocation.get('job.isPending')) {

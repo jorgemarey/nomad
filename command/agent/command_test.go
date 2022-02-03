@@ -2,13 +2,17 @@ package agent
 
 import (
 	"io/ioutil"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mitchellh/cli"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/version"
 )
 
@@ -44,7 +48,7 @@ func TestCommand_Args(t *testing.T) {
 		},
 		{
 			[]string{"-server"},
-			"Must specify data directory",
+			"Must specify \"data_dir\" config option or \"data-dir\" CLI flag",
 		},
 		{
 			[]string{"-client", "-alloc-dir="},
@@ -239,5 +243,172 @@ func TestCommand_NullCharInRegion(t *testing.T) {
 		if !strings.Contains(out, exp) {
 			t.Fatalf("expect to find %q\n\n%s", exp, out)
 		}
+	}
+}
+
+// TestIsValidConfig asserts that invalid configurations return false.
+func TestIsValidConfig(t *testing.T) {
+
+	cases := []struct {
+		name string
+		conf Config // merged into DefaultConfig()
+
+		// err should appear in error output; success expected if err
+		// is empty
+		err string
+	}{
+		{
+			name: "Default",
+			conf: Config{
+				DataDir: "/tmp",
+				Client:  &ClientConfig{Enabled: true},
+			},
+		},
+		{
+			name: "NoMode",
+			conf: Config{
+				Client: &ClientConfig{Enabled: false},
+				Server: &ServerConfig{Enabled: false},
+			},
+			err: "Must specify either",
+		},
+		{
+			name: "InvalidRegion",
+			conf: Config{
+				Client: &ClientConfig{
+					Enabled: true,
+				},
+				Region: "Hello\000World",
+			},
+			err: "Region contains",
+		},
+		{
+			name: "InvalidDatacenter",
+			conf: Config{
+				Client: &ClientConfig{
+					Enabled: true,
+				},
+				Datacenter: "Hello\000World",
+			},
+			err: "Datacenter contains",
+		},
+		{
+			name: "RelativeDir",
+			conf: Config{
+				Client: &ClientConfig{
+					Enabled: true,
+				},
+				DataDir: "foo/bar",
+			},
+			err: "must be given as an absolute",
+		},
+		{
+			name: "NegativeMinDynamicPort",
+			conf: Config{
+				Client: &ClientConfig{
+					Enabled:        true,
+					MinDynamicPort: -1,
+				},
+			},
+			err: "min_dynamic_port",
+		},
+		{
+			name: "NegativeMaxDynamicPort",
+			conf: Config{
+				Client: &ClientConfig{
+					Enabled:        true,
+					MaxDynamicPort: -1,
+				},
+			},
+			err: "max_dynamic_port",
+		},
+		{
+			name: "BigMinDynamicPort",
+			conf: Config{
+				Client: &ClientConfig{
+					Enabled:        true,
+					MinDynamicPort: math.MaxInt32,
+				},
+			},
+			err: "min_dynamic_port",
+		},
+		{
+			name: "BigMaxDynamicPort",
+			conf: Config{
+				Client: &ClientConfig{
+					Enabled:        true,
+					MaxDynamicPort: math.MaxInt32,
+				},
+			},
+			err: "max_dynamic_port",
+		},
+		{
+			name: "MinMaxDynamicPortSwitched",
+			conf: Config{
+				Client: &ClientConfig{
+					Enabled:        true,
+					MinDynamicPort: 5000,
+					MaxDynamicPort: 4000,
+				},
+			},
+			err: "and max",
+		},
+		{
+			name: "DynamicPortOk",
+			conf: Config{
+				DataDir: "/tmp",
+				Client: &ClientConfig{
+					Enabled:        true,
+					MinDynamicPort: 4000,
+					MaxDynamicPort: 5000,
+				},
+			},
+		},
+		{
+			name: "BadReservedPorts",
+			conf: Config{
+				Client: &ClientConfig{
+					Enabled: true,
+					Reserved: &Resources{
+						ReservedPorts: "3-2147483647",
+					},
+				},
+			},
+			err: `reserved.reserved_ports "3-2147483647" invalid: port must be < 65536 but found 2147483647`,
+		},
+		{
+			name: "BadHostNetworkReservedPorts",
+			conf: Config{
+				Client: &ClientConfig{
+					Enabled: true,
+					HostNetworks: []*structs.ClientHostNetworkConfig{
+						&structs.ClientHostNetworkConfig{
+							Name:          "test",
+							ReservedPorts: "3-2147483647",
+						},
+					},
+				},
+			},
+			err: `host_network["test"].reserved_ports "3-2147483647" invalid: port must be < 65536 but found 2147483647`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mui := cli.NewMockUi()
+			cmd := &Command{Ui: mui}
+			config := DefaultConfig().Merge(&tc.conf)
+			result := cmd.isValidConfig(config, DefaultConfig())
+			if tc.err == "" {
+				// No error expected
+				assert.True(t, result, mui.ErrorWriter.String())
+				return
+			}
+
+			// Error expected
+			assert.False(t, result)
+			require.Contains(t, mui.ErrorWriter.String(), tc.err)
+			t.Logf("%s returned: %s", tc.name, mui.ErrorWriter.String())
+		})
 	}
 }

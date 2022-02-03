@@ -140,9 +140,7 @@ OUTER:
 			gc, allocs, err := c.gcEval(eval, oldThreshold, true)
 			if err != nil {
 				continue OUTER
-			}
-
-			if gc {
+			} else if gc {
 				jobEval = append(jobEval, eval.ID)
 				jobAlloc = append(jobAlloc, allocs...)
 			} else {
@@ -164,6 +162,7 @@ OUTER:
 	if len(gcEval) == 0 && len(gcAlloc) == 0 && len(gcJob) == 0 {
 		return nil
 	}
+
 	c.logger.Debug("job GC found eligible objects",
 		"jobs", len(gcJob), "evals", len(gcEval), "allocs", len(gcAlloc))
 
@@ -774,7 +773,6 @@ func (c *CoreScheduler) csiVolumeClaimGC(eval *structs.Evaluation) error {
 		"index", oldThreshold,
 		"csi_volume_claim_gc_threshold", c.srv.config.CSIVolumeClaimGCThreshold)
 
-NEXT_VOLUME:
 	for i := iter.Next(); i != nil; i = iter.Next() {
 		vol := i.(*structs.CSIVolume)
 
@@ -786,31 +784,9 @@ NEXT_VOLUME:
 		// we only call the claim release RPC if the volume has claims
 		// that no longer have valid allocations. otherwise we'd send
 		// out a lot of do-nothing RPCs.
-		for id := range vol.ReadClaims {
-			alloc, err := c.snap.AllocByID(ws, id)
-			if err != nil {
-				return err
-			}
-			if alloc == nil || alloc.TerminalStatus() {
-				err = gcClaims(vol.Namespace, vol.ID)
-				if err != nil {
-					return err
-				}
-				goto NEXT_VOLUME
-			}
-		}
-		for id := range vol.WriteClaims {
-			alloc, err := c.snap.AllocByID(ws, id)
-			if err != nil {
-				return err
-			}
-			if alloc == nil || alloc.TerminalStatus() {
-				err = gcClaims(vol.Namespace, vol.ID)
-				if err != nil {
-					return err
-				}
-				goto NEXT_VOLUME
-			}
+		vol, err := c.snap.CSIVolumeDenormalize(ws, vol)
+		if err != nil {
+			return err
 		}
 		if len(vol.PastClaims) > 0 {
 			err = gcClaims(vol.Namespace, vol.ID)

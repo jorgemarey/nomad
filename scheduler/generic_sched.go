@@ -36,7 +36,7 @@ const (
 	// allocInPlace is the status used when speculating on an in-place update
 	allocInPlace = "alloc updating in-place"
 
-	// allocNodeTainted is the status used when stopping an alloc because it's
+	// allocNodeTainted is the status used when stopping an alloc because its
 	// node is tainted.
 	allocNodeTainted = "alloc not needed as node is tainted"
 
@@ -76,10 +76,11 @@ func (s *SetStatusError) Error() string {
 // most workloads. It also supports a 'batch' mode to optimize for fast decision
 // making at the cost of quality.
 type GenericScheduler struct {
-	logger  log.Logger
-	state   State
-	planner Planner
-	batch   bool
+	logger   log.Logger
+	eventsCh chan<- interface{}
+	state    State
+	planner  Planner
+	batch    bool
 
 	eval       *structs.Evaluation
 	job        *structs.Job
@@ -100,23 +101,25 @@ type GenericScheduler struct {
 }
 
 // NewServiceScheduler is a factory function to instantiate a new service scheduler
-func NewServiceScheduler(logger log.Logger, state State, planner Planner) Scheduler {
+func NewServiceScheduler(logger log.Logger, eventsCh chan<- interface{}, state State, planner Planner) Scheduler {
 	s := &GenericScheduler{
-		logger:  logger.Named("service_sched"),
-		state:   state,
-		planner: planner,
-		batch:   false,
+		logger:   logger.Named("service_sched"),
+		eventsCh: eventsCh,
+		state:    state,
+		planner:  planner,
+		batch:    false,
 	}
 	return s
 }
 
 // NewBatchScheduler is a factory function to instantiate a new batch scheduler
-func NewBatchScheduler(logger log.Logger, state State, planner Planner) Scheduler {
+func NewBatchScheduler(logger log.Logger, eventsCh chan<- interface{}, state State, planner Planner) Scheduler {
 	s := &GenericScheduler{
-		logger:  logger.Named("batch_sched"),
-		state:   state,
-		planner: planner,
-		batch:   true,
+		logger:   logger.Named("batch_sched"),
+		eventsCh: eventsCh,
+		state:    state,
+		planner:  planner,
+		batch:    true,
 	}
 	return s
 }
@@ -245,7 +248,7 @@ func (s *GenericScheduler) process() (bool, error) {
 	s.failedTGAllocs = nil
 
 	// Create an evaluation context
-	s.ctx = NewEvalContext(s.state, s.plan, s.logger)
+	s.ctx = NewEvalContext(s.eventsCh, s.state, s.plan, s.logger)
 
 	// Construct the placement stack
 	s.stack = NewGenericStack(s.batch, s.ctx)
@@ -351,7 +354,7 @@ func (s *GenericScheduler) computeJobAllocs() error {
 
 	reconciler := NewAllocReconciler(s.logger,
 		genericAllocUpdateFn(s.ctx, s.stack, s.eval.ID),
-		s.batch, s.eval.JobID, s.job, s.deployment, allocs, tainted, s.eval.ID)
+		s.batch, s.eval.JobID, s.job, s.deployment, allocs, tainted, s.eval.ID, s.eval.Priority)
 	results := reconciler.Compute()
 	s.logger.Debug("reconciled current state with desired state", "results", log.Fmt("%#v", results))
 
@@ -471,7 +474,7 @@ func (s *GenericScheduler) downgradedJobForPlacement(p placementResult) (string,
 // destructive updates to place and the set of new placements to place.
 func (s *GenericScheduler) computePlacements(destructive, place []placementResult) error {
 	// Get the base nodes
-	nodes, byDC, err := readyNodesInDCs(s.state, s.job.Datacenters)
+	nodes, _, byDC, err := readyNodesInDCs(s.state, s.job.Datacenters)
 	if err != nil {
 		return err
 	}

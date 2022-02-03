@@ -26,7 +26,7 @@ type RankedNode struct {
 	TaskLifecycles map[string]*structs.TaskLifecycleConfig
 	AllocResources *structs.AllocatedSharedResources
 
-	// Allocs is used to cache the proposed allocations on the
+	// Proposed is used to cache the proposed allocations on the
 	// node. This can be shared between iterators that require it.
 	Proposed []*structs.Allocation
 
@@ -62,7 +62,7 @@ func (r *RankedNode) SetTaskResources(task *structs.Task,
 	r.TaskLifecycles[task.Name] = task.Lifecycle
 }
 
-// RankFeasibleIterator is used to iteratively yield nodes along
+// RankIterator is used to iteratively yield nodes along
 // with ranking metadata. The iterators may manage some state for
 // performance optimizations.
 type RankIterator interface {
@@ -206,10 +206,34 @@ OUTER:
 			continue
 		}
 
-		// Index the existing network usage
+		// Index the existing network usage.
+		// This should never collide, since it represents the current state of
+		// the node. If it does collide though, it means we found a bug! So
+		// collect as much information as possible.
 		netIdx := structs.NewNetworkIndex()
-		netIdx.SetNode(option.Node)
-		netIdx.AddAllocs(proposed)
+		if collide, reason := netIdx.SetNode(option.Node); collide {
+			iter.ctx.SendEvent(&PortCollisionEvent{
+				Reason:   reason,
+				NetIndex: netIdx.Copy(),
+				Node:     option.Node,
+			})
+			iter.ctx.Metrics().ExhaustedNode(option.Node, "network: port collision")
+			continue
+		}
+		if collide, reason := netIdx.AddAllocs(proposed); collide {
+			event := &PortCollisionEvent{
+				Reason:      reason,
+				NetIndex:    netIdx.Copy(),
+				Node:        option.Node,
+				Allocations: make([]*structs.Allocation, len(proposed)),
+			}
+			for i, alloc := range proposed {
+				event.Allocations[i] = alloc.Copy()
+			}
+			iter.ctx.SendEvent(event)
+			iter.ctx.Metrics().ExhaustedNode(option.Node, "network: port collision")
+			continue
+		}
 
 		// Create a device allocator
 		devAllocator := newDeviceAllocator(iter.ctx, option.Node)
@@ -777,8 +801,8 @@ type PreemptionScoringIterator struct {
 	source RankIterator
 }
 
-// PreemptionScoringIterator is used to create a score based on net aggregate priority
-// of preempted allocations
+// NewPreemptionScoringIterator is used to create a score based on net
+// aggregate priority of preempted allocations.
 func NewPreemptionScoringIterator(ctx Context, source RankIterator) RankIterator {
 	return &PreemptionScoringIterator{
 		ctx:    ctx,

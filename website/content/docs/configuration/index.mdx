@@ -88,8 +88,9 @@ testing.
   see the [`ports`](#ports) field. The values support [go-sockaddr/template
   format][go-sockaddr/template].
 
-  - `http` - The address the HTTP server is bound to. This is the most common
-    bind address to change.
+  - `http` - The address the HTTP server is bound to. This is the most
+    common bind address to change. The `http` field accepts multiple
+    values, separated by spaces, to bind to multiple addresses.
 
   - `rpc` - The address to bind the internal RPC interfaces to. Should be
     exposed only to other cluster members if possible.
@@ -150,10 +151,6 @@ testing.
   allocation data as well as cluster information. Server nodes use this
   directory to store cluster state, including the replicated log and snapshot
   data. This must be specified as an absolute path.
-
-  ~> **WARNING**: This directory **must not** be set to a directory that is
-  [included in the chroot](/docs/drivers/exec#chroot) if you use the
-  [`exec`](/docs/drivers/exec) driver.
 
 - `disable_anonymous_signature` `(bool: false)` - Specifies if Nomad should
   provide an anonymous signature for de-duplication with the update check.

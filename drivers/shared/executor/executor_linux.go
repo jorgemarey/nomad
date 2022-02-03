@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 package executor
@@ -382,10 +383,12 @@ func (l *LibcontainerExecutor) handleStats(ch chan *cstructs.TaskResourceUsage, 
 		maxUsage := stats.MemoryStats.Usage.MaxUsage
 		rss := stats.MemoryStats.Stats["rss"]
 		cache := stats.MemoryStats.Stats["cache"]
+		mapped_file := stats.MemoryStats.Stats["mapped_file"]
 		ms := &cstructs.MemoryStats{
 			RSS:            rss,
 			Cache:          cache,
 			Swap:           swap.Usage,
+			MappedFile:     mapped_file,
 			Usage:          stats.MemoryStats.Usage.Usage,
 			MaxUsage:       maxUsage,
 			KernelUsage:    stats.MemoryStats.KernelUsage.Usage,
@@ -696,8 +699,9 @@ func configureCgroups(cfg *lconfigs.Config, command *ExecCommand) error {
 		return fmt.Errorf("resources.Cpu.CpuShares must be equal to or greater than 2: %v", cpuShares)
 	}
 
-	// Set the relative CPU shares for this cgroup.
+	// Set the relative CPU shares for this cgroup, and convert for cgroupv2
 	cfg.Cgroups.Resources.CpuShares = uint64(cpuShares)
+	cfg.Cgroups.Resources.CpuWeight = cgroups.ConvertCPUSharesToCgroupV2Value(uint64(cpuShares))
 
 	if command.Resources.LinuxResources != nil && command.Resources.LinuxResources.CpusetCgroupPath != "" {
 		cfg.Hooks = lconfigs.Hooks{

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -25,6 +26,76 @@ func TestMaterializeTaskGroups(t *testing.T) {
 		require.Contains(t, index, name)
 		require.Equal(t, job.TaskGroups[0], index[name])
 	}
+}
+
+func newNode(name string) *structs.Node {
+	n := mock.Node()
+	n.Name = name
+	return n
+}
+
+func TestDiffSystemAllocsForNode_Sysbatch_terminal(t *testing.T) {
+	// For a sysbatch job, the scheduler should not re-place an allocation
+	// that has become terminal, unless the job has been updated.
+
+	job := mock.SystemBatchJob()
+	required := materializeTaskGroups(job)
+
+	eligible := map[string]*structs.Node{
+		"node1": newNode("node1"),
+	}
+
+	var live []*structs.Allocation // empty
+
+	tainted := map[string]*structs.Node(nil)
+
+	t.Run("current job", func(t *testing.T) {
+		terminal := structs.TerminalByNodeByName{
+			"node1": map[string]*structs.Allocation{
+				"my-sysbatch.pinger[0]": {
+					ID:           uuid.Generate(),
+					NodeID:       "node1",
+					Name:         "my-sysbatch.pinger[0]",
+					Job:          job,
+					ClientStatus: structs.AllocClientStatusComplete,
+				},
+			},
+		}
+
+		diff := diffSystemAllocsForNode(job, "node1", eligible, nil, tainted, required, live, terminal)
+		require.Empty(t, diff.place)
+		require.Empty(t, diff.update)
+		require.Empty(t, diff.stop)
+		require.Empty(t, diff.migrate)
+		require.Empty(t, diff.lost)
+		require.True(t, len(diff.ignore) == 1 && diff.ignore[0].Alloc == terminal["node1"]["my-sysbatch.pinger[0]"])
+	})
+
+	t.Run("outdated job", func(t *testing.T) {
+		previousJob := job.Copy()
+		previousJob.JobModifyIndex -= 1
+		terminal := structs.TerminalByNodeByName{
+			"node1": map[string]*structs.Allocation{
+				"my-sysbatch.pinger[0]": {
+					ID:     uuid.Generate(),
+					NodeID: "node1",
+					Name:   "my-sysbatch.pinger[0]",
+					Job:    previousJob,
+				},
+			},
+		}
+
+		expAlloc := terminal["node1"]["my-sysbatch.pinger[0]"]
+		expAlloc.NodeID = "node1"
+
+		diff := diffSystemAllocsForNode(job, "node1", eligible, nil, tainted, required, live, terminal)
+		require.Empty(t, diff.place)
+		require.Len(t, diff.update, 1)
+		require.Empty(t, diff.stop)
+		require.Empty(t, diff.migrate)
+		require.Empty(t, diff.lost)
+		require.Empty(t, diff.ignore)
+	})
 }
 
 func TestDiffSystemAllocsForNode(t *testing.T) {
@@ -98,60 +169,62 @@ func TestDiffSystemAllocsForNode(t *testing.T) {
 	}
 
 	// Have three terminal allocs
-	terminalAllocs := map[string]*structs.Allocation{
-		"my-job.web[4]": {
-			ID:     uuid.Generate(),
-			NodeID: "zip",
-			Name:   "my-job.web[4]",
-			Job:    job,
-		},
-		"my-job.web[5]": {
-			ID:     uuid.Generate(),
-			NodeID: "zip",
-			Name:   "my-job.web[5]",
-			Job:    job,
-		},
-		"my-job.web[6]": {
-			ID:     uuid.Generate(),
-			NodeID: "zip",
-			Name:   "my-job.web[6]",
-			Job:    job,
+	terminal := structs.TerminalByNodeByName{
+		"zip": map[string]*structs.Allocation{
+			"my-job.web[4]": {
+				ID:     uuid.Generate(),
+				NodeID: "zip",
+				Name:   "my-job.web[4]",
+				Job:    job,
+			},
+			"my-job.web[5]": {
+				ID:     uuid.Generate(),
+				NodeID: "zip",
+				Name:   "my-job.web[5]",
+				Job:    job,
+			},
+			"my-job.web[6]": {
+				ID:     uuid.Generate(),
+				NodeID: "zip",
+				Name:   "my-job.web[6]",
+				Job:    job,
+			},
 		},
 	}
 
-	diff := diffSystemAllocsForNode(job, "zip", eligible, tainted, required, allocs, terminalAllocs)
-	place := diff.place
-	update := diff.update
-	migrate := diff.migrate
-	stop := diff.stop
-	ignore := diff.ignore
-	lost := diff.lost
+	diff := diffSystemAllocsForNode(job, "zip", eligible, nil, tainted, required, allocs, terminal)
 
 	// We should update the first alloc
-	require.True(t, len(update) == 1 && update[0].Alloc == allocs[0])
+	require.Len(t, diff.update, 1)
+	require.Equal(t, allocs[0], diff.update[0].Alloc)
 
 	// We should ignore the second alloc
-	require.True(t, len(ignore) == 1 && ignore[0].Alloc == allocs[1])
+	require.Len(t, diff.ignore, 1)
+	require.Equal(t, allocs[1], diff.ignore[0].Alloc)
 
 	// We should stop the 3rd alloc
-	require.True(t, len(stop) == 1 && stop[0].Alloc == allocs[2])
+	require.Len(t, diff.stop, 1)
+	require.Equal(t, allocs[2], diff.stop[0].Alloc)
 
 	// We should migrate the 4rd alloc
-	require.True(t, len(migrate) == 1 && migrate[0].Alloc == allocs[3])
+	require.Len(t, diff.migrate, 1)
+	require.Equal(t, allocs[3], diff.migrate[0].Alloc)
 
 	// We should mark the 5th alloc as lost
-	require.True(t, len(lost) == 1 && lost[0].Alloc == allocs[4])
+	require.Len(t, diff.lost, 1)
+	require.Equal(t, allocs[4], diff.lost[0].Alloc)
 
 	// We should place 6
-	require.Equal(t, 6, len(place))
+	require.Len(t, diff.place, 6)
 
 	// Ensure that the allocations which are replacements of terminal allocs are
-	// annotated
-	for name, alloc := range terminalAllocs {
-		for _, allocTuple := range diff.place {
-			if name == allocTuple.Name {
-				require.True(t, reflect.DeepEqual(alloc, allocTuple.Alloc),
-					"expected: %#v, actual: %#v", alloc, allocTuple.Alloc)
+	// annotated.
+	for _, m := range terminal {
+		for _, alloc := range m {
+			for _, tuple := range diff.place {
+				if alloc.Name == tuple.Name {
+					require.Equal(t, alloc, tuple.Alloc)
+				}
 			}
 		}
 	}
@@ -198,22 +271,16 @@ func TestDiffSystemAllocsForNode_ExistingAllocIneligibleNode(t *testing.T) {
 	}
 
 	// No terminal allocs
-	terminalAllocs := map[string]*structs.Allocation{}
+	terminal := make(structs.TerminalByNodeByName)
 
-	diff := diffSystemAllocsForNode(job, eligibleNode.ID, eligible, tainted, required, allocs, terminalAllocs)
-	place := diff.place
-	update := diff.update
-	migrate := diff.migrate
-	stop := diff.stop
-	ignore := diff.ignore
-	lost := diff.lost
+	diff := diffSystemAllocsForNode(job, eligibleNode.ID, eligible, nil, tainted, required, allocs, terminal)
 
-	require.Len(t, place, 0)
-	require.Len(t, update, 1)
-	require.Len(t, migrate, 0)
-	require.Len(t, stop, 0)
-	require.Len(t, ignore, 1)
-	require.Len(t, lost, 0)
+	require.Len(t, diff.place, 0)
+	require.Len(t, diff.update, 1)
+	require.Len(t, diff.migrate, 0)
+	require.Len(t, diff.stop, 0)
+	require.Len(t, diff.ignore, 1)
+	require.Len(t, diff.lost, 0)
 }
 
 func TestDiffSystemAllocs(t *testing.T) {
@@ -274,49 +341,50 @@ func TestDiffSystemAllocs(t *testing.T) {
 		},
 	}
 
-	// Have three terminal allocs
-	terminalAllocs := map[string]*structs.Allocation{
-		"my-job.web[0]": {
-			ID:     uuid.Generate(),
-			NodeID: "pipe",
-			Name:   "my-job.web[0]",
-			Job:    job,
+	// Have three (?) terminal allocs
+	terminal := structs.TerminalByNodeByName{
+		"pipe": map[string]*structs.Allocation{
+			"my-job.web[0]": {
+				ID:     uuid.Generate(),
+				NodeID: "pipe",
+				Name:   "my-job.web[0]",
+				Job:    job,
+			},
 		},
 	}
 
-	diff := diffSystemAllocs(job, nodes, tainted, allocs, terminalAllocs)
-	place := diff.place
-	update := diff.update
-	migrate := diff.migrate
-	stop := diff.stop
-	ignore := diff.ignore
-	lost := diff.lost
+	diff := diffSystemAllocs(job, nodes, nil, tainted, allocs, terminal)
 
 	// We should update the first alloc
-	require.True(t, len(update) == 1 && update[0].Alloc == allocs[0])
+	require.Len(t, diff.update, 1)
+	require.Equal(t, allocs[0], diff.update[0].Alloc)
 
 	// We should ignore the second alloc
-	require.True(t, len(ignore) == 1 && ignore[0].Alloc == allocs[1])
+	require.Len(t, diff.ignore, 1)
+	require.Equal(t, allocs[1], diff.ignore[0].Alloc)
 
 	// We should stop the third alloc
-	require.Empty(t, stop)
+	require.Empty(t, diff.stop)
 
 	// There should be no migrates.
-	require.True(t, len(migrate) == 1 && migrate[0].Alloc == allocs[2])
+	require.Len(t, diff.migrate, 1)
+	require.Equal(t, allocs[2], diff.migrate[0].Alloc)
 
 	// We should mark the 5th alloc as lost
-	require.True(t, len(lost) == 1 && lost[0].Alloc == allocs[3])
+	require.Len(t, diff.lost, 1)
+	require.Equal(t, allocs[3], diff.lost[0].Alloc)
 
-	// We should place 1
-	require.Equal(t, 2, len(place))
+	// We should place 2
+	require.Len(t, diff.place, 2)
 
 	// Ensure that the allocations which are replacements of terminal allocs are
-	// annotated
-	for _, alloc := range terminalAllocs {
-		for _, allocTuple := range diff.place {
-			if alloc.NodeID == allocTuple.Alloc.NodeID {
-				require.True(t, reflect.DeepEqual(alloc, allocTuple.Alloc),
-					"expected: %#v, actual: %#v", alloc, allocTuple.Alloc)
+	// annotated.
+	for _, m := range terminal {
+		for _, alloc := range m {
+			for _, tuple := range diff.place {
+				if alloc.NodeID == tuple.Alloc.NodeID {
+					require.Equal(t, alloc, tuple.Alloc)
+				}
 			}
 		}
 	}
@@ -337,15 +405,19 @@ func TestReadyNodesInDCs(t *testing.T) {
 	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 1002, node3))
 	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 1003, node4))
 
-	nodes, dc, err := readyNodesInDCs(state, []string{"dc1", "dc2"})
+	nodes, notReady, dc, err := readyNodesInDCs(state, []string{"dc1", "dc2"})
 	require.NoError(t, err)
 	require.Equal(t, 2, len(nodes))
-	require.True(t, nodes[0].ID != node3.ID && nodes[1].ID != node3.ID)
+	require.NotEqual(t, node3.ID, nodes[0].ID)
+	require.NotEqual(t, node3.ID, nodes[1].ID)
 
 	require.Contains(t, dc, "dc1")
 	require.Equal(t, 1, dc["dc1"])
 	require.Contains(t, dc, "dc2")
 	require.Equal(t, 1, dc["dc2"])
+
+	require.Contains(t, notReady, node3.ID)
+	require.Contains(t, notReady, node4.ID)
 }
 
 func TestRetryMax(t *testing.T) {
@@ -682,6 +754,29 @@ func TestTasksUpdated(t *testing.T) {
 	j21.TaskGroups[0].Tasks[0].Resources.Cores = 4
 	require.True(t, tasksUpdated(j20, j21, name))
 
+	// Compare identical Template wait configs
+	j22 := mock.Job()
+	j22.TaskGroups[0].Tasks[0].Templates = []*structs.Template{
+		{
+			Wait: &structs.WaitConfig{
+				Min: helper.TimeToPtr(5 * time.Second),
+				Max: helper.TimeToPtr(5 * time.Second),
+			},
+		},
+	}
+	j23 := mock.Job()
+	j23.TaskGroups[0].Tasks[0].Templates = []*structs.Template{
+		{
+			Wait: &structs.WaitConfig{
+				Min: helper.TimeToPtr(5 * time.Second),
+				Max: helper.TimeToPtr(5 * time.Second),
+			},
+		},
+	}
+	require.False(t, tasksUpdated(j22, j23, name))
+	// Compare changed Template wait configs
+	j23.TaskGroups[0].Tasks[0].Templates[0].Wait.Max = helper.TimeToPtr(10 * time.Second)
+	require.True(t, tasksUpdated(j22, j23, name))
 }
 
 func TestTasksUpdated_connectServiceUpdated(t *testing.T) {

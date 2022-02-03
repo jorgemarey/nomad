@@ -19,10 +19,8 @@ import (
 
 	"github.com/hashicorp/nomad/command"
 	"github.com/hashicorp/nomad/version"
-	colorable "github.com/mattn/go-colorable"
 	"github.com/mitchellh/cli"
 	"github.com/sean-/seed"
-	"golang.org/x/crypto/ssh/terminal"
 )
 
 var (
@@ -50,6 +48,7 @@ var (
 		"operator raft _info",
 		"operator raft _logs",
 		"operator raft _state",
+		"operator snapshot _state",
 	}
 
 	// aliases is the list of aliases we want users to be aware of. We hide
@@ -88,40 +87,15 @@ func Run(args []string) int {
 }
 
 func RunCustom(args []string) int {
-	// Parse flags into env vars for global use
-	args = setupEnv(args)
-
 	// Create the meta object
 	metaPtr := new(command.Meta)
-
-	// Don't use color if disabled
-	color := true
-	if os.Getenv(command.EnvNomadCLINoColor) != "" {
-		color = false
-	}
-
-	isTerminal := terminal.IsTerminal(int(os.Stdout.Fd()))
-	metaPtr.Ui = &cli.BasicUi{
-		Reader:      os.Stdin,
-		Writer:      colorable.NewColorableStdout(),
-		ErrorWriter: colorable.NewColorableStderr(),
-	}
+	metaPtr.SetupUi(args)
 
 	// The Nomad agent never outputs color
 	agentUi := &cli.BasicUi{
 		Reader:      os.Stdin,
 		Writer:      os.Stdout,
 		ErrorWriter: os.Stderr,
-	}
-
-	// Only use colored UI if stdout is a tty, and not disabled
-	if isTerminal && color {
-		metaPtr.Ui = &cli.ColoredUi{
-			ErrorColor: cli.UiColorRed,
-			WarnColor:  cli.UiColorYellow,
-			InfoColor:  cli.UiColorGreen,
-			Ui:         metaPtr.Ui,
-		}
 	}
 
 	commands := command.Commands(metaPtr, agentUi)
@@ -202,23 +176,4 @@ func printCommand(w io.Writer, name string, cmdFn cli.CommandFactory) {
 		panic(fmt.Sprintf("failed to load %q command: %s", name, err))
 	}
 	fmt.Fprintf(w, "    %s\t%s\n", name, cmd.Synopsis())
-}
-
-// setupEnv parses args and may replace them and sets some env vars to known
-// values based on format options
-func setupEnv(args []string) []string {
-	noColor := false
-	for _, arg := range args {
-		// Check if color is set
-		if arg == "-no-color" || arg == "--no-color" {
-			noColor = true
-		}
-	}
-
-	// Put back into the env for later
-	if noColor {
-		os.Setenv(command.EnvNomadCLINoColor, "true")
-	}
-
-	return args
 }

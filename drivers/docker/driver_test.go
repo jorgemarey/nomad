@@ -1225,12 +1225,12 @@ func TestDockerDriver_CreateContainerConfig_Mounts(t *testing.T) {
 	defer freeport.Return(ports)
 
 	cfg.Mounts = []DockerMount{
-		DockerMount{
+		{
 			Type:   "bind",
 			Target: "/map-bind-target",
 			Source: "/map-source",
 		},
-		DockerMount{
+		{
 			Type:   "tmpfs",
 			Target: "/map-tmpfs-target",
 		},
@@ -1525,6 +1525,31 @@ func TestDockerDriver_DNS(t *testing.T) {
 		dtestutil.TestTaskDNSConfig(t, d, task.ID, c.cfg)
 	}
 
+}
+
+func TestDockerDriver_Init(t *testing.T) {
+	if !tu.IsCI() {
+		t.Parallel()
+	}
+	testutil.DockerCompatible(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not support init.")
+	}
+
+	task, cfg, ports := dockerTask(t)
+	defer freeport.Return(ports)
+
+	cfg.Init = true
+	require.NoError(t, task.EncodeConcreteDriverConfig(cfg))
+
+	client, d, handle, cleanup := dockerSetup(t, task, nil)
+	defer cleanup()
+	require.NoError(t, d.WaitUntilStarted(task.ID, 5*time.Second))
+
+	container, err := client.InspectContainer(handle.containerID)
+	require.NoError(t, err)
+
+	require.Equal(t, cfg.Init, container.HostConfig.Init)
 }
 
 func TestDockerDriver_CPUSetCPUs(t *testing.T) {

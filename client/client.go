@@ -643,6 +643,18 @@ func (c *Client) init() error {
 
 	c.logger.Info("using alloc directory", "alloc_dir", c.config.AllocDir)
 
+	reserved := "<none>"
+	if c.config.Node != nil && c.config.Node.ReservedResources != nil {
+		// Node should always be non-nil due to initialization in the
+		// agent package, but don't risk a panic just for a long line.
+		reserved = c.config.Node.ReservedResources.Networks.ReservedHostPorts
+	}
+	c.logger.Info("using dynamic ports",
+		"min", c.config.MinDynamicPort,
+		"max", c.config.MaxDynamicPort,
+		"reserved", reserved,
+	)
+
 	// Ensure cgroups are created on linux platform
 	if runtime.GOOS == "linux" && c.cpusetManager != nil {
 		err := c.cpusetManager.Init()
@@ -904,7 +916,7 @@ func (c *Client) GetAllocStats(allocID string) (interfaces.AllocStatsReporter, e
 	return ar.StatsReporter(), nil
 }
 
-// HostStats returns all the stats related to a Nomad client
+// LatestHostStats returns all the stats related to a Nomad client.
 func (c *Client) LatestHostStats() *stats.HostStats {
 	return c.hostStatsCollector.Stats()
 }
@@ -1110,7 +1122,7 @@ func (c *Client) restoreState() error {
 		// now.  If allocs should be run, they will be started when the client
 		// gets allocs from servers.
 		if !c.hasLocalState(alloc) {
-			c.logger.Warn("found a alloc without any local state, skipping restore", "alloc_id", alloc.ID)
+			c.logger.Warn("found an alloc without any local state, skipping restore", "alloc_id", alloc.ID)
 			continue
 		}
 
@@ -1385,6 +1397,8 @@ func (c *Client) setupNode() error {
 	}
 	if node.NodeResources == nil {
 		node.NodeResources = &structs.NodeResources{}
+		node.NodeResources.MinDynamicPort = c.config.MinDynamicPort
+		node.NodeResources.MaxDynamicPort = c.config.MaxDynamicPort
 	}
 	if node.ReservedResources == nil {
 		node.ReservedResources = &structs.NodeReservedResources{}
@@ -1409,6 +1423,14 @@ func (c *Client) setupNode() error {
 					return fmt.Errorf("failed to validate volume %s, err: %v", v.Name, err)
 				}
 				node.HostVolumes[k] = v.Copy()
+			}
+		}
+	}
+	if node.HostNetworks == nil {
+		if l := len(c.config.HostNetworks); l != 0 {
+			node.HostNetworks = make(map[string]*structs.ClientHostNetworkConfig, l)
+			for k, v := range c.config.HostNetworks {
+				node.HostNetworks[k] = v.Copy()
 			}
 		}
 	}
@@ -1496,6 +1518,14 @@ func (c *Client) updateNodeFromFingerprint(response *fingerprint.FingerprintResp
 			c.config.Node.NodeResources.Merge(response.NodeResources)
 			nodeHasChanged = true
 		}
+
+		response.NodeResources.MinDynamicPort = c.config.MinDynamicPort
+		response.NodeResources.MaxDynamicPort = c.config.MaxDynamicPort
+		if c.config.Node.NodeResources.MinDynamicPort != response.NodeResources.MinDynamicPort ||
+			c.config.Node.NodeResources.MaxDynamicPort != response.NodeResources.MaxDynamicPort {
+			nodeHasChanged = true
+		}
+
 	}
 
 	if nodeHasChanged {
@@ -2660,11 +2690,13 @@ func taskIsPresent(taskName string, tasks []*structs.Task) bool {
 
 // triggerDiscovery causes a Consul discovery to begin (if one hasn't already)
 func (c *Client) triggerDiscovery() {
-	select {
-	case c.triggerDiscoveryCh <- struct{}{}:
-		// Discovery goroutine was released to execute
-	default:
-		// Discovery goroutine was already running
+	if c.configCopy.ConsulConfig.ClientAutoJoin != nil && *c.configCopy.ConsulConfig.ClientAutoJoin {
+		select {
+		case c.triggerDiscoveryCh <- struct{}{}:
+			// Discovery goroutine was released to execute
+		default:
+			// Discovery goroutine was already running
+		}
 	}
 }
 
@@ -2833,8 +2865,12 @@ func (c *Client) setGaugeForMemoryStats(nodeID string, hStats *stats.HostStats, 
 
 // setGaugeForCPUStats proxies metrics for CPU specific statistics
 func (c *Client) setGaugeForCPUStats(nodeID string, hStats *stats.HostStats, baseLabels []metrics.Label) {
+
+	labels := make([]metrics.Label, len(baseLabels))
+	copy(labels, baseLabels)
+
 	for _, cpu := range hStats.CPU {
-		labels := append(baseLabels, metrics.Label{
+		labels := append(labels, metrics.Label{
 			Name:  "cpu",
 			Value: cpu.CPU,
 		})
@@ -2848,8 +2884,12 @@ func (c *Client) setGaugeForCPUStats(nodeID string, hStats *stats.HostStats, bas
 
 // setGaugeForDiskStats proxies metrics for disk specific statistics
 func (c *Client) setGaugeForDiskStats(nodeID string, hStats *stats.HostStats, baseLabels []metrics.Label) {
+
+	labels := make([]metrics.Label, len(baseLabels))
+	copy(labels, baseLabels)
+
 	for _, disk := range hStats.DiskStats {
-		labels := append(baseLabels, metrics.Label{
+		labels := append(labels, metrics.Label{
 			Name:  "disk",
 			Value: disk.Device,
 		})
@@ -2873,11 +2913,12 @@ func (c *Client) setGaugeForAllocationStats(nodeID string, baseLabels []metrics.
 
 	// Emit allocated
 	metrics.SetGaugeWithLabels([]string{"client", "allocated", "memory"}, float32(allocated.Flattened.Memory.MemoryMB), baseLabels)
+	metrics.SetGaugeWithLabels([]string{"client", "allocated", "max_memory"}, float32(allocated.Flattened.Memory.MemoryMaxMB), baseLabels)
 	metrics.SetGaugeWithLabels([]string{"client", "allocated", "disk"}, float32(allocated.Shared.DiskMB), baseLabels)
 	metrics.SetGaugeWithLabels([]string{"client", "allocated", "cpu"}, float32(allocated.Flattened.Cpu.CpuShares), baseLabels)
 
 	for _, n := range allocated.Flattened.Networks {
-		labels := append(baseLabels, metrics.Label{
+		labels := append(baseLabels, metrics.Label{ //nolint:gocritic
 			Name:  "device",
 			Value: n.Device,
 		})
@@ -2903,7 +2944,7 @@ func (c *Client) setGaugeForAllocationStats(nodeID string, baseLabels []metrics.
 		}
 
 		unallocatedMbits := n.MBits - usedMbits
-		labels := append(baseLabels, metrics.Label{
+		labels := append(baseLabels, metrics.Label{ //nolint:gocritic
 			Name:  "device",
 			Value: n.Device,
 		})
@@ -3064,8 +3105,8 @@ func (g *group) Go(f func()) {
 	}()
 }
 
-func (c *group) AddCh(ch <-chan struct{}) {
-	c.Go(func() {
+func (g *group) AddCh(ch <-chan struct{}) {
+	g.Go(func() {
 		<-ch
 	})
 }

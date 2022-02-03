@@ -296,6 +296,13 @@ $ curl \
       "ReadOnly": false
     }
   },
+  "HostNetworks" : {
+    "public": {
+      "Name": "public",
+      "CIDR": "10.199.0.200/24",
+      "ReservedPorts": "8080,8081"
+    }
+  }
   "ID": "1ac61e33-a465-2ace-f63f-cffa1285e7eb",
   "LastDrain": {
     "AccessorID": "4e1b7ce1-f8aa-d7ff-09f1-55c3a0fd3988",
@@ -874,6 +881,7 @@ The table below shows this endpoint's support for
 
 ```shell-session
 $ curl \
+    -XPOST \
     http://localhost:4646/v1/node/fb2170a8-257d-3c64-b14d-bc06cc94e34c/evaluate
 ```
 

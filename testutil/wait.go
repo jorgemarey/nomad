@@ -112,12 +112,17 @@ func WaitForLeader(t testing.TB, rpc rpcFn) {
 }
 
 // WaitForClient blocks until the client can be found
-func WaitForClient(t testing.TB, rpc rpcFn, nodeID string) {
+func WaitForClient(t testing.TB, rpc rpcFn, nodeID string, region string) {
+
 	t.Helper()
+
+	if region == "" {
+		region = "global"
+	}
 	WaitForResult(func() (bool, error) {
 		req := structs.NodeSpecificRequest{
 			NodeID:       nodeID,
-			QueryOptions: structs.QueryOptions{Region: "global"},
+			QueryOptions: structs.QueryOptions{Region: region},
 		}
 		var out structs.SingleNodeResponse
 
@@ -132,6 +137,8 @@ func WaitForClient(t testing.TB, rpc rpcFn, nodeID string) {
 	}, func(err error) {
 		t.Fatalf("failed to find node: %v", err)
 	})
+
+	t.Logf("[TEST] Client for test %s ready, id: %s, region: %s", t.Name(), nodeID, region)
 }
 
 // WaitForVotingMembers blocks until autopilot promotes all server peers
@@ -194,7 +201,9 @@ func WaitForRunningWithToken(t testing.TB, rpc rpcFn, job *structs.Job, token st
 
 	var resp structs.JobAllocationsResponse
 
-	WaitForResult(func() (bool, error) {
+	// This can be quite slow if the job has expensive setup such as
+	// downloading large artifacts or creating a chroot.
+	WaitForResultRetries(2000*TestMultiplier(), func() (bool, error) {
 		args := &structs.JobSpecificRequest{}
 		args.JobID = job.ID
 		args.QueryOptions.Region = job.Region
@@ -234,7 +243,7 @@ func WaitForRunning(t testing.TB, rpc rpcFn, job *structs.Job) []*structs.AllocL
 // WaitForFiles blocks until all the files in the slice are present
 func WaitForFiles(t testing.TB, files []string) {
 	WaitForResult(func() (bool, error) {
-		return FilesExist(files), nil
+		return FilesExist(files)
 	}, func(err error) {
 		t.Fatalf("missing expected files: %v", err)
 	})
@@ -243,18 +252,18 @@ func WaitForFiles(t testing.TB, files []string) {
 // WaitForFilesUntil blocks until duration or all the files in the slice are present
 func WaitForFilesUntil(t testing.TB, files []string, until time.Duration) {
 	WaitForResultUntil(until, func() (bool, error) {
-		return FilesExist(files), nil
+		return FilesExist(files)
 	}, func(err error) {
 		t.Fatalf("missing expected files: %v", err)
 	})
 }
 
 // FilesExist verifies all files in the slice are present
-func FilesExist(files []string) bool {
+func FilesExist(files []string) (bool, error) {
 	for _, f := range files {
 		if _, err := os.Stat(f); os.IsNotExist(err) {
-			return false
+			return false, fmt.Errorf("expected file not found: %v", f)
 		}
 	}
-	return true
+	return true, nil
 }

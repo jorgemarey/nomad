@@ -1,0 +1,27 @@
+<JobPage::Parts::Body @job={{this.job}}>
+  <JobPage::Parts::Error @errorMessage={{this.errorMessage}} @onDismiss={{action "clearErrorMessage"}}/>
+
+  <JobPage::Parts::Title @job={{this.job}} @handleError={{action "handleError"}} />
+
+  <JobPage::Parts::StatsBox @job={{this.job}} />
+
+  <JobPage::Parts::JobClientStatusSummary
+    @job={{this.job}}
+    @nodes={{this.nodes}}
+    @forceCollapsed={{not this.shouldDisplayClientInformation}}
+    @gotoClients={{this.gotoClients}} />
+
+  <JobPage::Parts::Summary @job={{this.job}} @forceCollapsed={{this.shouldDisplayClientInformation}} />
+
+  <JobPage::Parts::PlacementFailures @job={{this.job}} />
+
+  <JobPage::Parts::TaskGroups
+    @job={{this.job}}
+    @sortProperty={{this.sortProperty}}
+    @sortDescending={{this.sortDescending}}
+    @gotoTaskGroup={{this.gotoTaskGroup}} />
+
+  <JobPage::Parts::RecentAllocations @job={{this.job}} />
+
+  <JobPage::Parts::Meta @job={{this.job}} />
+</JobPage::Parts::Body>

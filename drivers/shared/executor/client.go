@@ -16,6 +16,8 @@ import (
 	"github.com/hashicorp/nomad/helper/pluginutils/grpcutils"
 	"github.com/hashicorp/nomad/plugins/drivers"
 	dproto "github.com/hashicorp/nomad/plugins/drivers/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var _ Executor = (*grpcExecutorClient)(nil)
@@ -132,12 +134,14 @@ func (c *grpcExecutorClient) handleStats(ctx context.Context, stream proto.Execu
 			return
 		}
 
-		if err != nil {
-			if err != io.EOF {
-				c.logger.Error("error receiving stream from Stats executor RPC, closing stream", "error", err)
-			}
-
-			// End stream
+		if err == io.EOF ||
+			status.Code(err) == codes.Unavailable ||
+			status.Code(err) == codes.Canceled ||
+			err == context.Canceled {
+			c.logger.Trace("executor Stats stream closed", "msg", err)
+			return
+		} else if err != nil {
+			c.logger.Warn("failed to receive Stats executor RPC stream, closing stream", "error", err)
 			return
 		}
 
@@ -191,24 +195,24 @@ func (c *grpcExecutorClient) Exec(deadline time.Time, cmd string, args []string)
 	return resp.Output, int(resp.ExitCode), nil
 }
 
-func (d *grpcExecutorClient) ExecStreaming(ctx context.Context,
+func (c *grpcExecutorClient) ExecStreaming(ctx context.Context,
 	command []string,
 	tty bool,
 	execStream drivers.ExecTaskStream) error {
 
-	err := d.execStreaming(ctx, command, tty, execStream)
+	err := c.execStreaming(ctx, command, tty, execStream)
 	if err != nil {
-		return grpcutils.HandleGrpcErr(err, d.doneCtx)
+		return grpcutils.HandleGrpcErr(err, c.doneCtx)
 	}
 	return nil
 }
 
-func (d *grpcExecutorClient) execStreaming(ctx context.Context,
+func (c *grpcExecutorClient) execStreaming(ctx context.Context,
 	command []string,
 	tty bool,
 	execStream drivers.ExecTaskStream) error {
 
-	stream, err := d.client.ExecStreaming(ctx)
+	stream, err := c.client.ExecStreaming(ctx)
 	if err != nil {
 		return err
 	}

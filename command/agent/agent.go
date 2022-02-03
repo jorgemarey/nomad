@@ -380,6 +380,9 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 	if maxHPS := agentConfig.Server.MaxHeartbeatsPerSecond; maxHPS != 0 {
 		conf.MaxHeartbeatsPerSecond = maxHPS
 	}
+	if failoverTTL := agentConfig.Server.FailoverHeartbeatTTL; failoverTTL != 0 {
+		conf.FailoverHeartbeatTTL = failoverTTL
+	}
 
 	if *agentConfig.Consul.AutoAdvertise && agentConfig.Consul.ServerServiceName == "" {
 		return nil, fmt.Errorf("server_service_name must be set when auto_advertise is enabled")
@@ -401,7 +404,6 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 	conf.StatsCollectionInterval = agentConfig.Telemetry.collectionInterval
 	conf.DisableDispatchedJobSummaryMetrics = agentConfig.Telemetry.DisableDispatchedJobSummaryMetrics
 
-	// Parse Limits timeout from a string into durations
 	if d, err := time.ParseDuration(agentConfig.Limits.RPCHandshakeTimeout); err != nil {
 		return nil, fmt.Errorf("error parsing rpc_handshake_timeout: %v", err)
 	} else if d < 0 {
@@ -542,7 +544,7 @@ func (a *Agent) finalizeClientConfig(c *clientconfig.Config) error {
 // Config. There may be missing fields that must be set by the agent. To do this
 // call finalizeServerConfig
 func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
-	// Setup the configuration
+	// Set up the configuration
 	conf := agentConfig.ClientConfig
 	if conf == nil {
 		conf = clientconfig.DefaultConfig()
@@ -589,13 +591,13 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	}
 	conf.ClientMaxPort = uint(agentConfig.Client.ClientMaxPort)
 	conf.ClientMinPort = uint(agentConfig.Client.ClientMinPort)
+	conf.MaxDynamicPort = agentConfig.Client.MaxDynamicPort
+	conf.MinDynamicPort = agentConfig.Client.MinDynamicPort
 	conf.DisableRemoteExec = agentConfig.Client.DisableRemoteExec
-	if agentConfig.Client.TemplateConfig.FunctionBlacklist != nil {
-		conf.TemplateConfig.FunctionDenylist = agentConfig.Client.TemplateConfig.FunctionBlacklist
-	} else {
-		conf.TemplateConfig.FunctionDenylist = agentConfig.Client.TemplateConfig.FunctionDenylist
+
+	if agentConfig.Client.TemplateConfig != nil {
+		conf.TemplateConfig = agentConfig.Client.TemplateConfig.Copy()
 	}
-	conf.TemplateConfig.DisableSandbox = agentConfig.Client.TemplateConfig.DisableSandbox
 
 	hvMap := make(map[string]*structs.ClientHostVolumeConfig, len(agentConfig.Client.HostVolumes))
 	for _, v := range agentConfig.Client.HostVolumes {
@@ -930,7 +932,7 @@ func (a *Agent) setupClient() error {
 // If no HTTP health check can be supported nil is returned.
 func (a *Agent) agentHTTPCheck(server bool) *structs.ServiceCheck {
 	// Resolve the http check address
-	httpCheckAddr := a.config.normalizedAddrs.HTTP
+	httpCheckAddr := a.config.normalizedAddrs.HTTP[0]
 	if *a.config.Consul.ChecksUseAdvertise {
 		httpCheckAddr = a.config.AdvertiseAddrs.HTTP
 	}
@@ -1090,6 +1092,10 @@ func (a *Agent) ShouldReload(newConfig *Config) (agent, http bool) {
 
 	// Allow the ability to only reload HTTP connections
 	if a.config.TLSConfig.EnableRPC != newConfig.TLSConfig.EnableRPC {
+		agent = true
+	}
+
+	if a.config.TLSConfig.RPCUpgradeMode != newConfig.TLSConfig.RPCUpgradeMode {
 		agent = true
 	}
 

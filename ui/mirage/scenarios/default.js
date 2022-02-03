@@ -1,5 +1,6 @@
 import config from 'nomad-ui/config/environment';
 import * as topoScenarios from './topo';
+import * as sysbatchScenarios from './sysbatch';
 import { pickOne } from '../utils';
 
 const withNamespaces = getConfigValue('mirageWithNamespaces', false);
@@ -16,6 +17,7 @@ const allScenarios = {
   everyFeature,
   emptyCluster,
   ...topoScenarios,
+  ...sysbatchScenarios,
 };
 
 const scenario = getScenarioQueryParameter() || getConfigValue('mirageScenario', 'emptyCluster');
@@ -40,7 +42,7 @@ export default function(server) {
 
 function smallCluster(server) {
   server.create('feature', { name: 'Dynamic Application Sizing' });
-  server.createList('agent', 3);
+  server.createList('agent', 3, 'withConsulLink', 'withVaultLink');
   server.createList('node', 5);
   server.createList('job', 5, { createRecommendations: true });
   server.createList('allocFile', 5);
@@ -58,7 +60,7 @@ function smallCluster(server) {
 }
 
 function mediumCluster(server) {
-  server.createList('agent', 3);
+  server.createList('agent', 3, 'withConsulLink', 'withVaultLink');
   server.createList('node', 50);
   server.createList('job', 25);
 }
@@ -77,7 +79,7 @@ function massiveCluster(server) {
 }
 
 function allJobTypes(server) {
-  server.createList('agent', 3);
+  server.createList('agent', 3, 'withConsulLink', 'withVaultLink');
   server.createList('node', 5);
 
   server.create('job', { type: 'service' });
@@ -85,11 +87,13 @@ function allJobTypes(server) {
   server.create('job', { type: 'system' });
   server.create('job', 'periodic');
   server.create('job', 'parameterized');
+  server.create('job', 'periodicSysbatch');
+  server.create('job', 'parameterizedSysbatch');
   server.create('job', { failedPlacements: true });
 }
 
 function allNodeTypes(server) {
-  server.createList('agent', 3);
+  server.createList('agent', 3, 'withConsulLink', 'withVaultLink');
 
   server.create('node');
   server.create('node', 'forceIPv4');
@@ -102,7 +106,7 @@ function allNodeTypes(server) {
 }
 
 function everyFeature(server) {
-  server.createList('agent', 3);
+  server.createList('agent', 3, 'withConsulLink', 'withVaultLink');
 
   server.create('node', 'forceIPv4');
   server.create('node', 'draining');

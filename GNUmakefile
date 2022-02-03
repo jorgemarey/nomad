@@ -14,6 +14,11 @@ ifeq ($(CI),true)
 GO_TAGS := codegen_generated $(GO_TAGS)
 endif
 
+# Don't embed the Nomad UI when the NOMAD_NO_UI env var is set.
+ifndef NOMAD_NO_UI
+GO_TAGS := ui $(GO_TAGS)
+endif
+
 GO_TEST_CMD = $(if $(shell command -v gotestsum 2>/dev/null),gotestsum --,go test)
 
 ifeq ($(origin GOTEST_PKGS_EXCLUDE), undefined)
@@ -27,7 +32,7 @@ PROTO_COMPARE_TAG ?= v1.0.3$(if $(findstring ent,$(GO_TAGS)),+ent,)
 
 # LAST_RELEASE is the git sha of the latest release corresponding to this branch. main should have the latest
 # published release, but backport branches should point to the parent tag (e.g. 1.0.8 in release-1.0.9 after 1.1.0 is cut).
-LAST_RELEASE ?= v1.1.5
+LAST_RELEASE ?= v1.2.4
 
 default: help
 
@@ -56,6 +61,8 @@ endif
 
 SUPPORTED_OSES = Darwin Linux FreeBSD Windows MSYS_NT
 
+CGO_ENABLED = 1
+
 # include per-user customization after all variables are defined
 -include GNUMakefile.local
 
@@ -66,7 +73,7 @@ ifeq (,$(findstring $(THIS_OS),$(SUPPORTED_OSES)))
 	$(warning WARNING: Building Nomad is only supported on $(SUPPORTED_OSES); not $(THIS_OS))
 endif
 	@echo "==> Building $@ with tags $(GO_TAGS)..."
-	@CGO_ENABLED=1 \
+	@CGO_ENABLED=$(CGO_ENABLED) \
 		GOOS=$(firstword $(subst _, ,$*)) \
 		GOARCH=$(lastword $(subst _, ,$*)) \
 		CC=$(CC) \
@@ -78,6 +85,10 @@ endif
 
 ifneq (aarch64,$(THIS_ARCH))
 pkg/linux_arm64/nomad: CC = aarch64-linux-gnu-gcc
+endif
+
+ifeq (Darwin,$(THIS_OS))
+pkg/linux_%/nomad: CGO_ENABLED = 0
 endif
 
 pkg/windows_%/nomad: GO_OUT = $@.exe
@@ -109,12 +120,13 @@ deps:  ## Install build and development dependencies
 	go install github.com/hashicorp/go-msgpack/codec/codecgen@v1.1.5
 	go install github.com/bufbuild/buf/cmd/buf@v0.36.0
 	go install github.com/hashicorp/go-changelog/cmd/changelog-build@latest
+	go install golang.org/x/tools/cmd/stringer@v0.1.8
 
 .PHONY: lint-deps
 lint-deps: ## Install linter dependencies
 ## Keep versions in sync with tools/go.mod (see https://github.com/golang/go/issues/30515)
 	@echo "==> Updating linter dependencies..."
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.39.0
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.42.0
 	go install github.com/client9/misspell/cmd/misspell@v0.3.4
 	go install github.com/hashicorp/go-hclog/hclogvet@v0.1.3
 
@@ -145,7 +157,7 @@ check: ## Lint the source code
 
 	@echo "==> Check format of jobspecs and HCL files..."
 	@$(MAKE) hclfmt
-	@if (git status -s | grep -q -e '\.hcl$$' -e '\.nomad$$'); then echo the following HCL files are out of sync; git status -s | grep -e '\.hcl$$' -e '\.nomad$$'; exit 1; fi
+	@if (git status -s | grep -q -e '\.hcl$$' -e '\.nomad$$' -e '\.tf$$'); then echo the following HCL files are out of sync; git status -s | grep -e '\.hcl$$' -e '\.nomad$$' -e '\.tf$$'; exit 1; fi
 
 	@echo "==> Check API package is isolated from rest"
 	@cd ./api && if go list --test -f '{{ join .Deps "\n" }}' . | grep github.com/hashicorp/nomad/ | grep -v -e /nomad/api/ -e nomad/api.test; then echo "  /api package depends the ^^ above internal nomad packages.  Remove such dependency"; exit 1; fi
@@ -204,8 +216,15 @@ changelog:
 .PHONY: hclfmt
 hclfmt:
 	@echo "--> Formatting HCL"
-	@find . -path ./terraform -prune -o -name 'upstart.nomad' -prune -o \( -name '*.nomad' -o -name '*.hcl' \) -exec \
-sh -c 'hclfmt -w {} || echo in path {}' ';'
+	@find . -name '.terraform' -prune \
+	        -o -name 'upstart.nomad' -prune \
+	        -o -name '.git' -prune \
+	        -o -name 'node_modules' -prune \
+	        -o -name '.next' -prune \
+	        -o -path './ui/dist' -prune \
+	        -o -path './website/out' -prune \
+	        -o \( -name '*.nomad' -o -name '*.hcl' -o -name '*.tf' \) \
+	      -print0 | xargs -0 hclfmt -w
 
 .PHONY: tidy
 tidy:
@@ -225,6 +244,7 @@ dev: hclfmt ## Build for the current development platform
 	@rm -f $(PROJECT_ROOT)/$(DEV_TARGET)
 	@rm -f $(PROJECT_ROOT)/bin/nomad
 	@rm -f $(GOPATH)/bin/nomad
+	@if [ -d vendor ]; then echo -e "==> WARNING: Found vendor directory.  This may cause build errors, consider running 'rm -r vendor' or 'make clean' to remove.\n"; fi
 	@$(MAKE) --no-print-directory \
 		$(DEV_TARGET) \
 		GO_TAGS="$(GO_TAGS) $(NOMAD_UI_TAG)"
@@ -310,6 +330,7 @@ clean: ## Remove build artifacts
 	@echo "==> Cleaning build artifacts..."
 	@rm -rf "$(PROJECT_ROOT)/bin/"
 	@rm -rf "$(PROJECT_ROOT)/pkg/"
+	@rm -rf "$(PROJECT_ROOT)/vendor/"
 	@rm -f "$(GOPATH)/bin/nomad"
 
 .PHONY: testcluster

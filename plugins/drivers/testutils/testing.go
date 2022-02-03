@@ -36,8 +36,8 @@ type DriverHarness struct {
 	impl   drivers.DriverPlugin
 }
 
-func (d *DriverHarness) Impl() drivers.DriverPlugin {
-	return d.impl
+func (h *DriverHarness) Impl() drivers.DriverPlugin {
+	return h.impl
 }
 func NewDriverHarness(t testing.T, d drivers.DriverPlugin) *DriverHarness {
 	logger := testlog.HCLogger(t).Named("driver_harness")
@@ -83,10 +83,12 @@ func (h *DriverHarness) Kill() {
 func (h *DriverHarness) MkAllocDir(t *drivers.TaskConfig, enableLogs bool) func() {
 	dir, err := ioutil.TempDir("", "nomad_driver_harness-")
 	require.NoError(h.t, err)
-	t.AllocDir = dir
 
-	allocDir := allocdir.NewAllocDir(h.logger, dir)
+	allocDir := allocdir.NewAllocDir(h.logger, dir, t.AllocID)
 	require.NoError(h.t, allocDir.Build())
+
+	t.AllocDir = allocDir.AllocDir
+
 	taskDir := allocDir.NewTaskDir(t.Name)
 
 	caps, err := h.Capabilities()

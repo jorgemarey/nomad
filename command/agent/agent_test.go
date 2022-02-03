@@ -105,7 +105,7 @@ func TestAgent_ServerConfig(t *testing.T) {
 	require.Equal(t, "127.0.0.2", conf.Addresses.HTTP)
 	require.Equal(t, "127.0.0.2", conf.Addresses.RPC)
 	require.Equal(t, "127.0.0.2", conf.Addresses.Serf)
-	require.Equal(t, "127.0.0.2:4646", conf.normalizedAddrs.HTTP)
+	require.Equal(t, []string{"127.0.0.2:4646"}, conf.normalizedAddrs.HTTP)
 	require.Equal(t, "127.0.0.2:4003", conf.normalizedAddrs.RPC)
 	require.Equal(t, "127.0.0.2:4004", conf.normalizedAddrs.Serf)
 	require.Equal(t, "10.0.0.10:4646", conf.AdvertiseAddrs.HTTP)
@@ -141,6 +141,11 @@ func TestAgent_ServerConfig(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, float64(11.0), out.MaxHeartbeatsPerSecond)
 
+	conf.Server.FailoverHeartbeatTTL = 337 * time.Second
+	out, err = a.serverConfig()
+	require.NoError(t, err)
+	require.Equal(t, 337*time.Second, out.FailoverHeartbeatTTL)
+
 	// Defaults to the global bind addr
 	conf.Addresses.RPC = ""
 	conf.Addresses.Serf = ""
@@ -161,7 +166,7 @@ func TestAgent_ServerConfig(t *testing.T) {
 	require.Equal(t, "127.0.0.3", conf.Addresses.HTTP)
 	require.Equal(t, "127.0.0.3", conf.Addresses.RPC)
 	require.Equal(t, "127.0.0.3", conf.Addresses.Serf)
-	require.Equal(t, "127.0.0.3:4646", conf.normalizedAddrs.HTTP)
+	require.Equal(t, []string{"127.0.0.3:4646"}, conf.normalizedAddrs.HTTP)
 	require.Equal(t, "127.0.0.3:4647", conf.normalizedAddrs.RPC)
 	require.Equal(t, "127.0.0.3:4648", conf.normalizedAddrs.Serf)
 
@@ -558,7 +563,7 @@ func TestAgent_HTTPCheck(t *testing.T) {
 			logger: logger,
 			config: &Config{
 				AdvertiseAddrs:  &AdvertiseAddrs{HTTP: "advertise:4646"},
-				normalizedAddrs: &Addresses{HTTP: "normalized:4646"},
+				normalizedAddrs: &NormalizedAddrs{HTTP: []string{"normalized:4646"}},
 				Consul: &config.ConsulConfig{
 					ChecksUseAdvertise: helper.BoolToPtr(false),
 				},
@@ -582,7 +587,7 @@ func TestAgent_HTTPCheck(t *testing.T) {
 		if check.Protocol != "http" {
 			t.Errorf("expected http proto not: %q", check.Protocol)
 		}
-		if expected := a.config.normalizedAddrs.HTTP; check.PortLabel != expected {
+		if expected := a.config.normalizedAddrs.HTTP[0]; check.PortLabel != expected {
 			t.Errorf("expected normalized addr not %q", check.PortLabel)
 		}
 	})
@@ -1289,6 +1294,27 @@ func TestServer_ShouldReload_ShouldHandleMultipleChanges(t *testing.T) {
 		require.False(shouldReloadAgent)
 		require.False(shouldReloadHTTP)
 	}
+}
+
+func TestServer_ShouldReload_ReturnTrueForRPCUpgradeModeChanges(t *testing.T) {
+	t.Parallel()
+
+	sameAgentConfig := &Config{
+		TLSConfig: &config.TLSConfig{
+			RPCUpgradeMode: true,
+		},
+	}
+
+	agent := NewTestAgent(t, t.Name(), func(c *Config) {
+		c.TLSConfig = &config.TLSConfig{
+			RPCUpgradeMode: false,
+		}
+	})
+	defer agent.Shutdown()
+
+	shouldReloadAgent, shouldReloadHTTP := agent.ShouldReload(sameAgentConfig)
+	require.True(t, shouldReloadAgent)
+	require.False(t, shouldReloadHTTP)
 }
 
 func TestAgent_ProxyRPC_Dev(t *testing.T) {

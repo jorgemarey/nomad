@@ -162,7 +162,10 @@ module('Acceptance | jobs list', function(hooks) {
     const job2 = server.create('job', { namespaceId: server.db.namespaces[1].id });
 
     await JobsList.visit();
+    assert.equal(JobsList.jobs.length, 2, 'All jobs by default');
 
+    const firstNamespace = server.db.namespaces[0];
+    await JobsList.visit({ namespace: firstNamespace.id });
     assert.equal(JobsList.jobs.length, 1, 'One job in the default namespace');
     assert.equal(JobsList.jobs.objectAt(0).name, job1.name, 'The correct job is shown');
 
@@ -217,7 +220,7 @@ module('Acceptance | jobs list', function(hooks) {
   testFacet('Type', {
     facet: JobsList.facets.type,
     paramName: 'type',
-    expectedOptions: ['Batch', 'Parameterized', 'Periodic', 'Service', 'System'],
+    expectedOptions: ['Batch', 'Parameterized', 'Periodic', 'Service', 'System', 'System Batch'],
     async beforeEach() {
       server.createList('job', 2, { createAllocations: false, type: 'batch' });
       server.createList('job', 2, {

@@ -13,6 +13,9 @@ import (
 const (
 	// EnvNomadCLINoColor is an env var that toggles colored UI output.
 	EnvNomadCLINoColor = `NOMAD_CLI_NO_COLOR`
+
+	// EnvNomadCLIForceColor is an env var that forces colored UI output.
+	EnvNomadCLIForceColor = `NOMAD_CLI_FORCE_COLOR`
 )
 
 // DeprecatedCommand is a command that wraps an existing command and prints a
@@ -252,6 +255,11 @@ func Commands(metaPtr *Meta, agentUi cli.Ui) map[string]cli.CommandFactory {
 				Meta: meta,
 			}, nil
 		},
+		"eval list": func() (cli.Command, error) {
+			return &EvalListCommand{
+				Meta: meta,
+			}, nil
+		},
 		"eval status": func() (cli.Command, error) {
 			return &EvalStatusCommand{
 				Meta: meta,
@@ -294,6 +302,11 @@ func Commands(metaPtr *Meta, agentUi cli.Ui) map[string]cli.CommandFactory {
 		},
 		"job": func() (cli.Command, error) {
 			return &JobCommand{
+				Meta: meta,
+			}, nil
+		},
+		"job allocs": func() (cli.Command, error) {
+			return &JobAllocsCommand{
 				Meta: meta,
 			}, nil
 		},
@@ -527,17 +540,17 @@ func Commands(metaPtr *Meta, agentUi cli.Ui) map[string]cli.CommandFactory {
 				Meta: meta,
 			}, nil
 		},
-		"operator raft _info": func() (cli.Command, error) {
+		"operator raft info": func() (cli.Command, error) {
 			return &OperatorRaftInfoCommand{
 				Meta: meta,
 			}, nil
 		},
-		"operator raft _logs": func() (cli.Command, error) {
+		"operator raft logs": func() (cli.Command, error) {
 			return &OperatorRaftLogsCommand{
 				Meta: meta,
 			}, nil
 		},
-		"operator raft _state": func() (cli.Command, error) {
+		"operator raft state": func() (cli.Command, error) {
 			return &OperatorRaftStateCommand{
 				Meta: meta,
 			}, nil
@@ -555,6 +568,11 @@ func Commands(metaPtr *Meta, agentUi cli.Ui) map[string]cli.CommandFactory {
 		},
 		"operator snapshot inspect": func() (cli.Command, error) {
 			return &OperatorSnapshotInspectCommand{
+				Meta: meta,
+			}, nil
+		},
+		"operator snapshot state": func() (cli.Command, error) {
+			return &OperatorSnapshotStateCommand{
 				Meta: meta,
 			}, nil
 		},
