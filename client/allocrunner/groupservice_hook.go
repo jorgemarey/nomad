@@ -170,6 +170,7 @@ func (h *groupServiceHook) PreTaskRestart() error {
 	defer func() {
 		// Mark prerun as true to unblock Updates
 		h.prerun = true
+		h.deregistered = false
 		h.mu.Unlock()
 	}()
 
