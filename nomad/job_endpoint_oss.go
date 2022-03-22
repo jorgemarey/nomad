@@ -18,6 +18,7 @@ func (j *Job) enforceSubmitJob(override bool, job *structs.Job) (error, error) {
 	dataCB := func() map[string]interface{} {
 		return map[string]interface{}{
 			"job": job,
+			// TODO: add namespace to the data? using j.srv .. ?
 		}
 	}
 	return j.srv.enforceScope(override, structs.SentinelScopeSubmitJob, dataCB)
