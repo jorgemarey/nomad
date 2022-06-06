@@ -8,6 +8,7 @@ import (
 
 	capi "github.com/hashicorp/consul/api"
 	"github.com/hashicorp/nomad/api"
+	"github.com/hashicorp/nomad/ci"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,6 +25,8 @@ const (
 )
 
 func TestParse(t *testing.T) {
+	ci.Parallel(t)
+
 	cases := []struct {
 		File   string
 		Result *api.Job
@@ -1286,6 +1289,30 @@ func TestParse(t *testing.T) {
 			false,
 		},
 		{
+			"tg-service-connect-resources.hcl",
+			&api.Job{
+				ID:   stringToPtr("sidecar_task_resources"),
+				Name: stringToPtr("sidecar_task_resources"),
+				Type: stringToPtr("service"),
+				TaskGroups: []*api.TaskGroup{{
+					Name: stringToPtr("group"),
+					Services: []*api.Service{{
+						Name: "example",
+						Connect: &api.ConsulConnect{
+							SidecarTask: &api.SidecarTask{
+								Resources: &api.Resources{
+									CPU:         intToPtr(111),
+									MemoryMB:    intToPtr(222),
+									MemoryMaxMB: intToPtr(333),
+								},
+							},
+						},
+					}},
+				}},
+			},
+			false,
+		},
+		{
 			"tg-service-connect-proxy.hcl",
 			&api.Job{
 				ID:   stringToPtr("service-connect-proxy"),
@@ -1760,6 +1787,8 @@ func TestParse(t *testing.T) {
 }
 
 func TestBadPorts(t *testing.T) {
+	ci.Parallel(t)
+
 	path, err := filepath.Abs(filepath.Join("./test-fixtures", "bad-ports.hcl"))
 	if err != nil {
 		t.Fatalf("Can't get absolute path for file: %s", err)
@@ -1773,6 +1802,8 @@ func TestBadPorts(t *testing.T) {
 }
 
 func TestOverlappingPorts(t *testing.T) {
+	ci.Parallel(t)
+
 	path, err := filepath.Abs(filepath.Join("./test-fixtures", "overlapping-ports.hcl"))
 	if err != nil {
 		t.Fatalf("Can't get absolute path for file: %s", err)
@@ -1790,6 +1821,8 @@ func TestOverlappingPorts(t *testing.T) {
 }
 
 func TestIncorrectKey(t *testing.T) {
+	ci.Parallel(t)
+
 	path, err := filepath.Abs(filepath.Join("./test-fixtures", "basic_wrong_key.hcl"))
 	if err != nil {
 		t.Fatalf("Can't get absolute path for file: %s", err)

@@ -7,6 +7,7 @@ import (
 
 	memdb "github.com/hashicorp/go-memdb"
 	msgpackrpc "github.com/hashicorp/net-rpc-msgpackrpc"
+	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/state"
@@ -17,7 +18,7 @@ import (
 )
 
 func TestCoreScheduler_EvalGC(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -111,7 +112,7 @@ func TestCoreScheduler_EvalGC(t *testing.T) {
 
 // Tests GC behavior on allocations being rescheduled
 func TestCoreScheduler_EvalGC_ReschedulingAllocs(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -216,7 +217,7 @@ func TestCoreScheduler_EvalGC_ReschedulingAllocs(t *testing.T) {
 
 // Tests GC behavior on stopped job with reschedulable allocs
 func TestCoreScheduler_EvalGC_StoppedJob_Reschedulable(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -292,7 +293,7 @@ func TestCoreScheduler_EvalGC_StoppedJob_Reschedulable(t *testing.T) {
 
 // An EvalGC should never reap a batch job that has not been stopped
 func TestCoreScheduler_EvalGC_Batch(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -396,7 +397,7 @@ func TestCoreScheduler_EvalGC_Batch(t *testing.T) {
 
 // An EvalGC should reap allocations from jobs with an older modify index
 func TestCoreScheduler_EvalGC_Batch_OldVersion(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -519,7 +520,7 @@ func TestCoreScheduler_EvalGC_Batch_OldVersion(t *testing.T) {
 
 // An EvalGC should  reap a batch job that has been stopped
 func TestCoreScheduler_EvalGC_BatchStopped(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -616,7 +617,7 @@ func TestCoreScheduler_EvalGC_BatchStopped(t *testing.T) {
 }
 
 func TestCoreScheduler_EvalGC_Partial(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -733,7 +734,7 @@ func TestCoreScheduler_EvalGC_Partial(t *testing.T) {
 }
 
 func TestCoreScheduler_EvalGC_Force(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	for _, withAcl := range []bool{false, true} {
 		t.Run(fmt.Sprintf("with acl %v", withAcl), func(t *testing.T) {
 			require := require.New(t)
@@ -817,7 +818,7 @@ func TestCoreScheduler_EvalGC_Force(t *testing.T) {
 }
 
 func TestCoreScheduler_NodeGC(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	for _, withAcl := range []bool{false, true} {
 		t.Run(fmt.Sprintf("with acl %v", withAcl), func(t *testing.T) {
 			var server *Server
@@ -874,7 +875,7 @@ func TestCoreScheduler_NodeGC(t *testing.T) {
 }
 
 func TestCoreScheduler_NodeGC_TerminalAllocs(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -930,7 +931,7 @@ func TestCoreScheduler_NodeGC_TerminalAllocs(t *testing.T) {
 }
 
 func TestCoreScheduler_NodeGC_RunningAllocs(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -988,7 +989,7 @@ func TestCoreScheduler_NodeGC_RunningAllocs(t *testing.T) {
 }
 
 func TestCoreScheduler_NodeGC_Force(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -1032,7 +1033,7 @@ func TestCoreScheduler_NodeGC_Force(t *testing.T) {
 }
 
 func TestCoreScheduler_JobGC_OutstandingEvals(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -1156,7 +1157,7 @@ func TestCoreScheduler_JobGC_OutstandingEvals(t *testing.T) {
 }
 
 func TestCoreScheduler_JobGC_OutstandingAllocs(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -1302,7 +1303,7 @@ func TestCoreScheduler_JobGC_OutstandingAllocs(t *testing.T) {
 // This test ensures that batch jobs are GC'd in one shot, meaning it all
 // allocs/evals and job or nothing
 func TestCoreScheduler_JobGC_OneShot(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -1415,7 +1416,7 @@ func TestCoreScheduler_JobGC_OneShot(t *testing.T) {
 
 // This test ensures that stopped jobs are GCd
 func TestCoreScheduler_JobGC_Stopped(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -1516,7 +1517,7 @@ func TestCoreScheduler_JobGC_Stopped(t *testing.T) {
 }
 
 func TestCoreScheduler_JobGC_Force(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	for _, withAcl := range []bool{false, true} {
 		t.Run(fmt.Sprintf("with acl %v", withAcl), func(t *testing.T) {
 			var server *Server
@@ -1588,7 +1589,7 @@ func TestCoreScheduler_JobGC_Force(t *testing.T) {
 
 // This test ensures parameterized jobs only get gc'd when stopped
 func TestCoreScheduler_JobGC_Parameterized(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -1668,7 +1669,7 @@ func TestCoreScheduler_JobGC_Parameterized(t *testing.T) {
 
 // This test ensures periodic jobs don't get GCd until they are stopped
 func TestCoreScheduler_JobGC_Periodic(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -1742,7 +1743,7 @@ func TestCoreScheduler_JobGC_Periodic(t *testing.T) {
 }
 
 func TestCoreScheduler_DeploymentGC(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -1793,7 +1794,7 @@ func TestCoreScheduler_DeploymentGC(t *testing.T) {
 }
 
 func TestCoreScheduler_DeploymentGC_Force(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	for _, withAcl := range []bool{false, true} {
 		t.Run(fmt.Sprintf("with acl %v", withAcl), func(t *testing.T) {
 			var server *Server
@@ -1839,7 +1840,7 @@ func TestCoreScheduler_DeploymentGC_Force(t *testing.T) {
 }
 
 func TestCoreScheduler_PartitionEvalReap(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -1882,7 +1883,7 @@ func TestCoreScheduler_PartitionEvalReap(t *testing.T) {
 }
 
 func TestCoreScheduler_PartitionDeploymentReap(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
@@ -1919,7 +1920,7 @@ func TestCoreScheduler_PartitionDeploymentReap(t *testing.T) {
 }
 
 func TestCoreScheduler_PartitionJobReap(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	require := require.New(t)
 
 	s1, cleanupS1 := TestServer(t, nil)
@@ -2197,7 +2198,7 @@ func TestAllocation_GCEligible(t *testing.T) {
 }
 
 func TestCoreScheduler_CSIPluginGC(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	srv, cleanupSRV := TestServer(t, nil)
 	defer cleanupSRV()
@@ -2251,7 +2252,7 @@ func TestCoreScheduler_CSIPluginGC(t *testing.T) {
 }
 
 func TestCoreScheduler_CSIVolumeClaimGC(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	require := require.New(t)
 
 	srv, shutdown := TestServer(t, func(c *Config) {
@@ -2286,10 +2287,10 @@ func TestCoreScheduler_CSIVolumeClaimGC(t *testing.T) {
 	err := state.UpsertNode(structs.MsgTypeTestSetup, index, node)
 	require.NoError(err)
 
-	// Note that for volume writes in this test we need to use the
-	// RPCs rather than StateStore methods directly so that the GC
-	// job's RPC call updates a later index. otherwise the
-	// volumewatcher won't trigger for the final GC
+	// *Important*: for volume writes in this test we must use RPCs
+	// rather than StateStore methods directly, or the blocking query
+	// in volumewatcher won't get the final update for GC because it's
+	// watching on a different store at that point
 
 	// Register a volume
 	vols := []*structs.CSIVolume{{
@@ -2310,11 +2311,11 @@ func TestCoreScheduler_CSIVolumeClaimGC(t *testing.T) {
 		volReq, &structs.CSIVolumeRegisterResponse{})
 	require.NoError(err)
 
-	// Create a job with two allocations that claim the volume.
+	// Create a job with two allocs that claim the volume.
 	// We use two allocs here, one of which is not running, so
-	// that we can assert that the volumewatcher has made one
-	// complete pass (and removed the 2nd alloc) before running
-	// the GC.
+	// that we can assert the volumewatcher has made one
+	// complete pass (and removed the 2nd alloc) before we
+	// run the GC
 	eval := mock.Eval()
 	eval.Status = structs.EvalStatusFailed
 	index++
@@ -2339,6 +2340,7 @@ func TestCoreScheduler_CSIVolumeClaimGC(t *testing.T) {
 
 	alloc2.NodeID = node.ID
 	alloc2.ClientStatus = structs.AllocClientStatusComplete
+	alloc2.DesiredStatus = structs.AllocDesiredStatusStop
 	alloc2.Job = job
 	alloc2.JobID = job.ID
 	alloc2.EvalID = eval.ID
@@ -2352,57 +2354,77 @@ func TestCoreScheduler_CSIVolumeClaimGC(t *testing.T) {
 	index++
 	require.NoError(state.UpsertAllocs(structs.MsgTypeTestSetup, index, []*structs.Allocation{alloc1, alloc2}))
 
-	// Claim the volume for the alloc
 	req := &structs.CSIVolumeClaimRequest{
-		AllocationID: alloc1.ID,
-		NodeID:       node.ID,
-		VolumeID:     volID,
-		Claim:        structs.CSIVolumeClaimWrite,
+		VolumeID:       volID,
+		AllocationID:   alloc1.ID,
+		NodeID:         uuid.Generate(), // doesn't exist so we don't get errors trying to unmount volumes from it
+		Claim:          structs.CSIVolumeClaimWrite,
+		AccessMode:     structs.CSIVolumeAccessModeMultiNodeMultiWriter,
+		AttachmentMode: structs.CSIVolumeAttachmentModeFilesystem,
+		State:          structs.CSIVolumeClaimStateTaken,
+		WriteRequest: structs.WriteRequest{
+			Namespace: ns,
+			Region:    srv.config.Region,
+		},
 	}
-	req.Namespace = ns
-	req.Region = srv.config.Region
 	err = msgpackrpc.CallWithCodec(codec, "CSIVolume.Claim",
 		req, &structs.CSIVolumeClaimResponse{})
-	require.NoError(err)
+	require.NoError(err, "write claim should succeed")
 
-	// Delete allocation and job
+	req.AllocationID = alloc2.ID
+	req.State = structs.CSIVolumeClaimStateUnpublishing
+
+	err = msgpackrpc.CallWithCodec(codec, "CSIVolume.Claim",
+		req, &structs.CSIVolumeClaimResponse{})
+	require.NoError(err, "unpublishing claim should succeed")
+
+	require.Eventually(func() bool {
+		vol, err := state.CSIVolumeByID(ws, ns, volID)
+		require.NoError(err)
+		return len(vol.WriteClaims) == 1 &&
+			len(vol.WriteAllocs) == 1 &&
+			len(vol.PastClaims) == 0
+	}, time.Second*1, 100*time.Millisecond,
+		"volumewatcher should have released unpublishing claim without GC")
+
+	// At this point we can guarantee that volumewatcher is waiting
+	// for new work. Delete allocation and job so that the next pass
+	// thru volumewatcher has more work to do
+	index, _ = state.LatestIndex()
 	index++
 	err = state.DeleteJob(index, ns, job.ID)
 	require.NoError(err)
+	index, _ = state.LatestIndex()
 	index++
-	err = state.DeleteEval(index, []string{eval.ID}, []string{alloc1.ID, alloc2.ID})
+	err = state.DeleteEval(index, []string{eval.ID}, []string{alloc1.ID})
 	require.NoError(err)
 
 	// Create a core scheduler and attempt the volume claim GC
 	snap, err := state.Snapshot()
 	require.NoError(err)
+
 	core := NewCoreScheduler(srv, snap)
 
+	index, _ = snap.LatestIndex()
 	index++
 	gc := srv.coreJobEval(structs.CoreJobForceGC, index)
 	c := core.(*CoreScheduler)
 	require.NoError(c.csiVolumeClaimGC(gc))
 
-	// TODO(tgross): the condition below means this test doesn't tell
-	// us much; ideally we should be intercepting the claim request
-	// and verifying that we send the expected claims but we don't
-	// have test infra in place to do that for server RPCs
-
-	// sending the GC claim will trigger the volumewatcher's normal
-	// code path. but the volumewatcher will hit an error here
-	// because there's no path to the node, so we shouldn't see
-	// the WriteClaims removed
+	// the only remaining claim is for a deleted alloc with no path to
+	// the non-existent node, so volumewatcher will release the
+	// remaining claim
 	require.Eventually(func() bool {
 		vol, _ := state.CSIVolumeByID(ws, ns, volID)
-		return len(vol.WriteClaims) == 1 &&
-			len(vol.WriteAllocs) == 1 &&
-			len(vol.PastClaims) == 1
-	}, time.Second*1, 10*time.Millisecond, "claims were released unexpectedly")
+		return len(vol.WriteClaims) == 0 &&
+			len(vol.WriteAllocs) == 0 &&
+			len(vol.PastClaims) == 0
+	}, time.Second*2, 10*time.Millisecond, "claims were not released")
 
 }
 
 func TestCoreScheduler_CSIBadState_ClaimGC(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	require := require.New(t)
 
 	srv, shutdown := TestServer(t, func(c *Config) {
@@ -2442,7 +2464,7 @@ func TestCoreScheduler_CSIBadState_ClaimGC(t *testing.T) {
 }
 
 func TestCoreScheduler_FailLoop(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	require := require.New(t)
 
 	srv, cleanupSrv := TestServer(t, func(c *Config) {

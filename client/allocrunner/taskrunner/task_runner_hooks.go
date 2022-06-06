@@ -3,7 +3,6 @@ package taskrunner
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -65,14 +64,22 @@ func (tr *TaskRunner) initHooks() {
 		newLogMonHook(tr, hookLogger),
 		newDispatchHook(alloc, hookLogger),
 		newVolumeHook(tr, hookLogger),
-		newArtifactHook(tr, hookLogger),
+		newArtifactHook(tr, tr.getter, hookLogger),
 		newStatsHook(tr, tr.clientConfig.StatsCollectionInterval, hookLogger),
 		newDeviceHook(tr.devicemanager, hookLogger),
 	}
 
 	// If the task has a CSI stanza, add the hook.
 	if task.CSIPluginConfig != nil {
-		tr.runnerHooks = append(tr.runnerHooks, newCSIPluginSupervisorHook(filepath.Join(tr.clientConfig.StateDir, "csi"), tr, tr, hookLogger))
+		tr.runnerHooks = append(tr.runnerHooks, newCSIPluginSupervisorHook(
+			&csiPluginSupervisorHookConfig{
+				clientStateDirPath: tr.clientConfig.StateDir,
+				events:             tr,
+				runner:             tr,
+				lifecycle:          tr,
+				capabilities:       tr.driverCapabilities,
+				logger:             hookLogger,
+			}))
 	}
 
 	// If Vault is enabled, add the hook

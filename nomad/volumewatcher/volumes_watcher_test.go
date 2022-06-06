@@ -5,6 +5,7 @@ import (
 	"time"
 
 	memdb "github.com/hashicorp/go-memdb"
+	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper/testlog"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/state"
@@ -15,7 +16,7 @@ import (
 // TestVolumeWatch_EnableDisable tests the watcher registration logic that needs
 // to happen during leader step-up/step-down
 func TestVolumeWatch_EnableDisable(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	require := require.New(t)
 
 	srv := &MockRPCServer{}
@@ -23,18 +24,22 @@ func TestVolumeWatch_EnableDisable(t *testing.T) {
 	index := uint64(100)
 
 	watcher := NewVolumesWatcher(testlog.HCLogger(t), srv, "")
+	watcher.quiescentTimeout = 100 * time.Millisecond
 	watcher.SetEnabled(true, srv.State(), "")
 
 	plugin := mock.CSIPlugin()
 	node := testNode(plugin, srv.State())
 	alloc := mock.Alloc()
 	alloc.ClientStatus = structs.AllocClientStatusComplete
+
 	vol := testVolume(plugin, alloc, node.ID)
 
 	index++
 	err := srv.State().CSIVolumeRegister(index, []*structs.CSIVolume{vol})
 	require.NoError(err)
 
+	// need to have just enough of a volume and claim in place so that
+	// the watcher doesn't immediately stop and unload itself
 	claim := &structs.CSIVolumeClaim{
 		Mode:  structs.CSIVolumeClaimGC,
 		State: structs.CSIVolumeClaimStateNodeDetached,
@@ -55,7 +60,7 @@ func TestVolumeWatch_EnableDisable(t *testing.T) {
 // TestVolumeWatch_LeadershipTransition tests the correct behavior of
 // claim reaping across leader step-up/step-down
 func TestVolumeWatch_LeadershipTransition(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	require := require.New(t)
 
 	srv := &MockRPCServer{}
@@ -63,6 +68,7 @@ func TestVolumeWatch_LeadershipTransition(t *testing.T) {
 	index := uint64(100)
 
 	watcher := NewVolumesWatcher(testlog.HCLogger(t), srv, "")
+	watcher.quiescentTimeout = 100 * time.Millisecond
 
 	plugin := mock.CSIPlugin()
 	node := testNode(plugin, srv.State())
@@ -121,12 +127,12 @@ func TestVolumeWatch_LeadershipTransition(t *testing.T) {
 	// create a new watcher and enable it to simulate the leadership
 	// transition
 	watcher = NewVolumesWatcher(testlog.HCLogger(t), srv, "")
+	watcher.quiescentTimeout = 100 * time.Millisecond
 	watcher.SetEnabled(true, srv.State(), "")
 
 	require.Eventually(func() bool {
 		watcher.wlock.RLock()
 		defer watcher.wlock.RUnlock()
-
 		return 1 == len(watcher.watchers) &&
 			!watcher.watchers[vol.ID+vol.Namespace].isRunning()
 	}, time.Second, 10*time.Millisecond)
@@ -139,13 +145,14 @@ func TestVolumeWatch_LeadershipTransition(t *testing.T) {
 // TestVolumeWatch_StartStop tests the start and stop of the watcher when
 // it receives notifcations and has completed its work
 func TestVolumeWatch_StartStop(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	require := require.New(t)
 
 	srv := &MockStatefulRPCServer{}
 	srv.state = state.TestStateStore(t)
 	index := uint64(100)
 	watcher := NewVolumesWatcher(testlog.HCLogger(t), srv, "")
+	watcher.quiescentTimeout = 100 * time.Millisecond
 
 	watcher.SetEnabled(true, srv.State(), "")
 	require.Equal(0, len(watcher.watchers))
@@ -183,7 +190,9 @@ func TestVolumeWatch_StartStop(t *testing.T) {
 		AllocationID: alloc1.ID,
 		NodeID:       node.ID,
 		Mode:         structs.CSIVolumeClaimRead,
+		AccessMode:   structs.CSIVolumeAccessModeMultiNodeReader,
 	}
+
 	index++
 	err = srv.State().CSIVolumeClaim(index, vol.Namespace, vol.ID, claim)
 	require.NoError(err)
@@ -232,7 +241,7 @@ func TestVolumeWatch_StartStop(t *testing.T) {
 // TestVolumeWatch_RegisterDeregister tests the start and stop of
 // watchers around registration
 func TestVolumeWatch_RegisterDeregister(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	require := require.New(t)
 
 	srv := &MockStatefulRPCServer{}
@@ -241,6 +250,7 @@ func TestVolumeWatch_RegisterDeregister(t *testing.T) {
 	index := uint64(100)
 
 	watcher := NewVolumesWatcher(testlog.HCLogger(t), srv, "")
+	watcher.quiescentTimeout = 10 * time.Millisecond
 
 	watcher.SetEnabled(true, srv.State(), "")
 	require.Equal(0, len(watcher.watchers))
@@ -262,5 +272,9 @@ func TestVolumeWatch_RegisterDeregister(t *testing.T) {
 		return 1 == len(watcher.watchers)
 	}, time.Second, 10*time.Millisecond)
 
-	require.False(watcher.watchers[vol.ID+vol.Namespace].isRunning())
+	require.Eventually(func() bool {
+		watcher.wlock.RLock()
+		defer watcher.wlock.RUnlock()
+		return !watcher.watchers[vol.ID+vol.Namespace].isRunning()
+	}, 1*time.Second, 10*time.Millisecond)
 }

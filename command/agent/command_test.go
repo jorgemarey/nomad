@@ -8,21 +8,24 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/nomad/ci"
+	"github.com/hashicorp/nomad/helper"
 	"github.com/mitchellh/cli"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/hashicorp/nomad/nomad/structs"
+	"github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/nomad/version"
 )
 
 func TestCommand_Implements(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	var _ cli.Command = &Command{}
 }
 
 func TestCommand_Args(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 	tmpDir, err := ioutil.TempDir("", "nomad")
 	if err != nil {
 		t.Fatalf("err: %s", err)
@@ -96,6 +99,8 @@ func TestCommand_Args(t *testing.T) {
 }
 
 func TestCommand_MetaConfigValidation(t *testing.T) {
+	ci.Parallel(t)
+
 	tmpDir, err := ioutil.TempDir("", "nomad")
 	if err != nil {
 		t.Fatalf("err: %s", err)
@@ -149,6 +154,8 @@ func TestCommand_MetaConfigValidation(t *testing.T) {
 }
 
 func TestCommand_NullCharInDatacenter(t *testing.T) {
+	ci.Parallel(t)
+
 	tmpDir, err := ioutil.TempDir("", "nomad")
 	if err != nil {
 		t.Fatalf("err: %s", err)
@@ -198,6 +205,8 @@ func TestCommand_NullCharInDatacenter(t *testing.T) {
 }
 
 func TestCommand_NullCharInRegion(t *testing.T) {
+	ci.Parallel(t)
+
 	tmpDir, err := ioutil.TempDir("", "nomad")
 	if err != nil {
 		t.Fatalf("err: %s", err)
@@ -248,6 +257,7 @@ func TestCommand_NullCharInRegion(t *testing.T) {
 
 // TestIsValidConfig asserts that invalid configurations return false.
 func TestIsValidConfig(t *testing.T) {
+	ci.Parallel(t)
 
 	cases := []struct {
 		name string
@@ -390,6 +400,18 @@ func TestIsValidConfig(t *testing.T) {
 				},
 			},
 			err: `host_network["test"].reserved_ports "3-2147483647" invalid: port must be < 65536 but found 2147483647`,
+		},
+		{
+			name: "BadArtifact",
+			conf: Config{
+				Client: &ClientConfig{
+					Enabled: true,
+					Artifact: &config.ArtifactConfig{
+						HTTPReadTimeout: helper.StringToPtr("-10m"),
+					},
+				},
+			},
+			err: "client.artifact stanza invalid: http_read_timeout must be > 0",
 		},
 	}
 

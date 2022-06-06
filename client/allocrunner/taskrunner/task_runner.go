@@ -238,6 +238,9 @@ type TaskRunner struct {
 	networkIsolationSpec *drivers.NetworkIsolationSpec
 
 	allocHookResources *cstructs.AllocHookResources
+
+	// getter is an interface for retrieving artifacts.
+	getter cinterfaces.ArtifactGetter
 }
 
 type Config struct {
@@ -299,6 +302,9 @@ type Config struct {
 
 	// ShutdownDelayCancelFn should only be used in testing.
 	ShutdownDelayCancelFn context.CancelFunc
+
+	// Getter is an interface for retrieving artifacts.
+	Getter cinterfaces.ArtifactGetter
 }
 
 func NewTaskRunner(config *Config) (*TaskRunner, error) {
@@ -356,6 +362,7 @@ func NewTaskRunner(config *Config) (*TaskRunner, error) {
 		startConditionMetCtx:   config.StartConditionMetCtx,
 		shutdownDelayCtx:       config.ShutdownDelayCtx,
 		shutdownDelayCancelFn:  config.ShutdownDelayCancelFn,
+		getter:                 config.Getter,
 	}
 
 	// Create the logger based on the allocation ID
@@ -527,6 +534,9 @@ func (tr *TaskRunner) Run() {
 		return
 	}
 
+	timer, stop := helper.NewSafeTimer(0) // timer duration calculated JIT
+	defer stop()
+
 MAIN:
 	for !tr.shouldShutdown() {
 		select {
@@ -612,9 +622,11 @@ MAIN:
 			break MAIN
 		}
 
+		timer.Reset(restartDelay)
+
 		// Actually restart by sleeping and also watching for destroy events
 		select {
-		case <-time.After(restartDelay):
+		case <-timer.C:
 		case <-tr.killCtx.Done():
 			tr.logger.Trace("task killed between restarts", "delay", restartDelay)
 			break MAIN
