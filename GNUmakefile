@@ -62,6 +62,7 @@ ifeq (Linux,$(THIS_OS))
 	darwin_amd64
 
 ALL_TARGETS = linux_amd64
+endif
 
 ifeq (s390x,$(THIS_ARCH))
 ALL_TARGETS = linux_s390x

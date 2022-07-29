@@ -174,7 +174,6 @@ func NewTaskTemplateManager(config *TaskTemplateManagerConfig) (*TaskTemplateMan
 		TaskDir:              config.TaskDir,
 		EnvBuilder:           config.EnvBuilder,
 		MaxTemplateEventRate: config.MaxTemplateEventRate,
-		retryRate:            config.retryRate,
 		Templates:            []*structs.Template{},
 	}
 	nonNoopTemplates := make([]*structs.Template, 0)
