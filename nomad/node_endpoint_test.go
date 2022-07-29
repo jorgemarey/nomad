@@ -870,6 +870,55 @@ func TestClientEndpoint_UpdateStatus_HeartbeatOnly_Advertise(t *testing.T) {
 	require.Equal(resp.Servers[0].RPCAdvertiseAddr, advAddr)
 }
 
+func TestNode_UpdateStatus_ServiceRegistrations(t *testing.T) {
+	ci.Parallel(t)
+
+	testServer, serverCleanup := TestServer(t, nil)
+	defer serverCleanup()
+	testutil.WaitForLeader(t, testServer.RPC)
+
+	// Create a node and upsert this into state.
+	node := mock.Node()
+	require.NoError(t, testServer.State().UpsertNode(structs.MsgTypeTestSetup, 10, node))
+
+	// Generate service registrations, ensuring the nodeID is set to the
+	// generated node from above.
+	services := mock.ServiceRegistrations()
+
+	for _, s := range services {
+		s.NodeID = node.ID
+	}
+
+	// Upsert the service registrations into state.
+	require.NoError(t, testServer.State().UpsertServiceRegistrations(structs.MsgTypeTestSetup, 20, services))
+
+	// Check the service registrations are in state as we expect, so we can
+	// have confidence in the rest of the test.
+	ws := memdb.NewWatchSet()
+	nodeRegs, err := testServer.State().GetServiceRegistrationsByNodeID(ws, node.ID)
+	require.NoError(t, err)
+	require.Len(t, nodeRegs, 2)
+	require.Equal(t, nodeRegs[0].NodeID, node.ID)
+	require.Equal(t, nodeRegs[1].NodeID, node.ID)
+
+	// Generate and trigger a node down status update. This mimics what happens
+	// when the node fails its heart-beating.
+	args := structs.NodeUpdateStatusRequest{
+		NodeID:       node.ID,
+		Status:       structs.NodeStatusDown,
+		WriteRequest: structs.WriteRequest{Region: "global"},
+	}
+
+	var reply structs.NodeUpdateResponse
+	require.NoError(t, testServer.staticEndpoints.Node.UpdateStatus(&args, &reply))
+
+	// Query our state, to ensure the node service registrations have been
+	// removed.
+	nodeRegs, err = testServer.State().GetServiceRegistrationsByNodeID(ws, node.ID)
+	require.NoError(t, err)
+	require.Len(t, nodeRegs, 0)
+}
+
 // TestClientEndpoint_UpdateDrain asserts the ability to initiate drain
 // against a node and cancel that drain. It also asserts:
 // * an evaluation is created when the node becomes eligible
@@ -2063,11 +2112,11 @@ func TestClientEndpoint_GetClientAllocs_Blocking(t *testing.T) {
 	alloc := mock.Alloc()
 	alloc.NodeID = node.ID
 	alloc.ModifyTime = now
-	state := s1.fsm.State()
-	state.UpsertJobSummary(99, mock.JobSummary(alloc.JobID))
+	store := s1.fsm.State()
+	store.UpsertJobSummary(99, mock.JobSummary(alloc.JobID))
 	start := time.Now()
 	time.AfterFunc(100*time.Millisecond, func() {
-		err := state.UpsertAllocs(structs.MsgTypeTestSetup, 100, []*structs.Allocation{alloc})
+		err := store.UpsertAllocs(structs.MsgTypeTestSetup, 100, []*structs.Allocation{alloc})
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -2101,7 +2150,7 @@ func TestClientEndpoint_GetClientAllocs_Blocking(t *testing.T) {
 		t.Fatalf("bad: %#v", resp2.Allocs)
 	}
 
-	iter, err := state.AllocsByIDPrefix(nil, structs.DefaultNamespace, alloc.ID)
+	iter, err := store.AllocsByIDPrefix(nil, structs.DefaultNamespace, alloc.ID, state.SortDefault)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -2133,8 +2182,8 @@ func TestClientEndpoint_GetClientAllocs_Blocking(t *testing.T) {
 		allocUpdate.NodeID = alloc.NodeID
 		allocUpdate.ID = alloc.ID
 		allocUpdate.ClientStatus = structs.AllocClientStatusRunning
-		state.UpsertJobSummary(199, mock.JobSummary(allocUpdate.JobID))
-		err := state.UpsertAllocs(structs.MsgTypeTestSetup, 200, []*structs.Allocation{allocUpdate})
+		store.UpsertJobSummary(199, mock.JobSummary(allocUpdate.JobID))
+		err := store.UpsertAllocs(structs.MsgTypeTestSetup, 200, []*structs.Allocation{allocUpdate})
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -2216,7 +2265,7 @@ func TestClientEndpoint_GetClientAllocs_Blocking_GC(t *testing.T) {
 
 	// Delete an allocation
 	time.AfterFunc(100*time.Millisecond, func() {
-		assert.Nil(state.DeleteEval(200, nil, []string{alloc2.ID}))
+		assert.Nil(state.DeleteEval(200, nil, []string{alloc2.ID}, false))
 	})
 
 	req.QueryOptions.MinQueryIndex = 150
@@ -2628,23 +2677,32 @@ func TestClientEndpoint_CreateNodeEvals(t *testing.T) {
 	s1, cleanupS1 := TestServer(t, nil)
 	defer cleanupS1()
 	testutil.WaitForLeader(t, s1.RPC)
+	state := s1.fsm.State()
+
+	idx, err := state.LatestIndex()
+	require.NoError(t, err)
+
+	node := mock.Node()
+	err = state.UpsertNode(structs.MsgTypeTestSetup, idx, node)
+	require.NoError(t, err)
+	idx++
 
 	// Inject fake evaluations
 	alloc := mock.Alloc()
-	state := s1.fsm.State()
+	alloc.NodeID = node.ID
 	state.UpsertJobSummary(1, mock.JobSummary(alloc.JobID))
-	if err := state.UpsertAllocs(structs.MsgTypeTestSetup, 2, []*structs.Allocation{alloc}); err != nil {
-		t.Fatalf("err: %v", err)
-	}
+	require.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, idx, []*structs.Allocation{alloc}))
+	idx++
 
 	// Inject a fake system job.
 	job := mock.SystemJob()
-	if err := state.UpsertJob(structs.MsgTypeTestSetup, 3, job); err != nil {
+	if err := state.UpsertJob(structs.MsgTypeTestSetup, idx, job); err != nil {
 		t.Fatalf("err: %v", err)
 	}
+	idx++
 
 	// Create some evaluations
-	ids, index, err := s1.staticEndpoints.Node.createNodeEvals(alloc.NodeID, 1)
+	ids, index, err := s1.staticEndpoints.Node.createNodeEvals(node, 1)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -2741,7 +2799,7 @@ func TestClientEndpoint_CreateNodeEvals_MultipleNSes(t *testing.T) {
 	idx++
 
 	// Create some evaluations
-	evalIDs, index, err := s1.staticEndpoints.Node.createNodeEvals(node.ID, 1)
+	evalIDs, index, err := s1.staticEndpoints.Node.createNodeEvals(node, 1)
 	require.NoError(t, err)
 	require.NotZero(t, index)
 	require.Len(t, evalIDs, 2)
@@ -2764,6 +2822,51 @@ func TestClientEndpoint_CreateNodeEvals_MultipleNSes(t *testing.T) {
 	require.NotNil(t, otherNSEval)
 	require.Equal(t, nsJob.ID, otherNSEval.JobID)
 	require.Equal(t, nsJob.Namespace, otherNSEval.Namespace)
+}
+
+// TestClientEndpoint_CreateNodeEvals_MultipleDCes asserts that evals are made
+// only for the DC the node is in.
+func TestClientEndpoint_CreateNodeEvals_MultipleDCes(t *testing.T) {
+	ci.Parallel(t)
+
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
+	testutil.WaitForLeader(t, s1.RPC)
+
+	state := s1.fsm.State()
+
+	idx, err := state.LatestIndex()
+	require.NoError(t, err)
+
+	node := mock.Node()
+	node.Datacenter = "test1"
+	err = state.UpsertNode(structs.MsgTypeTestSetup, idx, node)
+	require.NoError(t, err)
+	idx++
+
+	// Inject a fake system job in the same dc
+	defaultJob := mock.SystemJob()
+	defaultJob.Datacenters = []string{"test1", "test2"}
+	err = state.UpsertJob(structs.MsgTypeTestSetup, idx, defaultJob)
+	require.NoError(t, err)
+	idx++
+
+	// Inject a fake system job in a different dc
+	nsJob := mock.SystemJob()
+	nsJob.Datacenters = []string{"test2", "test3"}
+	err = state.UpsertJob(structs.MsgTypeTestSetup, idx, nsJob)
+	require.NoError(t, err)
+	idx++
+
+	// Create evaluations
+	evalIDs, index, err := s1.staticEndpoints.Node.createNodeEvals(node, 1)
+	require.NoError(t, err)
+	require.NotZero(t, index)
+	require.Len(t, evalIDs, 1)
+
+	eval, err := state.EvalByID(nil, evalIDs[0])
+	require.NoError(t, err)
+	require.Equal(t, defaultJob.ID, eval.JobID)
 }
 
 func TestClientEndpoint_Evaluate(t *testing.T) {
@@ -3713,6 +3816,335 @@ func TestClientEndpoint_ShouldCreateNodeEval(t *testing.T) {
 			c.updateFn(n2)
 
 			require.Truef(t, shouldCreateNodeEval(n1, n2), "node changed but without node eval: %v", pretty.Diff(n1, n2))
+		})
+	}
+}
+
+func TestClientEndpoint_UpdateAlloc_Evals_ByTrigger(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name               string
+		clientStatus       string
+		serverClientStatus string
+		triggerBy          string
+		missingJob         bool
+		missingAlloc       bool
+		invalidTaskGroup   bool
+	}
+
+	testCases := []testCase{
+		{
+			name:               "failed-alloc",
+			clientStatus:       structs.AllocClientStatusFailed,
+			serverClientStatus: structs.AllocClientStatusRunning,
+			triggerBy:          structs.EvalTriggerRetryFailedAlloc,
+			missingJob:         false,
+			missingAlloc:       false,
+			invalidTaskGroup:   false,
+		},
+		{
+			name:               "unknown-alloc",
+			clientStatus:       structs.AllocClientStatusRunning,
+			serverClientStatus: structs.AllocClientStatusUnknown,
+			triggerBy:          structs.EvalTriggerReconnect,
+			missingJob:         false,
+			missingAlloc:       false,
+			invalidTaskGroup:   false,
+		},
+		{
+			name:               "orphaned-unknown-alloc",
+			clientStatus:       structs.AllocClientStatusRunning,
+			serverClientStatus: structs.AllocClientStatusUnknown,
+			triggerBy:          structs.EvalTriggerJobDeregister,
+			missingJob:         true,
+			missingAlloc:       false,
+			invalidTaskGroup:   false,
+		},
+		{
+			name:               "running-job",
+			clientStatus:       structs.AllocClientStatusRunning,
+			serverClientStatus: structs.AllocClientStatusRunning,
+			triggerBy:          "",
+			missingJob:         false,
+			missingAlloc:       false,
+			invalidTaskGroup:   false,
+		},
+		{
+			name:               "complete-job",
+			clientStatus:       structs.AllocClientStatusComplete,
+			serverClientStatus: structs.AllocClientStatusComplete,
+			triggerBy:          "",
+			missingJob:         false,
+			missingAlloc:       false,
+			invalidTaskGroup:   false,
+		},
+		{
+			name:               "no-alloc-at-server",
+			clientStatus:       structs.AllocClientStatusUnknown,
+			serverClientStatus: "",
+			triggerBy:          "",
+			missingJob:         false,
+			missingAlloc:       true,
+			invalidTaskGroup:   false,
+		},
+		{
+			name:               "invalid-task-group",
+			clientStatus:       structs.AllocClientStatusUnknown,
+			serverClientStatus: structs.AllocClientStatusRunning,
+			triggerBy:          "",
+			missingJob:         false,
+			missingAlloc:       false,
+			invalidTaskGroup:   true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			s1, cleanupS1 := TestServer(t, func(c *Config) {
+				// Disabling scheduling in this test so that we can
+				// ensure that the state store doesn't accumulate more evals
+				// than what we expect the unit test to add
+				c.NumSchedulers = 0
+			})
+
+			defer cleanupS1()
+			codec := rpcClient(t, s1)
+			testutil.WaitForLeader(t, s1.RPC)
+
+			// Create the register request
+			node := mock.Node()
+			reg := &structs.NodeRegisterRequest{
+				Node:         node,
+				WriteRequest: structs.WriteRequest{Region: "global"},
+			}
+
+			// Fetch the response
+			var nodeResp structs.GenericResponse
+			err := msgpackrpc.CallWithCodec(codec, "Node.Register", reg, &nodeResp)
+			require.NoError(t, err)
+
+			fsmState := s1.fsm.State()
+
+			job := mock.Job()
+			job.ID = tc.name + "-test-job"
+
+			if !tc.missingJob {
+				err = fsmState.UpsertJob(structs.MsgTypeTestSetup, 101, job)
+				require.NoError(t, err)
+			}
+
+			serverAlloc := mock.Alloc()
+			serverAlloc.JobID = job.ID
+			serverAlloc.NodeID = node.ID
+			serverAlloc.ClientStatus = tc.serverClientStatus
+			serverAlloc.TaskGroup = job.TaskGroups[0].Name
+
+			// Create the incoming client alloc.
+			clientAlloc := serverAlloc.Copy()
+			clientAlloc.ClientStatus = tc.clientStatus
+
+			err = fsmState.UpsertJobSummary(99, mock.JobSummary(serverAlloc.JobID))
+			require.NoError(t, err)
+
+			if tc.invalidTaskGroup {
+				serverAlloc.TaskGroup = "invalid"
+			}
+
+			if !tc.missingAlloc {
+				err = fsmState.UpsertAllocs(structs.MsgTypeTestSetup, 100, []*structs.Allocation{serverAlloc})
+				require.NoError(t, err)
+			}
+
+			updateReq := &structs.AllocUpdateRequest{
+				Alloc:        []*structs.Allocation{clientAlloc},
+				WriteRequest: structs.WriteRequest{Region: "global"},
+			}
+
+			var nodeAllocResp structs.NodeAllocsResponse
+			err = msgpackrpc.CallWithCodec(codec, "Node.UpdateAlloc", updateReq, &nodeAllocResp)
+			require.NoError(t, err)
+			require.NotEqual(t, uint64(0), nodeAllocResp.Index)
+
+			// If no eval should be created validate, none were and return.
+			if tc.triggerBy == "" {
+				evaluations, err := fsmState.EvalsByJob(nil, job.Namespace, job.ID)
+				require.NoError(t, err)
+				require.Len(t, evaluations, 0)
+				return
+			}
+
+			// Lookup the alloc
+			updatedAlloc, err := fsmState.AllocByID(nil, serverAlloc.ID)
+			require.NoError(t, err)
+			require.Equal(t, tc.clientStatus, updatedAlloc.ClientStatus)
+
+			// Assert that exactly one eval with test case TriggeredBy exists
+			evaluations, err := fsmState.EvalsByJob(nil, job.Namespace, job.ID)
+			require.NoError(t, err)
+			require.Equal(t, 1, len(evaluations))
+			foundCount := 0
+			for _, resultEval := range evaluations {
+				if resultEval.TriggeredBy == tc.triggerBy && resultEval.WaitUntil.IsZero() {
+					foundCount++
+				}
+			}
+			require.Equal(t, 1, foundCount, "Should create exactly one eval for trigger by", tc.triggerBy)
+		})
+	}
+
+}
+
+func TestNode_List_PaginationFiltering(t *testing.T) {
+	ci.Parallel(t)
+
+	s1, _, cleanupS1 := TestACLServer(t, nil)
+	defer cleanupS1()
+	codec := rpcClient(t, s1)
+	testutil.WaitForLeader(t, s1.RPC)
+
+	// Build a set of nodes in various datacenters and states. This allows us
+	// to test different filter queries along with pagination.
+	mocks := []struct {
+		id     string
+		dc     string
+		status string
+	}{
+		{
+			id:     "aaaa1111-3350-4b4b-d185-0e1992ed43e9",
+			dc:     "dc2",
+			status: structs.NodeStatusDisconnected,
+		},
+		{
+			id:     "aaaaaa22-3350-4b4b-d185-0e1992ed43e9",
+			dc:     "dc1",
+			status: structs.NodeStatusReady,
+		},
+		{
+			id:     "aaaaaa33-3350-4b4b-d185-0e1992ed43e9",
+			dc:     "dc3",
+			status: structs.NodeStatusReady,
+		},
+		{
+			id:     "aaaaaaaa-3350-4b4b-d185-0e1992ed43e9",
+			dc:     "dc2",
+			status: structs.NodeStatusDown,
+		},
+		{
+			id:     "aaaaaabb-3350-4b4b-d185-0e1992ed43e9",
+			dc:     "dc3",
+			status: structs.NodeStatusDown,
+		},
+		{
+			id:     "aaaaaacc-3350-4b4b-d185-0e1992ed43e9",
+			dc:     "dc1",
+			status: structs.NodeStatusReady,
+		},
+	}
+
+	testState := s1.fsm.State()
+
+	for i, m := range mocks {
+		index := 1000 + uint64(i)
+		mockNode := mock.Node()
+		mockNode.ID = m.id
+		mockNode.Datacenter = m.dc
+		mockNode.Status = m.status
+		mockNode.CreateIndex = index
+		require.NoError(t, testState.UpsertNode(structs.MsgTypeTestSetup, index, mockNode))
+	}
+
+	// The server is running with ACLs enabled, so generate an adequate token
+	// to use.
+	aclToken := mock.CreatePolicyAndToken(t, testState, 1100, "test-valid-read",
+		mock.NodePolicy(acl.PolicyRead)).SecretID
+
+	cases := []struct {
+		name              string
+		filter            string
+		nextToken         string
+		pageSize          int32
+		expectedNextToken string
+		expectedIDs       []string
+		expectedError     string
+	}{
+		{
+			name:              "pagination no filter",
+			pageSize:          2,
+			expectedNextToken: "aaaaaa33-3350-4b4b-d185-0e1992ed43e9",
+			expectedIDs: []string{
+				"aaaa1111-3350-4b4b-d185-0e1992ed43e9",
+				"aaaaaa22-3350-4b4b-d185-0e1992ed43e9",
+			},
+		},
+		{
+			name:              "pagination no filter with next token",
+			pageSize:          2,
+			nextToken:         "aaaaaa33-3350-4b4b-d185-0e1992ed43e9",
+			expectedNextToken: "aaaaaabb-3350-4b4b-d185-0e1992ed43e9",
+			expectedIDs: []string{
+				"aaaaaa33-3350-4b4b-d185-0e1992ed43e9",
+				"aaaaaaaa-3350-4b4b-d185-0e1992ed43e9",
+			},
+		},
+		{
+			name:              "pagination no filter with next token end of pages",
+			pageSize:          2,
+			nextToken:         "aaaaaabb-3350-4b4b-d185-0e1992ed43e9",
+			expectedNextToken: "",
+			expectedIDs: []string{
+				"aaaaaabb-3350-4b4b-d185-0e1992ed43e9",
+				"aaaaaacc-3350-4b4b-d185-0e1992ed43e9",
+			},
+		},
+		{
+			name:   "filter no pagination",
+			filter: `Datacenter == "dc3"`,
+			expectedIDs: []string{
+				"aaaaaa33-3350-4b4b-d185-0e1992ed43e9",
+				"aaaaaabb-3350-4b4b-d185-0e1992ed43e9",
+			},
+		},
+		{
+			name:              "filter and pagination",
+			filter:            `Status != "ready"`,
+			pageSize:          2,
+			expectedNextToken: "aaaaaabb-3350-4b4b-d185-0e1992ed43e9",
+			expectedIDs: []string{
+				"aaaa1111-3350-4b4b-d185-0e1992ed43e9",
+				"aaaaaaaa-3350-4b4b-d185-0e1992ed43e9",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &structs.NodeListRequest{
+				QueryOptions: structs.QueryOptions{
+					Region:    "global",
+					Filter:    tc.filter,
+					PerPage:   tc.pageSize,
+					NextToken: tc.nextToken,
+				},
+			}
+			req.AuthToken = aclToken
+			var resp structs.NodeListResponse
+			err := msgpackrpc.CallWithCodec(codec, "Node.List", req, &resp)
+			if tc.expectedError == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.expectedError)
+				return
+			}
+
+			actualIDs := []string{}
+
+			for _, node := range resp.Nodes {
+				actualIDs = append(actualIDs, node.ID)
+			}
+			require.Equal(t, tc.expectedIDs, actualIDs, "unexpected page of nodes")
+			require.Equal(t, tc.expectedNextToken, resp.QueryMeta.NextToken, "unexpected NextToken")
 		})
 	}
 }

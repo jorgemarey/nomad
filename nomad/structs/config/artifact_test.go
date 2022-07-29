@@ -343,7 +343,7 @@ func TestArtifactConfig_Validate(t *testing.T) {
 			err := a.Validate()
 			if tc.expectedError != "" {
 				require.Error(t, err)
-				require.Contains(t, err.Error(), tc.expectedError)
+				require.ErrorContains(t, err, tc.expectedError)
 			} else {
 				require.NoError(t, err)
 			}

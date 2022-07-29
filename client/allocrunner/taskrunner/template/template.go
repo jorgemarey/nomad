@@ -108,8 +108,8 @@ type TaskTemplateManagerConfig struct {
 	// MaxTemplateEventRate is the maximum rate at which we should emit events.
 	MaxTemplateEventRate time.Duration
 
-	// retryRate is only used for testing and is used to increase the retry rate
-	retryRate time.Duration
+	// NomadNamespace is the Nomad namespace for the task
+	NomadNamespace string
 }
 
 // Validate validates the configuration.
@@ -954,6 +954,13 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 	if conf.Vault.Retry.Attempts == nil {
 		conf.Vault.Retry.Attempts = &retryAttemps
 	}
+
+	// Set up Nomad
+	conf.Nomad.Namespace = &config.NomadNamespace
+	conf.Nomad.Transport.CustomDialer = cc.TemplateDialer
+
+	// Use the Node's SecretID to authenticate Nomad template function calls.
+	conf.Nomad.Token = &cc.Node.SecretID
 
 	conf.Finalize()
 	return conf, nil

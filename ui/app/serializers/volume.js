@@ -1,9 +1,11 @@
 import { set, get } from '@ember/object';
 import ApplicationSerializer from './application';
-
+import classic from 'ember-classic-decorator';
+import { capitalize } from '@ember/string';
+@classic
 export default class VolumeSerializer extends ApplicationSerializer {
   attrs = {
-    externalId: 'ExternalID',
+    externalId: 'ExternalID'
   };
 
   embeddedRelationships = ['writeAllocations', 'readAllocations'];
@@ -44,12 +46,17 @@ export default class VolumeSerializer extends ApplicationSerializer {
     }
 
     const normalizedHash = super.normalize(typeHash, hash);
-    return this.extractEmbeddedRecords(this, this.store, typeHash, normalizedHash);
+    return this.extractEmbeddedRecords(
+      this,
+      this.store,
+      typeHash,
+      normalizedHash
+    );
   }
 
   keyForRelationship(attr, relationshipType) {
     //Embedded relationship attributes don't end in IDs
-    if (this.embeddedRelationships.includes(attr)) return attr.capitalize();
+    if (this.embeddedRelationships.includes(attr)) return capitalize(attr);
     return super.keyForRelationship(attr, relationshipType);
   }
 

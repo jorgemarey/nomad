@@ -16,7 +16,7 @@ export default class IndexController extends Controller.extend(
     'schedulable',
     'controllersHealthyProportion',
     'nodesHealthyProportion',
-    'provider',
+    'provider'
   ]),
   Searchable
 ) {
@@ -29,20 +29,20 @@ export default class IndexController extends Controller.extend(
 
   queryParams = [
     {
-      currentPage: 'page',
+      currentPage: 'page'
     },
     {
-      searchTerm: 'search',
+      searchTerm: 'search'
     },
     {
-      sortProperty: 'sort',
+      sortProperty: 'sort'
     },
     {
-      sortDescending: 'desc',
+      sortDescending: 'desc'
     },
     {
-      qpNamespace: 'namespace',
-    },
+      qpNamespace: 'namespace'
+    }
   ];
 
   currentPage = 1;
@@ -63,16 +63,16 @@ export default class IndexController extends Controller.extend(
 
   fuzzySearchEnabled = true;
 
-  @computed('qpNamespace', 'model.namespaces.[]', 'system.cachedNamespace')
+  @computed('qpNamespace', 'model.namespaces.[]')
   get optionsNamespaces() {
     const availableNamespaces = this.model.namespaces.map(namespace => ({
       key: namespace.name,
-      label: namespace.name,
+      label: namespace.name
     }));
 
     availableNamespaces.unshift({
       key: '*',
-      label: 'All (*)',
+      label: 'All (*)'
     });
 
     // Unset the namespace selection if it was server-side deleted
@@ -80,7 +80,7 @@ export default class IndexController extends Controller.extend(
       // eslint-disable-next-line ember/no-incorrect-calls-with-inline-anonymous-functions
       scheduleOnce('actions', () => {
         // eslint-disable-next-line ember/no-side-effects
-        this.set('qpNamespace', this.system.cachedNamespace || '*');
+        this.set('qpNamespace', '*');
       });
     }
 
@@ -100,11 +100,6 @@ export default class IndexController extends Controller.extend(
   @alias('listSorted') listToSearch;
   @alias('listSearched') sortedVolumes;
 
-  @action
-  cacheNamespace(namespace) {
-    this.system.cachedNamespace = namespace;
-  }
-
   setFacetQueryParam(queryParam, selection) {
     this.set(queryParam, serialize(selection));
   }
@@ -113,10 +108,11 @@ export default class IndexController extends Controller.extend(
   gotoVolume(volume, event) {
     lazyClick([
       () =>
-        this.transitionToRoute('csi.volumes.volume', volume.get('plainId'), {
-          queryParams: { volumeNamespace: volume.get('namespace.name') },
-        }),
-      event,
+        this.transitionToRoute(
+          'csi.volumes.volume',
+          volume.get('idWithNamespace')
+        ),
+      event
     ]);
   }
 }

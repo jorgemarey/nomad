@@ -5,12 +5,10 @@ package nomad
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/hashicorp/nomad/api"
 	"github.com/hashicorp/nomad/nomad/structs"
-	vapi "github.com/hashicorp/vault/api"
 )
 
 // enforceSubmitJob is used to check any Sentinel policies for the submit-job scope
@@ -203,19 +201,20 @@ func (j *Job) interpolateMultiregionJobFields(job *structs.Job, region string) e
 	return nil
 }
 
+// ### This was removed when merged 1.3.2
 // multiVaultNamespaceValidation provides a convience check to ensure
 // multiple vault namespaces were not requested, this returns an early friendly
 // error before job registry and further feature checks.
-func (j *Job) multiVaultNamespaceValidation(
-	policies map[string]map[string]*structs.Vault,
-	s *vapi.Secret,
-) error {
-	requestedNamespaces := structs.VaultNamespaceSet(policies)
-	if len(requestedNamespaces) > 0 {
-		return fmt.Errorf("%w, Namespaces: %s", ErrMultipleNamespaces, strings.Join(requestedNamespaces, ", "))
-	}
-	return nil
-}
+// func (j *Job) multiVaultNamespaceValidation(
+// 	policies map[string]map[string]*structs.Vault,
+// 	s *vapi.Secret,
+// ) error {
+// 	requestedNamespaces := structs.VaultNamespaceSet(policies)
+// 	if len(requestedNamespaces) > 0 {
+// 		return fmt.Errorf("%w, Namespaces: %s", ErrMultipleNamespaces, strings.Join(requestedNamespaces, ", "))
+// 	}
+// 	return nil
+// }
 
 // multiregion information:
 

@@ -18,17 +18,18 @@ export default Factory.extend({
           Running: faker.random.number(10),
           Starting: faker.random.number(10),
           Lost: faker.random.number(10),
+          Unknown: faker.random.number(10)
         };
         return summary;
       }, {});
-    },
+    }
   }),
 
   withChildren: trait({
     Children: () => ({
       Pending: faker.random.number(10),
       Running: faker.random.number(10),
-      Dead: faker.random.number(10),
-    }),
-  }),
+      Dead: faker.random.number(10)
+    })
+  })
 });

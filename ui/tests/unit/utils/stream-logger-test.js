@@ -9,7 +9,7 @@ module('Unit | Util | StreamLogger', function() {
     const fetch = fetchMock.request();
 
     const logger = StreamLogger.create({
-      logFetch: () => fetch,
+      logFetch: () => fetch
     });
 
     logger.start();
@@ -29,7 +29,7 @@ module('Unit | Util | StreamLogger', function() {
     const fetch = fetchMock.request();
 
     const logger = StreamLogger.create({
-      logFetch: () => fetch,
+      logFetch: () => fetch
     });
 
     logger.start();
@@ -42,6 +42,11 @@ module('Unit | Util | StreamLogger', function() {
 
     assert.notOk(logger.poll.isRunning);
     assert.equal(fetchMock.reader.readSpy.callCount, 1);
+  });
+
+  test('disable streaming if not supported', async function(assert) {
+    window.ReadableStream = null;
+    assert.false(StreamLogger.isSupported);
   });
 });
 
@@ -65,7 +70,9 @@ class FetchMock {
     if (this._closeRequest) {
       this._closeRequest(this.response);
     } else {
-      throw new Error('Must call FetchMock.request() before FetchMock.closeRequest');
+      throw new Error(
+        'Must call FetchMock.request() before FetchMock.closeRequest'
+      );
     }
   }
 }
@@ -76,7 +83,7 @@ class FetchResponseMock {
     this.body = {
       getReader() {
         return reader;
-      },
+      }
     };
   }
 }

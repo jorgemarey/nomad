@@ -30,36 +30,60 @@ func TestEvalEndpoint_GetEval(t *testing.T) {
 
 	// Create the register request
 	eval1 := mock.Eval()
-	s1.fsm.State().UpsertEvals(structs.MsgTypeTestSetup, 1000, []*structs.Evaluation{eval1})
+	eval2 := mock.Eval()
 
-	// Lookup the eval
-	get := &structs.EvalSpecificRequest{
-		EvalID:       eval1.ID,
-		QueryOptions: structs.QueryOptions{Region: "global"},
-	}
-	var resp structs.SingleEvalResponse
-	if err := msgpackrpc.CallWithCodec(codec, "Eval.GetEval", get, &resp); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if resp.Index != 1000 {
-		t.Fatalf("Bad index: %d %d", resp.Index, 1000)
-	}
+	// Link the evals
+	eval1.NextEval = eval2.ID
+	eval2.PreviousEval = eval1.ID
 
-	if !reflect.DeepEqual(eval1, resp.Eval) {
-		t.Fatalf("bad: %#v %#v", eval1, resp.Eval)
-	}
+	err := s1.fsm.State().UpsertEvals(structs.MsgTypeTestSetup, 1000, []*structs.Evaluation{eval1, eval2})
+	require.NoError(t, err)
 
-	// Lookup non-existing node
-	get.EvalID = uuid.Generate()
-	if err := msgpackrpc.CallWithCodec(codec, "Eval.GetEval", get, &resp); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if resp.Index != 1000 {
-		t.Fatalf("Bad index: %d %d", resp.Index, 1000)
-	}
-	if resp.Eval != nil {
-		t.Fatalf("unexpected eval")
-	}
+	t.Run("lookup eval", func(t *testing.T) {
+		get := &structs.EvalSpecificRequest{
+			EvalID:       eval1.ID,
+			QueryOptions: structs.QueryOptions{Region: "global"},
+		}
+		var resp structs.SingleEvalResponse
+		err := msgpackrpc.CallWithCodec(codec, "Eval.GetEval", get, &resp)
+		require.NoError(t, err)
+		require.EqualValues(t, 1000, resp.Index, "bad index")
+		require.Equal(t, eval1, resp.Eval)
+	})
+
+	t.Run("lookup non-existing eval", func(t *testing.T) {
+		get := &structs.EvalSpecificRequest{
+			EvalID:       uuid.Generate(),
+			QueryOptions: structs.QueryOptions{Region: "global"},
+		}
+		var resp structs.SingleEvalResponse
+		err := msgpackrpc.CallWithCodec(codec, "Eval.GetEval", get, &resp)
+		require.NoError(t, err)
+		require.EqualValues(t, 1000, resp.Index, "bad index")
+		require.Nil(t, resp.Eval, "unexpected eval")
+	})
+
+	t.Run("lookup related evals", func(t *testing.T) {
+		get := &structs.EvalSpecificRequest{
+			EvalID:         eval1.ID,
+			QueryOptions:   structs.QueryOptions{Region: "global"},
+			IncludeRelated: true,
+		}
+		var resp structs.SingleEvalResponse
+		err := msgpackrpc.CallWithCodec(codec, "Eval.GetEval", get, &resp)
+		require.NoError(t, err)
+		require.EqualValues(t, 1000, resp.Index, "bad index")
+		require.Equal(t, eval1.ID, resp.Eval.ID)
+
+		// Make sure we didn't modify the eval on a read request.
+		require.Nil(t, eval1.RelatedEvals)
+
+		// Check for the related evals
+		expected := []*structs.EvaluationStub{
+			eval2.Stub(),
+		}
+		require.Equal(t, expected, resp.Eval.RelatedEvals)
+	})
 }
 
 func TestEvalEndpoint_GetEval_ACL(t *testing.T) {
@@ -178,7 +202,7 @@ func TestEvalEndpoint_GetEval_Blocking(t *testing.T) {
 
 	// Eval delete triggers watches
 	time.AfterFunc(100*time.Millisecond, func() {
-		err := state.DeleteEval(300, []string{eval2.ID}, []string{})
+		err := state.DeleteEval(300, []string{eval2.ID}, []string{}, false)
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -430,6 +454,33 @@ func TestEvalEndpoint_Dequeue_Version_Mismatch(t *testing.T) {
 	}
 }
 
+func TestEvalEndpoint_Dequeue_BrokerDisabled(t *testing.T) {
+	ci.Parallel(t)
+
+	s1, cleanupS1 := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0 // Prevent automatic dequeue.
+	})
+	defer cleanupS1()
+	codec := rpcClient(t, s1)
+	testutil.WaitForLeader(t, s1.RPC)
+
+	// Create the register a request.
+	eval1 := mock.Eval()
+	s1.evalBroker.Enqueue(eval1)
+
+	// Disable the eval broker and try to dequeue.
+	s1.evalBroker.SetEnabled(false)
+
+	get := &structs.EvalDequeueRequest{
+		Schedulers:       defaultSched,
+		SchedulerVersion: scheduler.SchedulerVersion,
+		WriteRequest:     structs.WriteRequest{Region: "global"},
+	}
+	var resp structs.EvalDequeueResponse
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Eval.Dequeue", get, &resp))
+	require.Empty(t, resp.Eval)
+}
+
 func TestEvalEndpoint_Ack(t *testing.T) {
 	ci.Parallel(t)
 
@@ -640,7 +691,7 @@ func TestEvalEndpoint_Reap(t *testing.T) {
 	s1.fsm.State().UpsertEvals(structs.MsgTypeTestSetup, 1000, []*structs.Evaluation{eval1})
 
 	// Reap the eval
-	get := &structs.EvalDeleteRequest{
+	get := &structs.EvalReapRequest{
 		Evals:        []string{eval1.ID},
 		WriteRequest: structs.WriteRequest{Region: "global"},
 	}
@@ -660,6 +711,351 @@ func TestEvalEndpoint_Reap(t *testing.T) {
 	}
 	if outE != nil {
 		t.Fatalf("Bad: %#v", outE)
+	}
+}
+
+func TestEvalEndpoint_Delete(t *testing.T) {
+	ci.Parallel(t)
+
+	testCases := []struct {
+		testFn func()
+		name   string
+	}{
+		{
+			testFn: func() {
+
+				testServer, testServerCleanup := TestServer(t, nil)
+				defer testServerCleanup()
+
+				codec := rpcClient(t, testServer)
+				testutil.WaitForLeader(t, testServer.RPC)
+
+				// Create and upsert an evaluation.
+				mockEval := mock.Eval()
+				require.NoError(t, testServer.fsm.State().UpsertEvals(
+					structs.MsgTypeTestSetup, 10, []*structs.Evaluation{mockEval}))
+
+				// Attempt to delete the eval, which should fail because the
+				// eval broker is not paused.
+				get := &structs.EvalDeleteRequest{
+					EvalIDs:      []string{mockEval.ID},
+					WriteRequest: structs.WriteRequest{Region: "global"},
+				}
+				var resp structs.EvalDeleteResponse
+				err := msgpackrpc.CallWithCodec(codec, structs.EvalDeleteRPCMethod, get, &resp)
+				require.Contains(t, err.Error(), "eval broker is enabled")
+			},
+			name: "unsuccessful delete broker enabled",
+		},
+		{
+			testFn: func() {
+
+				testServer, testServerCleanup := TestServer(t, func(c *Config) {
+					c.NumSchedulers = 0
+				})
+				defer testServerCleanup()
+
+				codec := rpcClient(t, testServer)
+				testutil.WaitForLeader(t, testServer.RPC)
+
+				// Pause the eval broker and update the scheduler config.
+				testServer.evalBroker.SetEnabled(false)
+
+				_, schedulerConfig, err := testServer.fsm.State().SchedulerConfig()
+				require.NoError(t, err)
+				require.NotNil(t, schedulerConfig)
+
+				schedulerConfig.PauseEvalBroker = true
+				require.NoError(t, testServer.fsm.State().SchedulerSetConfig(10, schedulerConfig))
+
+				// Create and upsert an evaluation.
+				mockEval := mock.Eval()
+				require.NoError(t, testServer.fsm.State().UpsertEvals(
+					structs.MsgTypeTestSetup, 10, []*structs.Evaluation{mockEval}))
+
+				// Attempt to delete the eval, which should succeed as the eval
+				// broker is disabled.
+				get := &structs.EvalDeleteRequest{
+					EvalIDs:      []string{mockEval.ID},
+					WriteRequest: structs.WriteRequest{Region: "global"},
+				}
+				var resp structs.EvalDeleteResponse
+				require.NoError(t, msgpackrpc.CallWithCodec(codec, structs.EvalDeleteRPCMethod, get, &resp))
+
+				// Attempt to read the eval from state; this should not be found.
+				ws := memdb.NewWatchSet()
+				respEval, err := testServer.fsm.State().EvalByID(ws, mockEval.ID)
+				require.Nil(t, err)
+				require.Nil(t, respEval)
+			},
+			name: "successful delete without ACLs",
+		},
+		{
+			testFn: func() {
+
+				testServer, rootToken, testServerCleanup := TestACLServer(t, func(c *Config) {
+					c.NumSchedulers = 0
+				})
+				defer testServerCleanup()
+
+				codec := rpcClient(t, testServer)
+				testutil.WaitForLeader(t, testServer.RPC)
+
+				// Pause the eval broker and update the scheduler config.
+				testServer.evalBroker.SetEnabled(false)
+
+				_, schedulerConfig, err := testServer.fsm.State().SchedulerConfig()
+				require.NoError(t, err)
+				require.NotNil(t, schedulerConfig)
+
+				schedulerConfig.PauseEvalBroker = true
+				require.NoError(t, testServer.fsm.State().SchedulerSetConfig(10, schedulerConfig))
+
+				// Create and upsert an evaluation.
+				mockEval := mock.Eval()
+				require.NoError(t, testServer.fsm.State().UpsertEvals(
+					structs.MsgTypeTestSetup, 20, []*structs.Evaluation{mockEval}))
+
+				// Attempt to delete the eval, which should succeed as the eval
+				// broker is disabled, and we are using a management token.
+				get := &structs.EvalDeleteRequest{
+					EvalIDs: []string{mockEval.ID},
+					WriteRequest: structs.WriteRequest{
+						AuthToken: rootToken.SecretID,
+						Region:    "global",
+					},
+				}
+				var resp structs.EvalDeleteResponse
+				require.NoError(t, msgpackrpc.CallWithCodec(codec, structs.EvalDeleteRPCMethod, get, &resp))
+
+				// Attempt to read the eval from state; this should not be found.
+				ws := memdb.NewWatchSet()
+				respEval, err := testServer.fsm.State().EvalByID(ws, mockEval.ID)
+				require.Nil(t, err)
+				require.Nil(t, respEval)
+			},
+			name: "successful delete with ACLs",
+		},
+		{
+			testFn: func() {
+
+				testServer, _, testServerCleanup := TestACLServer(t, func(c *Config) {
+					c.NumSchedulers = 0
+				})
+				defer testServerCleanup()
+
+				codec := rpcClient(t, testServer)
+				testutil.WaitForLeader(t, testServer.RPC)
+
+				// Pause the eval broker.
+				testServer.evalBroker.SetEnabled(false)
+
+				// Create and upsert an evaluation.
+				mockEval := mock.Eval()
+				require.NoError(t, testServer.fsm.State().UpsertEvals(
+					structs.MsgTypeTestSetup, 10, []*structs.Evaluation{mockEval}))
+
+				nonMgntToken := mock.CreatePolicyAndToken(t, testServer.State(), 20, "test-valid",
+					mock.NamespacePolicy(structs.DefaultNamespace, "", []string{acl.NamespaceCapabilitySubmitJob}))
+
+				// Attempt to delete the eval, which should not succeed as we
+				// are using a non-management token.
+				get := &structs.EvalDeleteRequest{
+					EvalIDs: []string{mockEval.ID},
+					WriteRequest: structs.WriteRequest{
+						AuthToken: nonMgntToken.SecretID,
+						Region:    "global",
+					},
+				}
+				var resp structs.EvalDeleteResponse
+				err := msgpackrpc.CallWithCodec(codec, structs.EvalDeleteRPCMethod, get, &resp)
+				require.Contains(t, err.Error(), structs.ErrPermissionDenied.Error())
+			},
+			name: "unsuccessful delete with ACLs incorrect token permissions",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.testFn()
+		})
+	}
+}
+
+func Test_evalDeleteSafe(t *testing.T) {
+	ci.Parallel(t)
+
+	testCases := []struct {
+		inputAllocs    []*structs.Allocation
+		inputJob       *structs.Job
+		expectedResult bool
+		name           string
+	}{
+		{
+			inputAllocs:    nil,
+			inputJob:       nil,
+			expectedResult: true,
+			name:           "job not in state",
+		},
+		{
+			inputAllocs:    nil,
+			inputJob:       &structs.Job{Status: structs.JobStatusDead},
+			expectedResult: true,
+			name:           "job stopped",
+		},
+		{
+			inputAllocs:    nil,
+			inputJob:       &structs.Job{Stop: true},
+			expectedResult: true,
+			name:           "job dead",
+		},
+		{
+			inputAllocs:    []*structs.Allocation{},
+			inputJob:       &structs.Job{Status: structs.JobStatusRunning},
+			expectedResult: true,
+			name:           "no allocs for eval",
+		},
+		{
+			inputAllocs: []*structs.Allocation{
+				{ClientStatus: structs.AllocClientStatusComplete},
+				{ClientStatus: structs.AllocClientStatusRunning},
+			},
+			inputJob:       &structs.Job{Status: structs.JobStatusRunning},
+			expectedResult: false,
+			name:           "running alloc for eval",
+		},
+		{
+			inputAllocs: []*structs.Allocation{
+				{ClientStatus: structs.AllocClientStatusComplete},
+				{ClientStatus: structs.AllocClientStatusUnknown},
+			},
+			inputJob:       &structs.Job{Status: structs.JobStatusRunning},
+			expectedResult: false,
+			name:           "unknown alloc for eval",
+		},
+		{
+			inputAllocs: []*structs.Allocation{
+				{ClientStatus: structs.AllocClientStatusComplete},
+				{ClientStatus: structs.AllocClientStatusLost},
+			},
+			inputJob:       &structs.Job{Status: structs.JobStatusRunning},
+			expectedResult: true,
+			name:           "complete and lost allocs for eval",
+		},
+		{
+			inputAllocs: []*structs.Allocation{
+				{
+					ClientStatus: structs.AllocClientStatusFailed,
+					TaskGroup:    "test",
+				},
+			},
+			inputJob: &structs.Job{
+				Status: structs.JobStatusPending,
+				TaskGroups: []*structs.TaskGroup{
+					{
+						Name:             "test",
+						ReschedulePolicy: nil,
+					},
+				},
+			},
+			expectedResult: true,
+			name:           "failed alloc job without reschedule",
+		},
+		{
+			inputAllocs: []*structs.Allocation{
+				{
+					ClientStatus: structs.AllocClientStatusFailed,
+					TaskGroup:    "test",
+				},
+			},
+			inputJob: &structs.Job{
+				Status: structs.JobStatusPending,
+				TaskGroups: []*structs.TaskGroup{
+					{
+						Name: "test",
+						ReschedulePolicy: &structs.ReschedulePolicy{
+							Unlimited: false,
+							Attempts:  0,
+						},
+					},
+				},
+			},
+			expectedResult: true,
+			name:           "failed alloc job reschedule disabled",
+		},
+		{
+			inputAllocs: []*structs.Allocation{
+				{
+					ClientStatus: structs.AllocClientStatusFailed,
+					TaskGroup:    "test",
+				},
+			},
+			inputJob: &structs.Job{
+				Status: structs.JobStatusPending,
+				TaskGroups: []*structs.TaskGroup{
+					{
+						Name: "test",
+						ReschedulePolicy: &structs.ReschedulePolicy{
+							Unlimited: false,
+							Attempts:  3,
+						},
+					},
+				},
+			},
+			expectedResult: false,
+			name:           "failed alloc next alloc not set",
+		},
+		{
+			inputAllocs: []*structs.Allocation{
+				{
+					ClientStatus:   structs.AllocClientStatusFailed,
+					TaskGroup:      "test",
+					NextAllocation: "4aa4930a-8749-c95b-9c67-5ef29b0fc653",
+				},
+			},
+			inputJob: &structs.Job{
+				Status: structs.JobStatusPending,
+				TaskGroups: []*structs.TaskGroup{
+					{
+						Name: "test",
+						ReschedulePolicy: &structs.ReschedulePolicy{
+							Unlimited: false,
+							Attempts:  3,
+						},
+					},
+				},
+			},
+			expectedResult: false,
+			name:           "failed alloc next alloc set",
+		},
+		{
+			inputAllocs: []*structs.Allocation{
+				{
+					ClientStatus: structs.AllocClientStatusFailed,
+					TaskGroup:    "test",
+				},
+			},
+			inputJob: &structs.Job{
+				Status: structs.JobStatusPending,
+				TaskGroups: []*structs.TaskGroup{
+					{
+						Name: "test",
+						ReschedulePolicy: &structs.ReschedulePolicy{
+							Unlimited: true,
+						},
+					},
+				},
+			},
+			expectedResult: false,
+			name:           "failed alloc job reschedule unlimited",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			actualResult := evalDeleteSafe(tc.inputAllocs, tc.inputJob)
+			require.Equal(t, tc.expectedResult, actualResult)
+		})
 	}
 }
 
@@ -716,7 +1112,94 @@ func TestEvalEndpoint_List(t *testing.T) {
 	if len(resp2.Evaluations) != 1 {
 		t.Fatalf("bad: %#v", resp2.Evaluations)
 	}
+}
 
+func TestEvalEndpoint_List_order(t *testing.T) {
+	ci.Parallel(t)
+
+	s1, cleanupS1 := TestServer(t, nil)
+	defer cleanupS1()
+	codec := rpcClient(t, s1)
+	testutil.WaitForLeader(t, s1.RPC)
+
+	// Create register requests
+	uuid1 := uuid.Generate()
+	eval1 := mock.Eval()
+	eval1.ID = uuid1
+
+	uuid2 := uuid.Generate()
+	eval2 := mock.Eval()
+	eval2.ID = uuid2
+
+	uuid3 := uuid.Generate()
+	eval3 := mock.Eval()
+	eval3.ID = uuid3
+
+	err := s1.fsm.State().UpsertEvals(structs.MsgTypeTestSetup, 1000, []*structs.Evaluation{eval1})
+	require.NoError(t, err)
+
+	err = s1.fsm.State().UpsertEvals(structs.MsgTypeTestSetup, 1001, []*structs.Evaluation{eval2})
+	require.NoError(t, err)
+
+	err = s1.fsm.State().UpsertEvals(structs.MsgTypeTestSetup, 1002, []*structs.Evaluation{eval3})
+	require.NoError(t, err)
+
+	// update eval2 again so we can later assert create index order did not change
+	err = s1.fsm.State().UpsertEvals(structs.MsgTypeTestSetup, 1003, []*structs.Evaluation{eval2})
+	require.NoError(t, err)
+
+	t.Run("default", func(t *testing.T) {
+		// Lookup the evaluations in the default order (oldest first)
+		get := &structs.EvalListRequest{
+			QueryOptions: structs.QueryOptions{
+				Region:    "global",
+				Namespace: "*",
+			},
+		}
+
+		var resp structs.EvalListResponse
+		err = msgpackrpc.CallWithCodec(codec, "Eval.List", get, &resp)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1003), resp.Index)
+		require.Len(t, resp.Evaluations, 3)
+
+		// Assert returned order is by CreateIndex (ascending)
+		require.Equal(t, uint64(1000), resp.Evaluations[0].CreateIndex)
+		require.Equal(t, uuid1, resp.Evaluations[0].ID)
+
+		require.Equal(t, uint64(1001), resp.Evaluations[1].CreateIndex)
+		require.Equal(t, uuid2, resp.Evaluations[1].ID)
+
+		require.Equal(t, uint64(1002), resp.Evaluations[2].CreateIndex)
+		require.Equal(t, uuid3, resp.Evaluations[2].ID)
+	})
+
+	t.Run("reverse", func(t *testing.T) {
+		// Lookup the evaluations in reverse order (newest first)
+		get := &structs.EvalListRequest{
+			QueryOptions: structs.QueryOptions{
+				Region:    "global",
+				Namespace: "*",
+				Reverse:   true,
+			},
+		}
+
+		var resp structs.EvalListResponse
+		err = msgpackrpc.CallWithCodec(codec, "Eval.List", get, &resp)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1003), resp.Index)
+		require.Len(t, resp.Evaluations, 3)
+
+		// Assert returned order is by CreateIndex (descending)
+		require.Equal(t, uint64(1002), resp.Evaluations[0].CreateIndex)
+		require.Equal(t, uuid3, resp.Evaluations[0].ID)
+
+		require.Equal(t, uint64(1001), resp.Evaluations[1].CreateIndex)
+		require.Equal(t, uuid2, resp.Evaluations[1].ID)
+
+		require.Equal(t, uint64(1000), resp.Evaluations[2].CreateIndex)
+		require.Equal(t, uuid1, resp.Evaluations[2].ID)
+	})
 }
 
 func TestEvalEndpoint_ListAllNamespaces(t *testing.T) {
@@ -761,62 +1244,104 @@ func TestEvalEndpoint_List_ACL(t *testing.T) {
 	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
-	assert := assert.New(t)
+
+	// Create dev namespace
+	devNS := mock.Namespace()
+	devNS.Name = "dev"
+	err := s1.fsm.State().UpsertNamespaces(999, []*structs.Namespace{devNS})
+	require.NoError(t, err)
 
 	// Create the register request
 	eval1 := mock.Eval()
 	eval1.ID = "aaaaaaaa-3350-4b4b-d185-0e1992ed43e9"
 	eval2 := mock.Eval()
 	eval2.ID = "aaaabbbb-3350-4b4b-d185-0e1992ed43e9"
+	eval3 := mock.Eval()
+	eval3.ID = "aaaacccc-3350-4b4b-d185-0e1992ed43e9"
+	eval3.Namespace = devNS.Name
 	state := s1.fsm.State()
-	assert.Nil(state.UpsertEvals(structs.MsgTypeTestSetup, 1000, []*structs.Evaluation{eval1, eval2}))
+	err = state.UpsertEvals(structs.MsgTypeTestSetup, 1000, []*structs.Evaluation{eval1, eval2, eval3})
+	require.NoError(t, err)
 
 	// Create ACL tokens
 	validToken := mock.CreatePolicyAndToken(t, state, 1003, "test-valid",
 		mock.NamespacePolicy(structs.DefaultNamespace, "", []string{acl.NamespaceCapabilityReadJob}))
 	invalidToken := mock.CreatePolicyAndToken(t, state, 1001, "test-invalid",
 		mock.NamespacePolicy(structs.DefaultNamespace, "", []string{acl.NamespaceCapabilityListJobs}))
+	devToken := mock.CreatePolicyAndToken(t, state, 1005, "test-dev",
+		mock.NamespacePolicy("dev", "", []string{acl.NamespaceCapabilityReadJob}))
 
-	get := &structs.EvalListRequest{
-		QueryOptions: structs.QueryOptions{
-			Region:    "global",
-			Namespace: structs.DefaultNamespace,
+	testCases := []struct {
+		name          string
+		namespace     string
+		token         string
+		expectedEvals []string
+		expectedError string
+	}{
+		{
+			name:          "no token",
+			token:         "",
+			namespace:     structs.DefaultNamespace,
+			expectedError: structs.ErrPermissionDenied.Error(),
+		},
+		{
+			name:          "invalid token",
+			token:         invalidToken.SecretID,
+			namespace:     structs.DefaultNamespace,
+			expectedError: structs.ErrPermissionDenied.Error(),
+		},
+		{
+			name:          "valid token",
+			token:         validToken.SecretID,
+			namespace:     structs.DefaultNamespace,
+			expectedEvals: []string{eval1.ID, eval2.ID},
+		},
+		{
+			name:          "root token default namespace",
+			token:         root.SecretID,
+			namespace:     structs.DefaultNamespace,
+			expectedEvals: []string{eval1.ID, eval2.ID},
+		},
+		{
+			name:          "root token all namespaces",
+			token:         root.SecretID,
+			namespace:     structs.AllNamespacesSentinel,
+			expectedEvals: []string{eval1.ID, eval2.ID, eval3.ID},
+		},
+		{
+			name:          "dev token all namespaces",
+			token:         devToken.SecretID,
+			namespace:     structs.AllNamespacesSentinel,
+			expectedEvals: []string{eval3.ID},
 		},
 	}
 
-	// Try without a token and expect permission denied
-	{
-		var resp structs.EvalListResponse
-		err := msgpackrpc.CallWithCodec(codec, "Eval.List", get, &resp)
-		assert.NotNil(err)
-		assert.Contains(err.Error(), structs.ErrPermissionDenied.Error())
-	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			get := &structs.EvalListRequest{
+				QueryOptions: structs.QueryOptions{
+					AuthToken: tc.token,
+					Region:    "global",
+					Namespace: tc.namespace,
+				},
+			}
 
-	// Try with an invalid token and expect permission denied
-	{
-		get.AuthToken = invalidToken.SecretID
-		var resp structs.EvalListResponse
-		err := msgpackrpc.CallWithCodec(codec, "Eval.List", get, &resp)
-		assert.NotNil(err)
-		assert.Contains(err.Error(), structs.ErrPermissionDenied.Error())
-	}
+			var resp structs.EvalListResponse
+			err := msgpackrpc.CallWithCodec(codec, "Eval.List", get, &resp)
 
-	// List evals with a valid token
-	{
-		get.AuthToken = validToken.SecretID
-		var resp structs.EvalListResponse
-		assert.Nil(msgpackrpc.CallWithCodec(codec, "Eval.List", get, &resp))
-		assert.Equal(uint64(1000), resp.Index, "Bad index: %d %d", resp.Index, 1000)
-		assert.Lenf(resp.Evaluations, 2, "bad: %#v", resp.Evaluations)
-	}
+			if tc.expectedError != "" {
+				require.Contains(t, err.Error(), tc.expectedError)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, uint64(1000), resp.Index, "Bad index: %d %d", resp.Index, 1000)
 
-	// List evals with a root token
-	{
-		get.AuthToken = root.SecretID
-		var resp structs.EvalListResponse
-		assert.Nil(msgpackrpc.CallWithCodec(codec, "Eval.List", get, &resp))
-		assert.Equal(uint64(1000), resp.Index, "Bad index: %d %d", resp.Index, 1000)
-		assert.Lenf(resp.Evaluations, 2, "bad: %#v", resp.Evaluations)
+				got := make([]string, len(resp.Evaluations))
+				for i, eval := range resp.Evaluations {
+					got[i] = eval.ID
+				}
+				require.ElementsMatch(t, got, tc.expectedEvals)
+			}
+		})
 	}
 }
 
@@ -864,7 +1389,7 @@ func TestEvalEndpoint_List_Blocking(t *testing.T) {
 
 	// Eval deletion triggers watches
 	time.AfterFunc(100*time.Millisecond, func() {
-		if err := state.DeleteEval(3, []string{eval.ID}, nil); err != nil {
+		if err := state.DeleteEval(3, []string{eval.ID}, nil, false); err != nil {
 			t.Fatalf("err: %v", err)
 		}
 	})
@@ -894,47 +1419,65 @@ func TestEvalEndpoint_List_PaginationFiltering(t *testing.T) {
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
+	// Create non-default namespace
+	nondefaultNS := mock.Namespace()
+	nondefaultNS.Name = "non-default"
+	err := s1.fsm.State().UpsertNamespaces(999, []*structs.Namespace{nondefaultNS})
+	require.NoError(t, err)
+
 	// create a set of evals and field values to filter on. these are
 	// in the order that the state store will return them from the
-	// iterator (sorted by key), for ease of writing tests
+	// iterator (sorted by create index), for ease of writing tests
 	mocks := []struct {
-		id        string
+		ids       []string
 		namespace string
 		jobID     string
 		status    string
 	}{
-		{id: "aaaa1111-3350-4b4b-d185-0e1992ed43e9", jobID: "example"},
-		{id: "aaaaaa22-3350-4b4b-d185-0e1992ed43e9", jobID: "example"},
-		{id: "aaaaaa33-3350-4b4b-d185-0e1992ed43e9", namespace: "non-default"},
-		{id: "aaaaaaaa-3350-4b4b-d185-0e1992ed43e9", jobID: "example", status: "blocked"},
-		{id: "aaaaaabb-3350-4b4b-d185-0e1992ed43e9"},
-		{id: "aaaaaacc-3350-4b4b-d185-0e1992ed43e9"},
-		{id: "aaaaaadd-3350-4b4b-d185-0e1992ed43e9", jobID: "example"},
-		{id: "aaaaaaee-3350-4b4b-d185-0e1992ed43e9", jobID: "example"},
-		{id: "aaaaaaff-3350-4b4b-d185-0e1992ed43e9"},
-	}
-
-	mockEvals := []*structs.Evaluation{}
-	for _, m := range mocks {
-		eval := mock.Eval()
-		eval.ID = m.id
-		if m.namespace != "" { // defaults to "default"
-			eval.Namespace = m.namespace
-		}
-		if m.jobID != "" { // defaults to some random UUID
-			eval.JobID = m.jobID
-		}
-		if m.status != "" { // defaults to "pending"
-			eval.Status = m.status
-		}
-		mockEvals = append(mockEvals, eval)
+		{ids: []string{"aaaa1111-3350-4b4b-d185-0e1992ed43e9"}, jobID: "example"},                    // 0
+		{ids: []string{"aaaaaa22-3350-4b4b-d185-0e1992ed43e9"}, jobID: "example"},                    // 1
+		{ids: []string{"aaaaaa33-3350-4b4b-d185-0e1992ed43e9"}, namespace: nondefaultNS.Name},        // 2
+		{ids: []string{"aaaaaaaa-3350-4b4b-d185-0e1992ed43e9"}, jobID: "example", status: "blocked"}, // 3
+		{ids: []string{"aaaaaabb-3350-4b4b-d185-0e1992ed43e9"}},                                      // 4
+		{ids: []string{"aaaaaacc-3350-4b4b-d185-0e1992ed43e9"}},                                      // 5
+		{ids: []string{"aaaaaadd-3350-4b4b-d185-0e1992ed43e9"}, jobID: "example"},                    // 6
+		{ids: []string{"aaaaaaee-3350-4b4b-d185-0e1992ed43e9"}, jobID: "example"},                    // 7
+		{ids: []string{"aaaaaaff-3350-4b4b-d185-0e1992ed43e9"}},                                      // 8
+		{ids: []string{"00000111-3350-4b4b-d185-0e1992ed43e9"}},                                      // 9
+		{ids: []string{ // 10
+			"00000222-3350-4b4b-d185-0e1992ed43e9",
+			"00000333-3350-4b4b-d185-0e1992ed43e9",
+		}},
+		{}, // 11, index missing
+		{ids: []string{"bbbb1111-3350-4b4b-d185-0e1992ed43e9"}}, // 12
 	}
 
 	state := s1.fsm.State()
-	require.NoError(t, state.UpsertEvals(structs.MsgTypeTestSetup, 1000, mockEvals))
+
+	var evals []*structs.Evaluation
+	for i, m := range mocks {
+		evalsInTx := []*structs.Evaluation{}
+		for _, id := range m.ids {
+			eval := mock.Eval()
+			eval.ID = id
+			if m.namespace != "" { // defaults to "default"
+				eval.Namespace = m.namespace
+			}
+			if m.jobID != "" { // defaults to some random UUID
+				eval.JobID = m.jobID
+			}
+			if m.status != "" { // defaults to "pending"
+				eval.Status = m.status
+			}
+			evals = append(evals, eval)
+			evalsInTx = append(evalsInTx, eval)
+		}
+		index := 1000 + uint64(i)
+		require.NoError(t, state.UpsertEvals(structs.MsgTypeTestSetup, index, evalsInTx))
+	}
 
 	aclToken := mock.CreatePolicyAndToken(t, state, 1100, "test-valid-read",
-		mock.NamespacePolicy(structs.DefaultNamespace, "read", nil)).
+		mock.NamespacePolicy("*", "read", nil)).
 		SecretID
 
 	cases := []struct {
@@ -944,24 +1487,26 @@ func TestEvalEndpoint_List_PaginationFiltering(t *testing.T) {
 		nextToken         string
 		filterJobID       string
 		filterStatus      string
+		filter            string
 		pageSize          int32
 		expectedNextToken string
 		expectedIDs       []string
+		expectedError     string
 	}{
 		{
-			name:              "test01 size-2 page-1 default NS",
-			pageSize:          2,
-			expectedNextToken: "aaaaaaaa-3350-4b4b-d185-0e1992ed43e9",
-			expectedIDs: []string{
+			name:     "test01 size-2 page-1 default NS",
+			pageSize: 2,
+			expectedIDs: []string{ // first two items
 				"aaaa1111-3350-4b4b-d185-0e1992ed43e9",
 				"aaaaaa22-3350-4b4b-d185-0e1992ed43e9",
 			},
+			expectedNextToken: "1003.aaaaaaaa-3350-4b4b-d185-0e1992ed43e9", // next one in default namespace
 		},
 		{
 			name:              "test02 size-2 page-1 default NS with prefix",
 			prefix:            "aaaa",
 			pageSize:          2,
-			expectedNextToken: "aaaaaaaa-3350-4b4b-d185-0e1992ed43e9",
+			expectedNextToken: "aaaaaaaa-3350-4b4b-d185-0e1992ed43e9", // prefix results are not sorted by create index
 			expectedIDs: []string{
 				"aaaa1111-3350-4b4b-d185-0e1992ed43e9",
 				"aaaaaa22-3350-4b4b-d185-0e1992ed43e9",
@@ -970,8 +1515,8 @@ func TestEvalEndpoint_List_PaginationFiltering(t *testing.T) {
 		{
 			name:              "test03 size-2 page-2 default NS",
 			pageSize:          2,
-			nextToken:         "aaaaaaaa-3350-4b4b-d185-0e1992ed43e9",
-			expectedNextToken: "aaaaaacc-3350-4b4b-d185-0e1992ed43e9",
+			nextToken:         "1003.aaaaaaaa-3350-4b4b-d185-0e1992ed43e9",
+			expectedNextToken: "1005.aaaaaacc-3350-4b4b-d185-0e1992ed43e9",
 			expectedIDs: []string{
 				"aaaaaaaa-3350-4b4b-d185-0e1992ed43e9",
 				"aaaaaabb-3350-4b4b-d185-0e1992ed43e9",
@@ -994,7 +1539,7 @@ func TestEvalEndpoint_List_PaginationFiltering(t *testing.T) {
 			filterJobID:  "example",
 			filterStatus: "pending",
 			// aaaaaaaa, bb, and cc are filtered by status
-			expectedNextToken: "aaaaaadd-3350-4b4b-d185-0e1992ed43e9",
+			expectedNextToken: "1006.aaaaaadd-3350-4b4b-d185-0e1992ed43e9",
 			expectedIDs: []string{
 				"aaaa1111-3350-4b4b-d185-0e1992ed43e9",
 				"aaaaaa22-3350-4b4b-d185-0e1992ed43e9",
@@ -1026,11 +1571,11 @@ func TestEvalEndpoint_List_PaginationFiltering(t *testing.T) {
 			},
 		},
 		{
-			name:              "test08 size-2 page-2 filter skip nextToken",
-			pageSize:          3, // reads off the end
+			name:              "test08 size-2 page-2 filter skip nextToken", //
+			pageSize:          3,                                            // reads off the end
 			filterJobID:       "example",
 			filterStatus:      "pending",
-			nextToken:         "aaaaaaaa-3350-4b4b-d185-0e1992ed43e9",
+			nextToken:         "1003.aaaaaaaa-3350-4b4b-d185-0e1992ed43e9",
 			expectedNextToken: "",
 			expectedIDs: []string{
 				"aaaaaadd-3350-4b4b-d185-0e1992ed43e9",
@@ -1051,14 +1596,25 @@ func TestEvalEndpoint_List_PaginationFiltering(t *testing.T) {
 			},
 		},
 		{
-			name:        "test10 no valid results with filters",
+			name:              "test10 size-2 page-2 all namespaces",
+			namespace:         "*",
+			pageSize:          2,
+			nextToken:         "1002.aaaaaa33-3350-4b4b-d185-0e1992ed43e9",
+			expectedNextToken: "1004.aaaaaabb-3350-4b4b-d185-0e1992ed43e9",
+			expectedIDs: []string{
+				"aaaaaa33-3350-4b4b-d185-0e1992ed43e9",
+				"aaaaaaaa-3350-4b4b-d185-0e1992ed43e9",
+			},
+		},
+		{
+			name:        "test11 no valid results with filters",
 			pageSize:    2,
 			filterJobID: "whatever",
 			nextToken:   "",
 			expectedIDs: []string{},
 		},
 		{
-			name:        "test11 no valid results with filters and prefix",
+			name:        "test12 no valid results with filters and prefix",
 			prefix:      "aaaa",
 			pageSize:    2,
 			filterJobID: "whatever",
@@ -1066,17 +1622,89 @@ func TestEvalEndpoint_List_PaginationFiltering(t *testing.T) {
 			expectedIDs: []string{},
 		},
 		{
-			name:        "test12 no valid results with filters page-2",
+			name:        "test13 no valid results with filters page-2",
 			filterJobID: "whatever",
 			nextToken:   "aaaaaa11-3350-4b4b-d185-0e1992ed43e9",
 			expectedIDs: []string{},
 		},
 		{
-			name:        "test13 no valid results with filters page-2 with prefix",
+			name:        "test14 no valid results with filters page-2 with prefix",
 			prefix:      "aaaa",
 			filterJobID: "whatever",
 			nextToken:   "aaaaaa11-3350-4b4b-d185-0e1992ed43e9",
 			expectedIDs: []string{},
+		},
+		{
+			name:        "test15 go-bexpr filter",
+			filter:      `Status == "blocked"`,
+			nextToken:   "",
+			expectedIDs: []string{"aaaaaaaa-3350-4b4b-d185-0e1992ed43e9"},
+		},
+		{
+			name:              "test16 go-bexpr filter with pagination",
+			filter:            `JobID == "example"`,
+			pageSize:          2,
+			expectedNextToken: "1003.aaaaaaaa-3350-4b4b-d185-0e1992ed43e9",
+			expectedIDs: []string{
+				"aaaa1111-3350-4b4b-d185-0e1992ed43e9",
+				"aaaaaa22-3350-4b4b-d185-0e1992ed43e9",
+			},
+		},
+		{
+			name:      "test17 go-bexpr filter namespace",
+			namespace: "non-default",
+			filter:    `ID contains "aaa"`,
+			expectedIDs: []string{
+				"aaaaaa33-3350-4b4b-d185-0e1992ed43e9",
+			},
+		},
+		{
+			name:        "test18 go-bexpr wrong namespace",
+			namespace:   "default",
+			filter:      `Namespace == "non-default"`,
+			expectedIDs: []string{},
+		},
+		{
+			name:          "test19 incompatible filtering",
+			filter:        `JobID == "example"`,
+			filterStatus:  "complete",
+			expectedError: structs.ErrIncompatibleFiltering.Error(),
+		},
+		{
+			name:          "test20 go-bexpr invalid expression",
+			filter:        `NotValid`,
+			expectedError: "failed to read filter expression",
+		},
+		{
+			name:          "test21 go-bexpr invalid field",
+			filter:        `InvalidField == "value"`,
+			expectedError: "error finding value in datum",
+		},
+		{
+			name:              "test22 non-lexicographic order",
+			pageSize:          1,
+			nextToken:         "1009.00000111-3350-4b4b-d185-0e1992ed43e9",
+			expectedNextToken: "1010.00000222-3350-4b4b-d185-0e1992ed43e9",
+			expectedIDs: []string{
+				"00000111-3350-4b4b-d185-0e1992ed43e9",
+			},
+		},
+		{
+			name:              "test23 same index",
+			pageSize:          1,
+			nextToken:         "1010.00000222-3350-4b4b-d185-0e1992ed43e9",
+			expectedNextToken: "1010.00000333-3350-4b4b-d185-0e1992ed43e9",
+			expectedIDs: []string{
+				"00000222-3350-4b4b-d185-0e1992ed43e9",
+			},
+		},
+		{
+			name:      "test24 missing index",
+			pageSize:  1,
+			nextToken: "1011.e9522802-0cd8-4b1d-9c9e-ab3d97938371",
+			expectedIDs: []string{
+				"bbbb1111-3350-4b4b-d185-0e1992ed43e9",
+			},
 		},
 	}
 
@@ -1091,11 +1719,20 @@ func TestEvalEndpoint_List_PaginationFiltering(t *testing.T) {
 					Prefix:    tc.prefix,
 					PerPage:   tc.pageSize,
 					NextToken: tc.nextToken,
+					Filter:    tc.filter,
 				},
 			}
 			req.AuthToken = aclToken
 			var resp structs.EvalListResponse
-			require.NoError(t, msgpackrpc.CallWithCodec(codec, "Eval.List", req, &resp))
+			err := msgpackrpc.CallWithCodec(codec, "Eval.List", req, &resp)
+			if tc.expectedError == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.expectedError)
+				return
+			}
+
 			gotIDs := []string{}
 			for _, eval := range resp.Evaluations {
 				gotIDs = append(gotIDs, eval.ID)

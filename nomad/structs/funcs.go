@@ -13,6 +13,7 @@ import (
 	multierror "github.com/hashicorp/go-multierror"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/hashicorp/nomad/acl"
+	"github.com/hashicorp/nomad/helper"
 	"golang.org/x/crypto/blake2b"
 )
 
@@ -206,8 +207,11 @@ func AllocsFit(node *Node, allocs []*Allocation, netIdx *NetworkIndex, checkDevi
 		netIdx = NewNetworkIndex()
 		defer netIdx.Release()
 
-		if collision, reason := netIdx.SetNode(node); collision {
-			return false, fmt.Sprintf("reserved node port collision: %v", reason), used, nil
+		if err := netIdx.SetNode(node); err != nil {
+			// To maintain backward compatibility with when SetNode
+			// returned collision+reason like AddAllocs, return
+			// this as a reason instead of an error.
+			return false, fmt.Sprintf("reserved node port collision: %v", err), used, nil
 		}
 		if collision, reason := netIdx.AddAllocs(allocs); collision {
 			return false, fmt.Sprintf("reserved alloc port collision: %v", reason), used, nil
@@ -367,17 +371,15 @@ func VaultPoliciesSet(policies map[string]map[string]*Vault) []string {
 
 	for _, tgp := range policies {
 		for _, tp := range tgp {
-			for _, p := range tp.Policies {
-				set[p] = struct{}{}
+			if tp != nil {
+				for _, p := range tp.Policies {
+					set[p] = struct{}{}
+				}
 			}
 		}
 	}
 
-	flattened := make([]string, 0, len(set))
-	for p := range set {
-		flattened = append(flattened, p)
-	}
-	return flattened
+	return helper.SetToSliceString(set)
 }
 
 // VaultNamespaceSet takes the structure returned by VaultPolicies and
@@ -387,17 +389,13 @@ func VaultNamespaceSet(policies map[string]map[string]*Vault) []string {
 
 	for _, tgp := range policies {
 		for _, tp := range tgp {
-			if tp.Namespace != "" {
+			if tp != nil && tp.Namespace != "" {
 				set[tp.Namespace] = struct{}{}
 			}
 		}
 	}
 
-	flattened := make([]string, 0, len(set))
-	for p := range set {
-		flattened = append(flattened, p)
-	}
-	return flattened
+	return helper.SetToSliceString(set)
 }
 
 // DenormalizeAllocationJobs is used to attach a job to all allocations that are
@@ -534,6 +532,10 @@ func ParsePortRanges(spec string) ([]uint64, error) {
 				port, err := strconv.ParseUint(val, 10, 0)
 				if err != nil {
 					return nil, err
+				}
+
+				if port > MaxValidPort {
+					return nil, fmt.Errorf("port must be < %d but found %d", MaxValidPort, port)
 				}
 				ports[port] = struct{}{}
 			}

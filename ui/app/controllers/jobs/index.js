@@ -2,16 +2,22 @@
 import { inject as service } from '@ember/service';
 import { alias, readOnly } from '@ember/object/computed';
 import Controller from '@ember/controller';
-import { action, computed } from '@ember/object';
+import { computed } from '@ember/object';
 import { scheduleOnce } from '@ember/runloop';
 import intersection from 'lodash.intersection';
 import Sortable from 'nomad-ui/mixins/sortable';
 import Searchable from 'nomad-ui/mixins/searchable';
-import { serialize, deserializedQueryParam as selection } from 'nomad-ui/utils/qp-serialize';
+import {
+  serialize,
+  deserializedQueryParam as selection
+} from 'nomad-ui/utils/qp-serialize';
 import classic from 'ember-classic-decorator';
 
 @classic
-export default class IndexController extends Controller.extend(Sortable, Searchable) {
+export default class IndexController extends Controller.extend(
+  Sortable,
+  Searchable
+) {
   @service system;
   @service userSettings;
 
@@ -19,32 +25,32 @@ export default class IndexController extends Controller.extend(Sortable, Searcha
 
   queryParams = [
     {
-      currentPage: 'page',
+      currentPage: 'page'
     },
     {
-      searchTerm: 'search',
+      searchTerm: 'search'
     },
     {
-      sortProperty: 'sort',
+      sortProperty: 'sort'
     },
     {
-      sortDescending: 'desc',
+      sortDescending: 'desc'
     },
     {
-      qpType: 'type',
+      qpType: 'type'
     },
     {
-      qpStatus: 'status',
+      qpStatus: 'status'
     },
     {
-      qpDatacenter: 'dc',
+      qpDatacenter: 'dc'
     },
     {
-      qpPrefix: 'prefix',
+      qpPrefix: 'prefix'
     },
     {
-      qpNamespace: 'namespace',
-    },
+      qpNamespace: 'namespace'
+    }
   ];
 
   currentPage = 1;
@@ -83,7 +89,7 @@ export default class IndexController extends Controller.extend(Sortable, Searcha
       { key: 'periodic', label: 'Periodic' },
       { key: 'service', label: 'Service' },
       { key: 'system', label: 'System' },
-      { key: 'sysbatch', label: 'System Batch' },
+      { key: 'sysbatch', label: 'System Batch' }
     ];
   }
 
@@ -92,14 +98,16 @@ export default class IndexController extends Controller.extend(Sortable, Searcha
     return [
       { key: 'pending', label: 'Pending' },
       { key: 'running', label: 'Running' },
-      { key: 'dead', label: 'Dead' },
+      { key: 'dead', label: 'Dead' }
     ];
   }
 
   @computed('selectionDatacenter', 'visibleJobs.[]')
   get optionsDatacenter() {
     const flatten = (acc, val) => acc.concat(val);
-    const allDatacenters = new Set(this.visibleJobs.mapBy('datacenters').reduce(flatten, []));
+    const allDatacenters = new Set(
+      this.visibleJobs.mapBy('datacenters').reduce(flatten, [])
+    );
 
     // Remove any invalid datacenters from the query param/selection
     const availableDatacenters = Array.from(allDatacenters).compact();
@@ -133,7 +141,7 @@ export default class IndexController extends Controller.extend(Sortable, Searcha
     // Convert to an array
     const nameTable = Object.keys(nameHistogram).map(key => ({
       prefix: key,
-      count: nameHistogram[key],
+      count: nameHistogram[key]
     }));
 
     // Only consider prefixes that match more than one name
@@ -143,33 +151,36 @@ export default class IndexController extends Controller.extend(Sortable, Searcha
     const availablePrefixes = prefixes.mapBy('prefix');
     scheduleOnce('actions', () => {
       // eslint-disable-next-line ember/no-side-effects
-      this.set('qpPrefix', serialize(intersection(availablePrefixes, this.selectionPrefix)));
+      this.set(
+        'qpPrefix',
+        serialize(intersection(availablePrefixes, this.selectionPrefix))
+      );
     });
 
     // Sort, format, and include the count in the label
     return prefixes.sortBy('prefix').map(name => ({
       key: name.prefix,
-      label: `${name.prefix} (${name.count})`,
+      label: `${name.prefix} (${name.count})`
     }));
   }
 
-  @computed('qpNamespace', 'model.namespaces.[]', 'system.cachedNamespace')
+  @computed('qpNamespace', 'model.namespaces.[]')
   get optionsNamespaces() {
     const availableNamespaces = this.model.namespaces.map(namespace => ({
       key: namespace.name,
-      label: namespace.name,
+      label: namespace.name
     }));
 
     availableNamespaces.unshift({
       key: '*',
-      label: 'All (*)',
+      label: 'All (*)'
     });
 
     // Unset the namespace selection if it was server-side deleted
     if (!availableNamespaces.mapBy('key').includes(this.qpNamespace)) {
       scheduleOnce('actions', () => {
         // eslint-disable-next-line ember/no-side-effects
-        this.set('qpNamespace', this.system.cachedNamespace || '*');
+        this.set('qpNamespace', '*');
       });
     }
 
@@ -201,7 +212,7 @@ export default class IndexController extends Controller.extend(Sortable, Searcha
       selectionType: types,
       selectionStatus: statuses,
       selectionDatacenter: datacenters,
-      selectionPrefix: prefixes,
+      selectionPrefix: prefixes
     } = this;
 
     // A job must match ALL filter facets, but it can match ANY selection within a facet
@@ -215,12 +226,18 @@ export default class IndexController extends Controller.extend(Sortable, Searcha
         return false;
       }
 
-      if (datacenters.length && !job.get('datacenters').find(dc => datacenters.includes(dc))) {
+      if (
+        datacenters.length &&
+        !job.get('datacenters').find(dc => datacenters.includes(dc))
+      ) {
         return false;
       }
 
       const name = job.get('name');
-      if (prefixes.length && !prefixes.find(prefix => name.startsWith(prefix))) {
+      if (
+        prefixes.length &&
+        !prefixes.find(prefix => name.startsWith(prefix))
+      ) {
         return false;
       }
 
@@ -234,19 +251,7 @@ export default class IndexController extends Controller.extend(Sortable, Searcha
 
   isShowingDeploymentDetails = false;
 
-  @action
-  cacheNamespace(namespace) {
-    this.system.cachedNamespace = namespace;
-  }
-
   setFacetQueryParam(queryParam, selection) {
     this.set(queryParam, serialize(selection));
-  }
-
-  @action
-  gotoJob(job) {
-    this.transitionToRoute('jobs.job', job.get('plainId'), {
-      queryParams: { namespace: job.get('namespace.name') },
-    });
   }
 }

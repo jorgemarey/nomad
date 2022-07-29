@@ -19,6 +19,8 @@ const (
 	errUnknownNomadVersion        = "Unable to determine Nomad version"
 	errNodeLacksRpc               = "Node does not support RPC; requires 0.8 or later"
 	errMissingAllocID             = "Missing allocation ID"
+	errIncompatibleFiltering      = "Filter expression cannot be used with other filter parameters"
+	errMalformedChooseParameter   = "Parameter for choose must be in form '<number>|<key>'"
 
 	// Prefix based errors that are used to check if the error is of a given
 	// type. These errors should be created with the associated constructor.
@@ -53,6 +55,8 @@ var (
 	ErrUnknownNomadVersion        = errors.New(errUnknownNomadVersion)
 	ErrNodeLacksRpc               = errors.New(errNodeLacksRpc)
 	ErrMissingAllocID             = errors.New(errMissingAllocID)
+	ErrIncompatibleFiltering      = errors.New(errIncompatibleFiltering)
+	ErrMalformedChooseParameter   = errors.New(errMalformedChooseParameter)
 
 	ErrUnknownNode = errors.New(ErrUnknownNodePrefix)
 

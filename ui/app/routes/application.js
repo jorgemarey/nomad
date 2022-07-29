@@ -1,3 +1,4 @@
+/* eslint-disable ember/no-controller-access-in-routes */
 import { inject as service } from '@ember/service';
 import { later, next } from '@ember/runloop';
 import Route from '@ember/routing/route';
@@ -15,8 +16,8 @@ export default class ApplicationRoute extends Route {
 
   queryParams = {
     region: {
-      refreshModel: true,
-    },
+      refreshModel: true
+    }
   };
 
   resetController(controller, isExiting) {
@@ -49,7 +50,9 @@ export default class ApplicationRoute extends Route {
         this.controllerFor('application').set('error', e);
       }
 
-      const fetchSelfTokenAndPolicies = this.get('token.fetchSelfTokenAndPolicies')
+      const fetchSelfTokenAndPolicies = this.get(
+        'token.fetchSelfTokenAndPolicies'
+      )
         .perform()
         .catch();
 
@@ -57,7 +60,9 @@ export default class ApplicationRoute extends Route {
         .perform()
         .catch();
 
-      const checkFuzzySearchPresence = this.get('system.checkFuzzySearchPresence')
+      const checkFuzzySearchPresence = this.get(
+        'system.checkFuzzySearchPresence'
+      )
         .perform()
         .catch();
 
@@ -66,7 +71,7 @@ export default class ApplicationRoute extends Route {
         this.get('system.defaultRegion'),
         fetchLicense,
         fetchSelfTokenAndPolicies,
-        checkFuzzySearchPresence,
+        checkFuzzySearchPresence
       ]);
     }
 
@@ -95,13 +100,13 @@ export default class ApplicationRoute extends Route {
     { region },
     {
       to: {
-        queryParams: { ott },
-      },
+        queryParams: { ott }
+      }
     }
   ) {
     return {
       region,
-      hasOneTimeToken: ott,
+      hasOneTimeToken: ott
     };
   }
 

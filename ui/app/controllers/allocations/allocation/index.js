@@ -15,14 +15,15 @@ import classic from 'ember-classic-decorator';
 @classic
 export default class IndexController extends Controller.extend(Sortable) {
   @service token;
+  @service store;
 
   queryParams = [
     {
-      sortProperty: 'sort',
+      sortProperty: 'sort'
     },
     {
-      sortDescending: 'desc',
-    },
+      sortDescending: 'desc'
+    }
   ];
 
   sortProperty = 'name';
@@ -74,7 +75,7 @@ export default class IndexController extends Controller.extend(Sortable) {
     } catch (err) {
       this.set('error', {
         title: 'Could Not Stop Allocation',
-        description: messageForError(err, 'manage allocation lifecycle'),
+        description: messageForError(err, 'manage allocation lifecycle')
       });
     }
   })
@@ -86,7 +87,7 @@ export default class IndexController extends Controller.extend(Sortable) {
     } catch (err) {
       this.set('error', {
         title: 'Could Not Restart Allocation',
-        description: messageForError(err, 'manage allocation lifecycle'),
+        description: messageForError(err, 'manage allocation lifecycle')
       });
     }
   })

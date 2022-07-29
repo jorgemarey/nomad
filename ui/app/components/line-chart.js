@@ -1,7 +1,7 @@
 import Component from '@glimmer/component';
 import { tracked } from '@glimmer/tracking';
 import { action } from '@ember/object';
-import { run } from '@ember/runloop';
+import { schedule, next } from '@ember/runloop';
 import d3 from 'd3-selection';
 import d3Scale from 'd3-scale';
 import d3Axis from 'd3-axis';
@@ -95,7 +95,9 @@ export default class LineChart extends Component {
   @action
   xFormat(timeseries) {
     if (this.args.xFormat) return this.args.xFormat;
-    return timeseries ? d3TimeFormat.timeFormat('%b %d, %H:%M') : d3Format.format(',');
+    return timeseries
+      ? d3TimeFormat.timeFormat('%b %d, %H:%M')
+      : d3Format.format(',');
   }
 
   @action
@@ -236,7 +238,7 @@ export default class LineChart extends Component {
       const mouseX = d3.pointer(ev, this)[0];
       chart.latestMouseX = mouseX;
       updateActiveDatum(mouseX);
-      run.schedule('afterRender', chart, () => (chart.isActive = true));
+      schedule('afterRender', chart, () => (chart.isActive = true));
     });
 
     canvas.on('mousemove', function(ev) {
@@ -246,7 +248,7 @@ export default class LineChart extends Component {
     });
 
     canvas.on('mouseleave', () => {
-      run.schedule('afterRender', this, () => (this.isActive = false));
+      schedule('afterRender', this, () => (this.isActive = false));
       this.activeDatum = null;
       this.activeData = [];
     });
@@ -298,9 +300,9 @@ export default class LineChart extends Component {
           datum: {
             formattedX: this.xFormat(this.args.timeseries)(datum[xProp]),
             formattedY: this.yFormat()(datum[yProp]),
-            datum,
+            datum
           },
-          index: data.length - seriesIndex - 1,
+          index: data.length - seriesIndex - 1
         };
       })
       .compact();
@@ -308,7 +310,11 @@ export default class LineChart extends Component {
     // Of the selected data, determine which is closest
     const closestDatum = activeData
       .slice()
-      .sort((a, b) => Math.abs(a.datum.datum[xProp] - x) - Math.abs(b.datum.datum[xProp] - x))[0];
+      .sort(
+        (a, b) =>
+          Math.abs(a.datum.datum[xProp] - x) -
+          Math.abs(b.datum.datum[xProp] - x)
+      )[0];
 
     // If any other selected data are beyond a distance threshold, drop them from the list
     // xScale is used here to measure distance in screen-space rather than data-space.
@@ -321,7 +327,7 @@ export default class LineChart extends Component {
     this.activeDatum = closestDatum.datum.datum;
     this.tooltipPosition = {
       left: xScale(this.activeDatum[xProp]),
-      top: yScale(this.activeDatum[yProp]) - 10,
+      top: yScale(this.activeDatum[yProp]) - 10
     };
   }
 
@@ -335,7 +341,7 @@ export default class LineChart extends Component {
     // svg elements
     this.mountD3Elements();
 
-    run.next(() => {
+    next(() => {
       // Since each axis depends on the dimension of the other
       // axis, the axes themselves are recomputed and need to
       // be re-rendered.
@@ -351,7 +357,9 @@ export default class LineChart extends Component {
     if (!this.isDestroyed && !this.isDestroying) {
       d3.select(this.element.querySelector('.x-axis')).call(this.xAxis);
       d3.select(this.element.querySelector('.y-axis')).call(this.yAxis);
-      d3.select(this.element.querySelector('.y-gridlines')).call(this.yGridlines);
+      d3.select(this.element.querySelector('.y-gridlines')).call(
+        this.yGridlines
+      );
     }
   }
 

@@ -7,7 +7,7 @@ if (process.env.USE_MIRAGE) {
 }
 
 module.exports = function(environment) {
-  var ENV = {
+  let ENV = {
     modulePrefix: 'nomad-ui',
     environment: environment,
     rootURL: '/ui/',
@@ -19,18 +19,18 @@ module.exports = function(environment) {
       },
       EXTEND_PROTOTYPES: {
         // Prevent Ember Data from overriding Date.parse.
-        Date: false,
-      },
+        Date: false
+      }
     },
 
     APP: {
       blockingQueries: true,
-      mirageScenario: 'topoMedium',
-      mirageWithNamespaces: false,
+      mirageScenario: 'smallCluster',
+      mirageWithNamespaces: true,
       mirageWithTokens: true,
       mirageWithRegions: true,
-      showStorybookLink: process.env.STORYBOOK_LINK === 'true',
-    },
+      showStorybookLink: process.env.STORYBOOK_LINK === 'true'
+    }
   };
 
   if (environment === 'development') {
@@ -42,7 +42,7 @@ module.exports = function(environment) {
 
     ENV['ember-cli-mirage'] = {
       enabled: USE_MIRAGE,
-      excludeFilesFromBuild: !USE_MIRAGE,
+      excludeFilesFromBuild: !USE_MIRAGE
     };
 
     if (process.env.STORYBOOK === 'true') {
@@ -63,11 +63,11 @@ module.exports = function(environment) {
     ENV.APP.autoboot = false;
 
     ENV.browserify = {
-      tests: true,
+      tests: true
     };
 
     ENV['ember-cli-mirage'] = {
-      trackRequests: true,
+      trackRequests: true
     };
   }
 

@@ -4,7 +4,9 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/testlog"
 	"github.com/hashicorp/nomad/nomad/mock"
@@ -51,11 +53,21 @@ func TestClientConfig(t testing.T) (*Config, func()) {
 	}
 	conf.StateDir = stateDir
 
+	// Use a minimal chroot environment
+	conf.ChrootEnv = ci.TinyChroot
+
+	// Helps make sure we are respecting configured parent
+	conf.CgroupParent = "testing.slice"
+
 	conf.VaultConfig.Enabled = helper.BoolToPtr(false)
 	conf.DevMode = true
 
 	// Loosen GC threshold
 	conf.GCDiskUsageThreshold = 98.0
 	conf.GCInodeUsageThreshold = 98.0
+
+	// Same as default; necessary for task Event messages
+	conf.MaxKillTimeout = 30 * time.Second
+
 	return conf, cleanup
 }

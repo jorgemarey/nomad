@@ -70,13 +70,17 @@ func (j *Job) ConsulUsages() map[string]*ConsulUsage {
 
 		// Gather group services
 		for _, service := range tg.Services {
-			m[namespace].Services = append(m[namespace].Services, service.Name)
+			if service.Provider == ServiceProviderConsul {
+				m[namespace].Services = append(m[namespace].Services, service.Name)
+			}
 		}
 
 		// Gather task services and KV usage
 		for _, task := range tg.Tasks {
 			for _, service := range task.Services {
-				m[namespace].Services = append(m[namespace].Services, service.Name)
+				if service.Provider == ServiceProviderConsul {
+					m[namespace].Services = append(m[namespace].Services, service.Name)
+				}
 			}
 			// MEIGAS: todo, temporarily disable KV check so clients can keep using current tokens
 			// if len(task.Templates) > 0 {

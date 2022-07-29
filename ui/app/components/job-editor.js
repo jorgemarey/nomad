@@ -1,13 +1,15 @@
 import Component from '@ember/component';
 import { assert } from '@ember/debug';
 import { inject as service } from '@ember/service';
-import { computed } from '@ember/object';
+import { computed, action } from '@ember/object';
 import { task } from 'ember-concurrency';
 import messageFromAdapterError from 'nomad-ui/utils/message-from-adapter-error';
 import localStorageProperty from 'nomad-ui/utils/properties/local-storage';
+import { attributeBindings } from '@ember-decorators/component';
 import classic from 'ember-classic-decorator';
 
 @classic
+@attributeBindings('data-test-job-editor')
 export default class JobEditor extends Component {
   @service store;
   @service config;
@@ -25,9 +27,18 @@ export default class JobEditor extends Component {
   set context(value) {
     const allowedValues = ['new', 'edit'];
 
-    assert(`context must be one of: ${allowedValues.join(', ')}`, allowedValues.includes(value));
+    assert(
+      `context must be one of: ${allowedValues.join(', ')}`,
+      allowedValues.includes(value)
+    );
 
     this.set('_context', value);
+  }
+
+  @action updateCode(value) {
+    if (!this.job.isDestroying && !this.job.isDestroyed) {
+      this.job.set('_newDefinition', value);
+    }
   }
 
   _context = null;
@@ -51,7 +62,8 @@ export default class JobEditor extends Component {
     try {
       yield this.job.parse();
     } catch (err) {
-      const error = messageFromAdapterError(err) || 'Could not parse input';
+      const error =
+        messageFromAdapterError(err, 'parse jobs') || 'Could not parse input';
       this.set('parseError', error);
       this.scrollToError();
       return;
@@ -61,7 +73,8 @@ export default class JobEditor extends Component {
       const plan = yield this.job.plan();
       this.set('planOutput', plan);
     } catch (err) {
-      const error = messageFromAdapterError(err) || 'Could not plan job';
+      const error =
+        messageFromAdapterError(err, 'plan jobs') || 'Could not plan job';
       this.set('planError', error);
       this.scrollToError();
     }

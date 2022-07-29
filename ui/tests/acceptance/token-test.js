@@ -1,3 +1,4 @@
+/* eslint-disable qunit/require-expect */
 import { currentURL, find, visit } from '@ember/test-helpers';
 import { module, skip, test } from 'qunit';
 import { setupApplicationTest } from 'ember-qunit';
@@ -8,6 +9,7 @@ import Jobs from 'nomad-ui/tests/pages/jobs/list';
 import JobDetail from 'nomad-ui/tests/pages/jobs/detail';
 import ClientDetail from 'nomad-ui/tests/pages/clients/detail';
 import Layout from 'nomad-ui/tests/pages/layout';
+import percySnapshot from '@percy/ember';
 
 let job;
 let node;
@@ -30,6 +32,8 @@ module('Acceptance | tokens', function(hooks) {
   });
 
   test('it passes an accessibility audit', async function(assert) {
+    assert.expect(1);
+
     await Tokens.visit();
     await a11yAudit(assert);
   });
@@ -38,11 +42,19 @@ module('Acceptance | tokens', function(hooks) {
     const { secretId } = managementToken;
 
     await Tokens.visit();
-    assert.ok(window.localStorage.nomadTokenSecret == null, 'No token secret set');
+    assert.equal(
+      window.localStorage.nomadTokenSecret,
+      null,
+      'No token secret set'
+    );
     assert.equal(document.title, 'Tokens - Nomad');
 
     await Tokens.secret(secretId).submit();
-    assert.equal(window.localStorage.nomadTokenSecret, secretId, 'Token secret was set');
+    assert.equal(
+      window.localStorage.nomadTokenSecret,
+      secretId,
+      'Token secret was set'
+    );
   });
 
   // TODO: unskip once store.unloadAll reliably waits for in-flight requests to settle
@@ -52,7 +64,10 @@ module('Acceptance | tokens', function(hooks) {
     await JobDetail.visit({ id: job.id });
     await ClientDetail.visit({ id: node.id });
 
-    assert.ok(server.pretender.handledRequests.length > 1, 'Requests have been made');
+    assert.ok(
+      server.pretender.handledRequests.length > 1,
+      'Requests have been made'
+    );
 
     server.pretender.handledRequests.forEach(req => {
       assert.notOk(getHeader(req, 'x-nomad-token'), `No token for ${req.url}`);
@@ -71,7 +86,11 @@ module('Acceptance | tokens', function(hooks) {
 
     // Cross-origin requests can't have a token
     newRequests.forEach(req => {
-      assert.equal(getHeader(req, 'x-nomad-token'), secretId, `Token set for ${req.url}`);
+      assert.equal(
+        getHeader(req, 'x-nomad-token'),
+        secretId,
+        `Token set for ${req.url}`
+      );
     });
   });
 
@@ -87,7 +106,11 @@ module('Acceptance | tokens', function(hooks) {
     await Tokens.visit();
     await Tokens.secret(bogusSecret).submit();
 
-    assert.ok(window.localStorage.nomadTokenSecret == null, 'Token secret is discarded on failure');
+    assert.equal(
+      window.localStorage.nomadTokenSecret,
+      null,
+      'Token secret is discarded on failure'
+    );
     assert.ok(Tokens.errorMessage, 'Token error message is shown');
     assert.notOk(Tokens.successMessage, 'Token success message is not shown');
     assert.equal(Tokens.policies.length, 0, 'No token policies are shown');
@@ -98,6 +121,8 @@ module('Acceptance | tokens', function(hooks) {
 
     await Tokens.visit();
     await Tokens.secret(secretId).submit();
+
+    await percySnapshot(assert);
 
     assert.ok(Tokens.successMessage, 'Token success message is shown');
     assert.notOk(Tokens.errorMessage, 'Token error message is not shown');
@@ -115,7 +140,10 @@ module('Acceptance | tokens', function(hooks) {
 
     assert.ok(Tokens.successMessage, 'Token success message is shown');
     assert.notOk(Tokens.errorMessage, 'Token error message is not shown');
-    assert.notOk(Tokens.managementMessage, 'Token management message is not shown');
+    assert.notOk(
+      Tokens.managementMessage,
+      'Token management message is not shown'
+    );
     assert.equal(
       Tokens.policies.length,
       clientToken.policies.length,
@@ -125,7 +153,11 @@ module('Acceptance | tokens', function(hooks) {
     const policyElement = Tokens.policies.objectAt(0);
 
     assert.equal(policyElement.name, policy.name, 'Policy Name');
-    assert.equal(policyElement.description, policy.description, 'Policy Description');
+    assert.equal(
+      policyElement.description,
+      policy.description,
+      'Policy Description'
+    );
     assert.equal(policyElement.rules, policy.rules, 'Policy Rules');
   });
 
@@ -153,11 +185,18 @@ module('Acceptance | tokens', function(hooks) {
 
     await JobDetail.visit({ id: job.id, ott: oneTimeSecret });
 
-    assert.notOk(currentURL().includes(oneTimeSecret), 'OTT is cleared from the URL after loading');
+    assert.notOk(
+      currentURL().includes(oneTimeSecret),
+      'OTT is cleared from the URL after loading'
+    );
 
     await Tokens.visit();
 
-    assert.equal(window.localStorage.nomadTokenSecret, secretId, 'Token secret was set');
+    assert.equal(
+      window.localStorage.nomadTokenSecret,
+      secretId,
+      'Token secret was set'
+    );
   });
 
   test('when the ott exchange fails an error is shown', async function(assert) {
@@ -165,7 +204,10 @@ module('Acceptance | tokens', function(hooks) {
 
     assert.ok(Layout.error.isPresent);
     assert.equal(Layout.error.title, 'Token Exchange Error');
-    assert.equal(Layout.error.message, 'Failed to exchange the one-time token.');
+    assert.equal(
+      Layout.error.message,
+      'Failed to exchange the one-time token.'
+    );
   });
 
   function getHeader({ requestHeaders }, name) {

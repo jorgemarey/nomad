@@ -55,6 +55,7 @@ func TestCSIVolumeDecode(t *testing.T) {
 		name: "volume creation",
 		hcl: `
 id              = "testvolume"
+namespace       = "prod"
 name            = "test"
 type            = "csi"
 plugin_id       = "myplugin"
@@ -85,9 +86,21 @@ capability {
   access_mode     = "single-node-reader-only"
   attachment_mode = "block-device"
 }
+
+topology_request {
+  preferred {
+    topology { segments {rack = "R1"} }
+  }
+
+  required {
+    topology { segments {rack = "R1"} }
+    topology { segments {rack = "R2", zone = "us-east-1a"} }
+  }
+}
 `,
 		expected: &api.CSIVolume{
 			ID:                   "testvolume",
+			Namespace:            "prod",
 			Name:                 "test",
 			PluginID:             "myplugin",
 			SnapshotID:           "snap-12345",
@@ -109,12 +122,23 @@ capability {
 			},
 			Parameters: map[string]string{"skuname": "Premium_LRS"},
 			Secrets:    map[string]string{"password": "xyzzy"},
+			RequestedTopologies: &api.CSITopologyRequest{
+				Required: []*api.CSITopology{
+					{Segments: map[string]string{"rack": "R1"}},
+					{Segments: map[string]string{"rack": "R2", "zone": "us-east-1a"}},
+				},
+				Preferred: []*api.CSITopology{
+					{Segments: map[string]string{"rack": "R1"}},
+				},
+			},
+			Topologies: nil, // this is left empty
 		},
 		err: "",
 	}, {
 		name: "volume registration",
 		hcl: `
 id              = "testvolume"
+namespace       = "prod"
 external_id     = "vol-12345"
 name            = "test"
 type            = "csi"
@@ -125,9 +149,23 @@ capability {
   access_mode     = "single-node-writer"
   attachment_mode = "file-system"
 }
+
+topology_request {
+  # make sure we safely handle empty blocks even
+  # if they're invalid
+  preferred {
+    topology {}
+    topology { segments {} }
+  }
+
+  required {
+    topology { segments { rack = "R2", zone = "us-east-1a"} }
+  }
+}
 `,
 		expected: &api.CSIVolume{
 			ID:         "testvolume",
+			Namespace:  "prod",
 			ExternalID: "vol-12345",
 			Name:       "test",
 			PluginID:   "myplugin",
@@ -137,6 +175,13 @@ capability {
 					AttachmentMode: api.CSIVolumeAttachmentModeFilesystem,
 				},
 			},
+			RequestedTopologies: &api.CSITopologyRequest{
+				Required: []*api.CSITopology{
+					{Segments: map[string]string{"rack": "R2", "zone": "us-east-1a"}},
+				},
+				Preferred: nil,
+			},
+			Topologies: nil,
 		},
 		err: "",
 	},

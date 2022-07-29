@@ -1,6 +1,7 @@
 import { Factory } from 'ember-cli-mirage';
 import faker from 'nomad-ui/mirage/faker';
 import { generateResources } from '../common';
+import { dasherize } from '@ember/string';
 
 const DRIVERS = ['docker', 'java', 'rkt', 'qemu', 'exec', 'raw_exec'];
 
@@ -15,7 +16,7 @@ export default Factory.extend({
 
   JobID: '',
 
-  name: id => `task-${faker.hacker.noun().dasherize()}-${id}`,
+  name: id => `task-${dasherize(faker.hacker.noun())}-${id}`,
   driver: () => faker.helpers.randomize(DRIVERS),
 
   originalResources: generateResources,
@@ -27,7 +28,7 @@ export default Factory.extend({
       CPU: resources.Cpu.CpuShares,
       MemoryMB: resources.Memory.MemoryMB,
       MemoryMaxMB: resources.Memory.MemoryMaxMB,
-      DiskMB: resources.Disk.DiskMB,
+      DiskMB: resources.Disk.DiskMB
     };
   },
 
@@ -54,14 +55,18 @@ export default Factory.extend({
       const recommendations = [];
 
       if (faker.random.number(10) >= 1) {
-        recommendations.push(server.create('recommendation', { task, resource: 'CPU' }));
+        recommendations.push(
+          server.create('recommendation', { task, resource: 'CPU' })
+        );
       }
 
       if (faker.random.number(10) >= 1) {
-        recommendations.push(server.create('recommendation', { task, resource: 'MemoryMB' }));
+        recommendations.push(
+          server.create('recommendation', { task, resource: 'MemoryMB' })
+        );
       }
 
       task.save({ recommendationIds: recommendations.mapBy('id') });
     }
-  },
+  }
 });

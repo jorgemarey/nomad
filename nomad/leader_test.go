@@ -1186,6 +1186,7 @@ func leaderElectionTest(t *testing.T, raftProtocol raft.ProtocolVersion) {
 
 func TestLeader_RollRaftServer(t *testing.T) {
 	ci.Parallel(t)
+	ci.SkipSlow(t, "flaky on GHA; #12358")
 
 	s1, cleanupS1 := TestServer(t, func(c *Config) {
 		c.RaftConfig.ProtocolVersion = 2
@@ -1216,7 +1217,9 @@ func TestLeader_RollRaftServer(t *testing.T) {
 	// Kill the first v2 server
 	s1.Shutdown()
 
-	for _, s := range []*Server{s1, s3} {
+	for _, s := range []*Server{s2, s3} {
+		s.RemoveFailedNode(s1.config.NodeID)
+
 		retry.Run(t, func(r *retry.R) {
 			minVer, err := s.autopilot.MinRaftProtocol()
 			if err != nil {
@@ -1224,6 +1227,14 @@ func TestLeader_RollRaftServer(t *testing.T) {
 			}
 			if got, want := minVer, 2; got != want {
 				r.Fatalf("got min raft version %d want %d", got, want)
+			}
+
+			configFuture := s.raft.GetConfiguration()
+			if err != nil {
+				r.Fatal(err)
+			}
+			if len(configFuture.Configuration().Servers) != 2 {
+				r.Fatalf("expected 2 servers, got %d", len(configFuture.Configuration().Servers))
 			}
 		})
 	}
@@ -1234,20 +1245,33 @@ func TestLeader_RollRaftServer(t *testing.T) {
 		c.RaftConfig.ProtocolVersion = 3
 	})
 	defer cleanupS4()
-	TestJoin(t, s4, s2)
+	TestJoin(t, s2, s3, s4)
 	servers[0] = s4
 
 	// Kill the second v2 server
 	s2.Shutdown()
 
 	for _, s := range []*Server{s3, s4} {
-		retry.Run(t, func(r *retry.R) {
+		s.RemoveFailedNode(s2.config.NodeID)
+
+		retry.RunWith(&retry.Counter{
+			Count: int(10 * testutil.TestMultiplier()),
+			Wait:  time.Duration(testutil.TestMultiplier()) * time.Second,
+		}, t, func(r *retry.R) {
 			minVer, err := s.autopilot.MinRaftProtocol()
 			if err != nil {
 				r.Fatal(err)
 			}
 			if got, want := minVer, 2; got != want {
 				r.Fatalf("got min raft version %d want %d", got, want)
+			}
+
+			configFuture := s.raft.GetConfiguration()
+			if err != nil {
+				r.Fatal(err)
+			}
+			if len(configFuture.Configuration().Servers) != 2 {
+				r.Fatalf("expected 2 servers, got %d", len(configFuture.Configuration().Servers))
 			}
 		})
 	}
@@ -1257,20 +1281,33 @@ func TestLeader_RollRaftServer(t *testing.T) {
 		c.RaftConfig.ProtocolVersion = 3
 	})
 	defer cleanupS5()
-	TestJoin(t, s5, s4)
+	TestJoin(t, s3, s4, s5)
 	servers[1] = s5
 
 	// Kill the last v2 server, now minRaftProtocol should be 3
 	s3.Shutdown()
 
 	for _, s := range []*Server{s4, s5} {
-		retry.Run(t, func(r *retry.R) {
+		s.RemoveFailedNode(s2.config.NodeID)
+
+		retry.RunWith(&retry.Counter{
+			Count: int(10 * testutil.TestMultiplier()),
+			Wait:  time.Duration(testutil.TestMultiplier()) * time.Second,
+		}, t, func(r *retry.R) {
 			minVer, err := s.autopilot.MinRaftProtocol()
 			if err != nil {
 				r.Fatal(err)
 			}
 			if got, want := minVer, 3; got != want {
 				r.Fatalf("got min raft version %d want %d", got, want)
+			}
+
+			configFuture := s.raft.GetConfiguration()
+			if err != nil {
+				r.Fatal(err)
+			}
+			if len(configFuture.Configuration().Servers) != 2 {
+				r.Fatalf("expected 2 servers, got %d", len(configFuture.Configuration().Servers))
 			}
 		})
 	}
@@ -1353,7 +1390,6 @@ func TestLeader_TransitionsUpdateConsistencyRead(t *testing.T) {
 // (and unpaused) upon leader elections (and step downs).
 func TestLeader_PausingWorkers(t *testing.T) {
 	ci.Parallel(t)
-	
 	s1, cleanupS1 := TestServer(t, func(c *Config) {
 		c.NumSchedulers = 12
 	})
@@ -1626,4 +1662,90 @@ func waitForStableLeadership(t *testing.T, servers []*Server) *Server {
 	})
 
 	return leader
+}
+
+func TestServer_handleEvalBrokerStateChange(t *testing.T) {
+	ci.Parallel(t)
+
+	testCases := []struct {
+		startValue                  bool
+		testServerCallBackConfig    func(c *Config)
+		inputSchedulerConfiguration *structs.SchedulerConfiguration
+		expectedOutput              bool
+		name                        string
+	}{
+		{
+			startValue:                  false,
+			testServerCallBackConfig:    func(c *Config) { c.DefaultSchedulerConfig.PauseEvalBroker = false },
+			inputSchedulerConfiguration: nil,
+			expectedOutput:              true,
+			name:                        "bootstrap un-paused",
+		},
+		{
+			startValue:                  false,
+			testServerCallBackConfig:    func(c *Config) { c.DefaultSchedulerConfig.PauseEvalBroker = true },
+			inputSchedulerConfiguration: nil,
+			expectedOutput:              false,
+			name:                        "bootstrap paused",
+		},
+		{
+			startValue:                  true,
+			testServerCallBackConfig:    nil,
+			inputSchedulerConfiguration: &structs.SchedulerConfiguration{PauseEvalBroker: true},
+			expectedOutput:              false,
+			name:                        "state change to paused",
+		},
+		{
+			startValue:                  false,
+			testServerCallBackConfig:    nil,
+			inputSchedulerConfiguration: &structs.SchedulerConfiguration{PauseEvalBroker: true},
+			expectedOutput:              false,
+			name:                        "no state change to paused",
+		},
+		{
+			startValue:                  false,
+			testServerCallBackConfig:    nil,
+			inputSchedulerConfiguration: &structs.SchedulerConfiguration{PauseEvalBroker: false},
+			expectedOutput:              true,
+			name:                        "state change to un-paused",
+		},
+		{
+			startValue:                  false,
+			testServerCallBackConfig:    nil,
+			inputSchedulerConfiguration: &structs.SchedulerConfiguration{PauseEvalBroker: true},
+			expectedOutput:              false,
+			name:                        "no state change to un-paused",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+
+			// Create a new server and wait for leadership to be established.
+			testServer, cleanupFn := TestServer(t, nil)
+			_ = waitForStableLeadership(t, []*Server{testServer})
+			defer cleanupFn()
+
+			// If we set a callback config, we are just testing the eventual
+			// state of the brokers. Otherwise, we set our starting value and
+			// then perform our state modification change and check.
+			if tc.testServerCallBackConfig == nil {
+				testServer.evalBroker.SetEnabled(tc.startValue)
+				testServer.blockedEvals.SetEnabled(tc.startValue)
+				actualOutput := testServer.handleEvalBrokerStateChange(tc.inputSchedulerConfiguration)
+				require.Equal(t, tc.expectedOutput, actualOutput)
+			}
+
+			// Check the brokers are in the expected state.
+			var expectedEnabledVal bool
+
+			if tc.inputSchedulerConfiguration == nil {
+				expectedEnabledVal = !testServer.config.DefaultSchedulerConfig.PauseEvalBroker
+			} else {
+				expectedEnabledVal = !tc.inputSchedulerConfiguration.PauseEvalBroker
+			}
+			require.Equal(t, expectedEnabledVal, testServer.evalBroker.Enabled())
+			require.Equal(t, expectedEnabledVal, testServer.blockedEvals.Enabled())
+		})
+	}
 }

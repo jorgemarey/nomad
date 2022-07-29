@@ -14,20 +14,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/nomad/lib/cpuset"
-
 	metrics "github.com/armon/go-metrics"
 	consulapi "github.com/hashicorp/consul/api"
-	"github.com/hashicorp/consul/lib"
 	log "github.com/hashicorp/go-hclog"
 	uuidparse "github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/nomad/client"
 	clientconfig "github.com/hashicorp/nomad/client/config"
+	"github.com/hashicorp/nomad/client/lib/cgutil"
 	"github.com/hashicorp/nomad/client/state"
 	"github.com/hashicorp/nomad/command/agent/consul"
 	"github.com/hashicorp/nomad/command/agent/event"
+	"github.com/hashicorp/nomad/helper"
+	"github.com/hashicorp/nomad/helper/bufconndialer"
 	"github.com/hashicorp/nomad/helper/pluginutils/loader"
 	"github.com/hashicorp/nomad/helper/uuid"
+	"github.com/hashicorp/nomad/lib/cpuset"
 	"github.com/hashicorp/nomad/nomad"
 	"github.com/hashicorp/nomad/nomad/deploymentwatcher"
 	"github.com/hashicorp/nomad/nomad/structs"
@@ -107,6 +108,12 @@ type Agent struct {
 	shutdown     bool
 	shutdownCh   chan struct{}
 	shutdownLock sync.Mutex
+
+	// builtinDialer dials the builtinListener. It is used for connecting
+	// consul-template to the HTTP API in process. In the event this agent is
+	// not running in client mode, these two fields will be nil.
+	builtinListener net.Listener
+	builtinDialer   *bufconndialer.BufConnWrapper
 
 	InmemSink *metrics.InmemSink
 }
@@ -190,9 +197,6 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 	}
 	if agentConfig.Server.DataDir != "" {
 		conf.DataDir = agentConfig.Server.DataDir
-	}
-	if agentConfig.Server.ProtocolVersion != 0 {
-		conf.ProtocolVersion = uint8(agentConfig.Server.ProtocolVersion)
 	}
 	if agentConfig.Server.RaftProtocol != 0 {
 		conf.RaftConfig.ProtocolVersion = raft.ProtocolVersion(agentConfig.Server.RaftProtocol)
@@ -432,6 +436,20 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 		return nil, fmt.Errorf("deploy_query_rate_limit must be greater than 0")
 	}
 
+	// Set plan rejection tracker configuration.
+	if planRejectConf := agentConfig.Server.PlanRejectionTracker; planRejectConf != nil {
+		if planRejectConf.Enabled != nil {
+			conf.NodePlanRejectionEnabled = *planRejectConf.Enabled
+		}
+		conf.NodePlanRejectionThreshold = planRejectConf.NodeThreshold
+
+		if planRejectConf.NodeWindow == 0 {
+			return nil, fmt.Errorf("plan_rejection_tracker.node_window must be greater than 0")
+		} else {
+			conf.NodePlanRejectionWindow = planRejectConf.NodeWindow
+		}
+	}
+
 	// Add Enterprise license configs
 	conf.LicenseEnv = agentConfig.Server.LicenseEnv
 	conf.LicensePath = agentConfig.Server.LicensePath
@@ -445,6 +463,11 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 			LimitResults:  search.LimitResults,
 			MinTermLength: search.MinTermLength,
 		}
+	}
+
+	// Set the raft bolt parameters
+	if bolt := agentConfig.Server.RaftBoltConfig; bolt != nil {
+		conf.RaftBoltNoFreelistSync = bolt.NoFreelistSync
 	}
 
 	return conf, nil
@@ -693,13 +716,17 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	}
 	conf.BindWildcardDefaultHostNetwork = agentConfig.Client.BindWildcardDefaultHostNetwork
 
-	conf.CgroupParent = agentConfig.Client.CgroupParent
+	conf.CgroupParent = cgutil.GetCgroupParent(agentConfig.Client.CgroupParent)
 	if agentConfig.Client.ReserveableCores != "" {
 		cores, err := cpuset.Parse(agentConfig.Client.ReserveableCores)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse 'reservable_cores': %v", err)
 		}
 		conf.ReservableCores = cores.ToSlice()
+	}
+
+	if agentConfig.Client.NomadServiceDiscovery != nil {
+		conf.NomadServiceDiscovery = *agentConfig.Client.NomadServiceDiscovery
 	}
 
 	artifactConfig, err := clientconfig.ArtifactConfigFromAgent(agentConfig.Client.Artifact)
@@ -838,7 +865,7 @@ func (a *Agent) setupNodeID(config *nomad.Config) error {
 			return err
 		}
 		// Persist this configured nodeID to our data directory
-		if err := lib.EnsurePath(fileID, false); err != nil {
+		if err := helper.EnsurePath(fileID, false); err != nil {
 			return err
 		}
 		if err := ioutil.WriteFile(fileID, []byte(config.NodeID), 0600); err != nil {
@@ -850,7 +877,7 @@ func (a *Agent) setupNodeID(config *nomad.Config) error {
 	// If we still don't have a valid node ID, make one.
 	if config.NodeID == "" {
 		id := uuid.Generate()
-		if err := lib.EnsurePath(fileID, false); err != nil {
+		if err := helper.EnsurePath(fileID, false); err != nil {
 			return err
 		}
 		if err := ioutil.WriteFile(fileID, []byte(id), 0600); err != nil {
@@ -891,7 +918,6 @@ func (a *Agent) setupClient() error {
 	if !a.config.Client.Enabled {
 		return nil
 	}
-
 	// Setup the configuration
 	conf, err := a.clientConfig()
 	if err != nil {
@@ -907,6 +933,13 @@ func (a *Agent) setupClient() error {
 	if conf.StateDBFactory == nil {
 		conf.StateDBFactory = state.GetStateDBFactory(conf.DevMode)
 	}
+
+	// Set up a custom listener and dialer. This is used by Nomad clients when
+	// running consul-template functions that utilise the Nomad API. We lazy
+	// load this into the client config, therefore this needs to happen before
+	// we call NewClient.
+	a.builtinListener, a.builtinDialer = bufconndialer.New()
+	conf.TemplateDialer = a.builtinDialer
 
 	nomadClient, err := client.NewClient(
 		conf, a.consulCatalog, a.consulProxies, a.consulService, nil)

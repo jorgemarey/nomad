@@ -4,13 +4,18 @@ import ApplicationSerializer from 'nomad-ui/serializers/application';
 
 import Model from '@ember-data/model';
 import { attr } from '@ember-data/model';
+import classic from 'ember-classic-decorator';
 
+@classic
 class TestSerializer extends ApplicationSerializer {
   arrayNullOverrides = ['Things'];
 
   mapToArray = [
     'ArrayableMap',
-    { beforeName: 'OriginalNameArrayableMap', afterName: 'RenamedArrayableMap' },
+    {
+      beforeName: 'OriginalNameArrayableMap',
+      afterName: 'RenamedArrayableMap'
+    }
   ];
 
   separateNanos = ['Time'];
@@ -45,7 +50,7 @@ module('Unit | Serializer | Application', function(hooks) {
         Things: null,
         ArrayableMap: null,
         OriginalNameArrayableMap: null,
-        Time: 1607839992000100000,
+        Time: 1607839992000100000
       },
       out: {
         data: {
@@ -55,12 +60,12 @@ module('Unit | Serializer | Application', function(hooks) {
             arrayableMap: [],
             renamedArrayableMap: [],
             time: 1607839992000,
-            timeNanos: 100096,
+            timeNanos: 100096
           },
           relationships: {},
-          type: 'test',
-        },
-      },
+          type: 'test'
+        }
+      }
     },
     {
       name: 'Non-null array and maps',
@@ -70,13 +75,13 @@ module('Unit | Serializer | Application', function(hooks) {
         ArrayableMap: {
           b: { Order: 2 },
           a: { Order: 1 },
-          'c.d': { Order: 3 },
+          'c.d': { Order: 3 }
         },
         OriginalNameArrayableMap: {
-          a: { X: 1 },
+          a: { X: 1 }
         },
         Time: 1607839992000100000,
-        SomethingExtra: 'xyz',
+        SomethingExtra: 'xyz'
       },
       out: {
         data: {
@@ -86,22 +91,25 @@ module('Unit | Serializer | Application', function(hooks) {
             arrayableMap: [
               { Name: 'a', Order: 1 },
               { Name: 'b', Order: 2 },
-              { Name: 'c.d', Order: 3 },
+              { Name: 'c.d', Order: 3 }
             ],
             renamedArrayableMap: [{ Name: 'a', X: 1 }],
             time: 1607839992000,
-            timeNanos: 100096,
+            timeNanos: 100096
           },
           relationships: {},
-          type: 'test',
-        },
-      },
-    },
+          type: 'test'
+        }
+      }
+    }
   ];
 
   normalizationTestCases.forEach(testCase => {
     test(`normalization: ${testCase.name}`, async function(assert) {
-      assert.deepEqual(this.subject().normalize(TestModel, testCase.in), testCase.out);
+      assert.deepEqual(
+        this.subject().normalize(TestModel, testCase.in),
+        testCase.out
+      );
     });
   });
 });

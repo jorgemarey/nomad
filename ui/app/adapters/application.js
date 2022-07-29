@@ -1,5 +1,6 @@
 import { inject as service } from '@ember/service';
 import { computed } from '@ember/object';
+import { camelize } from '@ember/string';
 import RESTAdapter from '@ember-data/adapter/rest';
 import codesForError from '../utils/codes-for-error';
 import removeRecord from '../utils/remove-record';
@@ -20,7 +21,7 @@ export default class ApplicationAdapter extends RESTAdapter {
     const token = this.get('token.secret');
     if (token) {
       return {
-        'X-Nomad-Token': token,
+        'X-Nomad-Token': token
       };
     }
 
@@ -96,7 +97,7 @@ export default class ApplicationAdapter extends RESTAdapter {
     let prefix = this.urlPrefix();
 
     if (modelName) {
-      path = modelName.camelize();
+      path = camelize(modelName);
       if (path) {
         url.push(path);
       }
@@ -124,5 +125,7 @@ export default class ApplicationAdapter extends RESTAdapter {
 }
 
 function associateRegion(url, region) {
-  return url.indexOf('?') !== -1 ? `${url}&region=${region}` : `${url}?region=${region}`;
+  return url.indexOf('?') !== -1
+    ? `${url}&region=${region}`
+    : `${url}?region=${region}`;
 }

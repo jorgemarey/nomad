@@ -206,9 +206,12 @@ chroot as doing so would cause infinite recursion.
 
 - `disk` `(int: 0)` - Specifies the amount of disk to reserve, in MB.
 
-- `reserved_ports` `(string: "")` - Specifies a comma-separated list of ports to
-  reserve on all fingerprinted network devices. Ranges can be specified by using
-  a hyphen separated the two inclusive ends.
+- `reserved_ports` `(string: "")` - Specifies a comma-separated list of ports
+  to reserve on all fingerprinted network devices. Ranges can be specified by
+  using a hyphen separating the two inclusive ends. See also
+  [`host_network`](#host_network-stanza) for reserving ports on specific host
+  networks.
+
 
 ### `artifact` Parameters
 
@@ -237,36 +240,46 @@ chroot as doing so would cause infinite recursion.
 
 ### `template` Parameters
 
-- `function_denylist` `([]string: ["plugin"])` - Specifies a list of template
-  rendering functions that should be disallowed in job specs. By default the
-  `plugin` function is disallowed as it allows running arbitrary commands on
-  the host as root (unless Nomad is configured to run as a non-root user).
+- `function_denylist` `([]string: ["plugin", "writeToFile"])` - Specifies a
+  list of template rendering functions that should be disallowed in job specs.
+  By default the `plugin` and `writeToFile` functions are disallowed as they
+  allow unrestricted root access to the host.
 
 - `disable_file_sandbox` `(bool: false)` - Allows templates access to arbitrary
   files on the client host via the `file` function. By default, templates can
   access files only within the [task working directory].
 
-- `max_stale` `(string: "")` - # This is the maximum interval to allow "stale"
-  data. By default, only the Consul leader will respond to queries. Requests to
-  a follower will forward to the leader. In large clusters with many requests,
-  this is not as scalable. This option allows any follower to respond to a query,
-  so long as the last-replicated data is within this bound. Higher values result
-  in less cluster load, but are more likely to have outdated data.
+- `max_stale` `(string: "87600h")` - This is the maximum interval to allow "stale"
+  data. If `max_stale` is set to `0`, only the Consul leader will respond to queries, and
+  requests that reach a follower will forward to the leader. In large clusters with
+  many requests, this is not as scalable. This option allows any follower to respond
+  to a query, so long as the last-replicated data is within this bound. Higher values
+  result in less cluster load, but are more likely to have outdated data. This default
+  of 10 years (`87600h`) matches the default Consul configuration.
 
-- `wait` `(Code: nil)` - Defines the minimum and maximum amount of time to wait
-  for the Consul cluster to reach a consistent state before rendering a template.
-  This is useful to enable in systems where network connectivity to Consul is degraded,
-  because it will reduce the number of times a template is rendered. This configuration is
-  also exposed in the _task template stanza_ to allow overrides per task.
+- `wait` `(map: { min = "5s" max = "4m" })` - Defines the minimum and maximum amount
+  of time to wait before attempting to re-render a template. Consul Template re-renders
+  templates whenever rendered variables from Consul, Nomad, or Vault change. However in
+  order to minimize how often tasks are restarted or reloaded, Nomad will configure Consul
+  Template with a backoff timer that will tick on an interval equal to the specified `min`
+  value. Consul Template will always wait at least the as long as the `min` value specified.
+  If the underlying data has not changed between two tick intervals, Consul Template will
+  re-render. If the underlying data has changed, Consul Template will delay re-rendering
+  until the underlying data stabilizes for at least one tick interval, or the configured
+  `max` duration has elapsed. Once the `max` duration has elapsed, Consul Template will
+  re-render the template with the data available at the time. This is useful to enable in
+  systems where Consul is in a degraded state, or the referenced data values are changing
+  rapidly, because it will reduce the number of times a template is rendered. This
+  configuration is also exposed in the _task template stanza_ to allow overrides per task.
 
   ```hcl
   wait {
     min     = "5s"
-    max     = "10s"
+    max     = "4m"
   }
   ```
 
-- `wait_bounds` `(Code: nil)` - Defines client level lower and upper bounds for
+- `wait_bounds` `(map: nil)` - Defines client level lower and upper bounds for
   per-template `wait` configuration. If the individual template configuration has
   a `min` lower than `wait_bounds.min` or a `max` greater than the `wait_bounds.max`,
   the bounds will be enforced, and the template `wait` will be adjusted before being
@@ -279,23 +292,23 @@ chroot as doing so would cause infinite recursion.
   }
     ```
 
-- `block_query_wait` `(string: "60s")` - This is amount of time in seconds to wait
+- `block_query_wait` `(string: "5m")` - This is amount of time in seconds to wait
   for the results of a blocking query. Many endpoints in Consul support a feature known as
   "blocking queries". A blocking query is used to wait for a potential change
   using long polling.
 
-- `consul_retry` `(Code: nil)` - This controls the retry behavior when an error is
-  returned from Consul. Consul Template is highly fault tolerant, meaning it does
-  not exit in the face of failure. Instead, it uses exponential back-off and retry
-  functions to wait for the cluster to become available, as is customary in distributed
-  systems.
+- `consul_retry` `(map: { attempts = 0 backoff = "250ms" max_backoff = "1m" })`-
+  This controls the retry behavior when an error is returned from Consul. The template
+  runner will not exit in the face of failure. Instead, it uses exponential back-off
+  and retry functions to wait for the Consul cluster to become available, as is
+  customary in distributed systems.
 
   ```hcl
   consul_retry {
     # This specifies the number of attempts to make before giving up. Each
     # attempt adds the exponential backoff sleep time. Setting this to
     # zero will implement an unlimited number of retries.
-    attempts = 12
+    attempts = 0
     # This is the base amount of time to sleep between retry attempts. Each
     # retry sleeps for an exponent of 2 longer than this base. For 5 retries,
     # the sleep times would be: 250ms, 500ms, 1s, 2s, then 4s.
@@ -309,18 +322,18 @@ chroot as doing so would cause infinite recursion.
   }
   ```
 
-- `vault_retry` `(Code: nil)` - This controls the retry behavior when an error is
-  returned from Vault. Consul Template is highly fault tolerant, meaning it does
-  not exit in the face of failure. Instead, it uses exponential back-off and retry
-  functions to wait for the cluster to become available, as is customary in distributed
-  systems.
+- `vault_retry` `(map: { attempts = 0 backoff = "250ms" max_backoff = "1m" })` -
+  This controls the retry behavior when an error is returned from Vault. Consul
+  Template is highly fault tolerant, meaning it does not exit in the face of failure.
+  Instead, it uses exponential back-off and retry functions to wait for the cluster
+  to become available, as is customary in distributed systems.
 
   ```hcl
   vault_retry {
     # This specifies the number of attempts to make before giving up. Each
     # attempt adds the exponential backoff sleep time. Setting this to
     # zero will implement an unlimited number of retries.
-    attempts = 12
+    attempts = 0
     # This is the base amount of time to sleep between retry attempts. Each
     # retry sleeps for an exponent of 2 longer than this base. For 5 retries,
     # the sleep times would be: 250ms, 500ms, 1s, 2s, then 4s.
@@ -386,8 +399,10 @@ client {
 - `interface` `(string: "")` - Filters searching of addresses to a specific interface.
 
 - `reserved_ports` `(string: "")` - Specifies a comma-separated list of ports to
-  reserve on all fingerprinted network devices. Ranges can be specified by using
+  reserve on all addresses associated with this network. Ranges can be specified by using
   a hyphen separating the two inclusive ends.
+  [`reserved.reserved_ports`](#reserved_ports) are also reserved on each host
+  network.
 
 ## `client` Examples
 

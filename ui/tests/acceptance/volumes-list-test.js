@@ -1,3 +1,4 @@
+/* eslint-disable qunit/require-expect */
 import { currentURL, visit } from '@ember/test-helpers';
 import { module, test } from 'qunit';
 import { setupApplicationTest } from 'ember-qunit';
@@ -5,8 +6,7 @@ import { setupMirage } from 'ember-cli-mirage/test-support';
 import a11yAudit from 'nomad-ui/tests/helpers/a11y-audit';
 import pageSizeSelect from './behaviors/page-size-select';
 import VolumesList from 'nomad-ui/tests/pages/storage/volumes/list';
-import Layout from 'nomad-ui/tests/pages/layout';
-
+import percySnapshot from '@percy/ember';
 const assignWriteAlloc = (volume, alloc) => {
   volume.writeAllocs.add(alloc);
   volume.allocations.add(alloc);
@@ -53,6 +53,8 @@ module('Acceptance | volumes list', function(hooks) {
 
     await VolumesList.visit();
 
+    await percySnapshot(assert);
+
     const sortedVolumes = server.db.csiVolumes.sortBy('id');
     assert.equal(VolumesList.volumes.length, VolumesList.pageSize);
     VolumesList.volumes.forEach((volume, index) => {
@@ -76,18 +78,23 @@ module('Acceptance | volumes list', function(hooks) {
       const healthy = volume.controllersHealthy;
       const expected = volume.controllersExpected;
       const isHealthy = healthy > 0;
-      controllerHealthStr = `${isHealthy ? 'Healthy' : 'Unhealthy'} (${healthy}/${expected})`;
+      controllerHealthStr = `${
+        isHealthy ? 'Healthy' : 'Unhealthy'
+      } ( ${healthy} / ${expected} )`;
     }
 
     const nodeHealthStr = volume.nodesHealthy > 0 ? 'Healthy' : 'Unhealthy';
 
     assert.equal(volumeRow.name, volume.id);
     assert.notOk(volumeRow.hasNamespace);
-    assert.equal(volumeRow.schedulable, volume.schedulable ? 'Schedulable' : 'Unschedulable');
+    assert.equal(
+      volumeRow.schedulable,
+      volume.schedulable ? 'Schedulable' : 'Unschedulable'
+    );
     assert.equal(volumeRow.controllerHealth, controllerHealthStr);
     assert.equal(
       volumeRow.nodeHealth,
-      `${nodeHealthStr} (${volume.nodesHealthy}/${volume.nodesExpected})`
+      `${nodeHealthStr} ( ${volume.nodesHealthy} / ${volume.nodesExpected} )`
     );
     assert.equal(volumeRow.provider, volume.provider);
     assert.equal(volumeRow.allocations, readAllocs.length + writeAllocs.length);
@@ -95,22 +102,32 @@ module('Acceptance | volumes list', function(hooks) {
 
   test('each volume row should link to the corresponding volume', async function(assert) {
     const [, secondNamespace] = server.createList('namespace', 2);
-    const volume = server.create('csi-volume', { namespaceId: secondNamespace.id });
+    const volume = server.create('csi-volume', {
+      namespaceId: secondNamespace.id
+    });
 
     await VolumesList.visit({ namespace: '*' });
 
     await VolumesList.volumes.objectAt(0).clickName();
-    assert.equal(currentURL(), `/csi/volumes/${volume.id}?namespace=${secondNamespace.id}`);
+    assert.equal(
+      currentURL(),
+      `/csi/volumes/${volume.id}@${secondNamespace.id}`
+    );
 
     await VolumesList.visit({ namespace: '*' });
     assert.equal(currentURL(), '/csi/volumes?namespace=*');
 
     await VolumesList.volumes.objectAt(0).clickRow();
-    assert.equal(currentURL(), `/csi/volumes/${volume.id}?namespace=${secondNamespace.id}`);
+    assert.equal(
+      currentURL(),
+      `/csi/volumes/${volume.id}@${secondNamespace.id}`
+    );
   });
 
   test('when there are no volumes, there is an empty message', async function(assert) {
     await VolumesList.visit();
+
+    await percySnapshot(assert);
 
     assert.ok(VolumesList.isEmpty);
     assert.equal(VolumesList.emptyState.headline, 'No Volumes');
@@ -152,8 +169,12 @@ module('Acceptance | volumes list', function(hooks) {
 
   test('when the namespace query param is set, only matching volumes are shown and the namespace value is forwarded to app state', async function(assert) {
     server.createList('namespace', 2);
-    const volume1 = server.create('csi-volume', { namespaceId: server.db.namespaces[0].id });
-    const volume2 = server.create('csi-volume', { namespaceId: server.db.namespaces[1].id });
+    const volume1 = server.create('csi-volume', {
+      namespaceId: server.db.namespaces[0].id
+    });
+    const volume2 = server.create('csi-volume', {
+      namespaceId: server.db.namespaces[1].id
+    });
 
     await VolumesList.visit();
     assert.equal(VolumesList.volumes.length, 2);
@@ -168,19 +189,6 @@ module('Acceptance | volumes list', function(hooks) {
 
     assert.equal(VolumesList.volumes.length, 1);
     assert.equal(VolumesList.volumes.objectAt(0).name, volume2.id);
-  });
-
-  test('the active namespace is carried over to the jobs pages', async function(assert) {
-    server.createList('namespace', 2);
-
-    const namespace = server.db.namespaces[1];
-    await VolumesList.visit();
-    await VolumesList.facets.namespace.toggle();
-    await VolumesList.facets.namespace.options.objectAt(2).select();
-
-    await Layout.gutter.visitJobs();
-
-    assert.equal(currentURL(), `/jobs?namespace=${namespace.id}`);
   });
 
   test('when accessing volumes is forbidden, a message is shown with a link to the tokens page', async function(assert) {
@@ -200,7 +208,7 @@ module('Acceptance | volumes list', function(hooks) {
     async setup() {
       server.createList('csi-volume', VolumesList.pageSize);
       await VolumesList.visit();
-    },
+    }
   });
 
   testSingleSelectFacet('Namespace', {
@@ -217,7 +225,7 @@ module('Acceptance | volumes list', function(hooks) {
     },
     filter(volume, selection) {
       return volume.namespaceId === selection;
-    },
+    }
   });
 
   function testSingleSelectFacet(

@@ -106,7 +106,6 @@ server {
   authoritative_region          = "foobar"
   bootstrap_expect              = 5
   data_dir                      = "/tmp/data"
-  protocol_version              = 3
   raft_protocol                 = 3
   num_schedulers                = 2
   enabled_schedulers            = ["test"]
@@ -133,6 +132,12 @@ server {
   raft_multiplier               = 4
   enable_event_broker           = false
   event_buffer_size             = 200
+
+  plan_rejection_tracker {
+    enabled        = true
+    node_threshold = 100
+    node_window    = "41m"
+  }
 
   server_join {
     retry_join     = ["1.1.1.1", "2.2.2.2"]
@@ -227,6 +232,7 @@ consul {
   client_auto_join       = true
   auto_advertise         = true
   checks_use_advertise   = true
+  timeout                = "5s"
 }
 
 vault {

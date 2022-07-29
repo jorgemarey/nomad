@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/go-secure-stdlib/listenerutil"
 	sockaddr "github.com/hashicorp/go-sockaddr"
 	"github.com/hashicorp/go-sockaddr/template"
 	client "github.com/hashicorp/nomad/client/config"
@@ -317,6 +318,12 @@ type ClientConfig struct {
 	// doest not exist Nomad will attempt to create it during startup. Defaults to '/nomad'
 	CgroupParent string `hcl:"cgroup_parent"`
 
+	// NomadServiceDiscovery is a boolean parameter which allows operators to
+	// enable/disable to Nomad native service discovery feature on the client.
+	// This parameter is exposed via the Nomad fingerprinter and used to ensure
+	// correct scheduling decisions on allocations which require this.
+	NomadServiceDiscovery *bool `hcl:"nomad_service_discovery"`
+
 	// Artifact contains the configuration for artifacts.
 	Artifact *config.ArtifactConfig `hcl:"artifact"`
 
@@ -370,7 +377,9 @@ type ServerConfig struct {
 
 	// ProtocolVersion is the protocol version to speak. This must be between
 	// ProtocolVersionMin and ProtocolVersionMax.
-	ProtocolVersion int `hcl:"protocol_version"`
+	//
+	// Deprecated: This has never been used and will emit a warning if nonzero.
+	ProtocolVersion int `hcl:"protocol_version" json:"-"`
 
 	// RaftProtocol is the Raft protocol version to speak. This must be from [1-3].
 	RaftProtocol int `hcl:"raft_protocol"`
@@ -494,6 +503,10 @@ type ServerConfig struct {
 	// This value is ignored.
 	DefaultSchedulerConfig *structs.SchedulerConfiguration `hcl:"default_scheduler_config"`
 
+	// PlanRejectionTracker configures the node plan rejection tracker that
+	// detects potentially bad nodes.
+	PlanRejectionTracker *PlanRejectionTracker `hcl:"plan_rejection_tracker"`
+
 	// EnableEventBroker configures whether this server's state store
 	// will generate events for its event stream.
 	EnableEventBroker *bool `hcl:"enable_event_broker"`
@@ -517,11 +530,73 @@ type ServerConfig struct {
 	// ExtraKeysHCL is used by hcl to surface unexpected keys
 	ExtraKeysHCL []string `hcl:",unusedKeys" json:"-"`
 
+	// Search configures UI search features.
 	Search *Search `hcl:"search"`
 
 	// DeploymentQueryRateLimit is in queries per second and is used by the
 	// DeploymentWatcher to throttle the amount of simultaneously deployments
 	DeploymentQueryRateLimit float64 `hcl:"deploy_query_rate_limit"`
+
+	// RaftBoltConfig configures boltdb as used by raft.
+	RaftBoltConfig *RaftBoltConfig `hcl:"raft_boltdb"`
+}
+
+// RaftBoltConfig is used in servers to configure parameters of the boltdb
+// used for raft consensus.
+type RaftBoltConfig struct {
+	// NoFreelistSync toggles whether the underlying raft storage should sync its
+	// freelist to disk within the bolt .db file. When disabled, IO performance
+	// will be improved but at the expense of longer startup times.
+	//
+	// Default: false.
+	NoFreelistSync bool `hcl:"no_freelist_sync"`
+}
+
+// PlanRejectionTracker is used in servers to configure the plan rejection
+// tracker.
+type PlanRejectionTracker struct {
+	// Enabled controls if the plan rejection tracker is active or not.
+	Enabled *bool `hcl:"enabled"`
+
+	// NodeThreshold is the number of times a node can have plan rejections
+	// before it is marked as ineligible.
+	NodeThreshold int `hcl:"node_threshold"`
+
+	// NodeWindow is the time window used to track active plan rejections for
+	// nodes.
+	NodeWindow    time.Duration
+	NodeWindowHCL string `hcl:"node_window" json:"-"`
+
+	// ExtraKeysHCL is used by hcl to surface unexpected keys
+	ExtraKeysHCL []string `hcl:",unusedKeys" json:"-"`
+}
+
+func (p *PlanRejectionTracker) Merge(b *PlanRejectionTracker) *PlanRejectionTracker {
+	if p == nil {
+		return b
+	}
+
+	result := *p
+
+	if b == nil {
+		return &result
+	}
+
+	if b.Enabled != nil {
+		result.Enabled = b.Enabled
+	}
+
+	if b.NodeThreshold != 0 {
+		result.NodeThreshold = b.NodeThreshold
+	}
+
+	if b.NodeWindow != 0 {
+		result.NodeWindow = b.NodeWindow
+	}
+	if b.NodeWindowHCL != "" {
+		result.NodeWindowHCL = b.NodeWindowHCL
+	}
+	return &result
 }
 
 // Search is used in servers to configure search API options.
@@ -896,10 +971,11 @@ func DevConfig(mode *devModeConfig) *Config {
 	conf.Client.GCInodeUsageThreshold = 99
 	conf.Client.GCMaxAllocs = 50
 	conf.Client.TemplateConfig = &client.ClientTemplateConfig{
-		FunctionDenylist: []string{"plugin"},
+		FunctionDenylist: client.DefaultTemplateFunctionDenylist,
 		DisableSandbox:   false,
 	}
 	conf.Client.BindWildcardDefaultHostNetwork = true
+	conf.Client.NomadServiceDiscovery = helper.BoolToPtr(true)
 	conf.Telemetry.PrometheusMetrics = true
 	conf.Telemetry.PublishAllocationMetrics = true
 	conf.Telemetry.PublishNodeMetrics = true
@@ -945,19 +1021,26 @@ func DefaultConfig() *Config {
 				RetryMaxAttempts: 0,
 			},
 			TemplateConfig: &client.ClientTemplateConfig{
-				FunctionDenylist: []string{"plugin"},
+				FunctionDenylist: client.DefaultTemplateFunctionDenylist,
 				DisableSandbox:   false,
 			},
 			BindWildcardDefaultHostNetwork: true,
 			CNIPath:                        "/opt/cni/bin",
 			CNIConfigDir:                   "/opt/cni/config",
+			NomadServiceDiscovery:          helper.BoolToPtr(true),
 			Artifact:                       config.DefaultArtifactConfig(),
 		},
 		Server: &ServerConfig{
 			Enabled:           false,
 			EnableEventBroker: helper.BoolToPtr(true),
 			EventBufferSize:   helper.IntToPtr(100),
+			RaftProtocol:      3,
 			StartJoin:         []string{},
+			PlanRejectionTracker: &PlanRejectionTracker{
+				Enabled:       helper.BoolToPtr(false),
+				NodeThreshold: 100,
+				NodeWindow:    5 * time.Minute,
+			},
 			ServerJoin: &ServerJoin{
 				RetryJoin:        []string{},
 				RetryInterval:    30 * time.Second,
@@ -1216,7 +1299,7 @@ func (c *Config) Merge(b *Config) *Config {
 // initialized and have reasonable defaults.
 func (c *Config) normalizeAddrs() error {
 	if c.BindAddr != "" {
-		ipStr, err := parseSingleIPTemplate(c.BindAddr)
+		ipStr, err := listenerutil.ParseSingleIPTemplate(c.BindAddr)
 		if err != nil {
 			return fmt.Errorf("Bind address resolution failed: %v", err)
 		}
@@ -1311,25 +1394,6 @@ func parseSingleInterfaceTemplate(tpl string) (string, error) {
 	return out, nil
 }
 
-// parseSingleIPTemplate is used as a helper function to parse out a single IP
-// address from a config parameter.
-func parseSingleIPTemplate(ipTmpl string) (string, error) {
-	out, err := template.Parse(ipTmpl)
-	if err != nil {
-		return "", fmt.Errorf("Unable to parse address template %q: %v", ipTmpl, err)
-	}
-
-	ips := strings.Split(out, " ")
-	switch len(ips) {
-	case 0:
-		return "", errors.New("No addresses found, please configure one.")
-	case 1:
-		return ips[0], nil
-	default:
-		return "", fmt.Errorf("Multiple addresses found (%q), please configure one.", out)
-	}
-}
-
 // parseMultipleIPTemplate is used as a helper function to parse out a multiple IP
 // addresses from a config parameter.
 func parseMultipleIPTemplate(ipTmpl string) ([]string, error) {
@@ -1353,7 +1417,7 @@ func normalizeBind(addr, bind string) (string, error) {
 	if addr == "" {
 		return bind, nil
 	}
-	return parseSingleIPTemplate(addr)
+	return listenerutil.ParseSingleIPTemplate(addr)
 }
 
 // normalizeMultipleBind returns normalized bind addresses.
@@ -1379,7 +1443,7 @@ func normalizeMultipleBind(addr, bind string) ([]string, error) {
 //
 // Loopback is only considered a valid advertise address in dev mode.
 func normalizeAdvertise(addr string, bind string, defport int, dev bool) (string, error) {
-	addr, err := parseSingleIPTemplate(addr)
+	addr, err := listenerutil.ParseSingleIPTemplate(addr)
 	if err != nil {
 		return "", fmt.Errorf("Error parsing advertise address template: %v", err)
 	}
@@ -1420,7 +1484,7 @@ func normalizeAdvertise(addr string, bind string, defport int, dev bool) (string
 	}
 
 	// Bind is not localhost but not a valid advertise IP, use first private IP
-	addr, err = parseSingleIPTemplate("{{ GetPrivateIP }}")
+	addr, err = listenerutil.ParseSingleIPTemplate("{{ GetPrivateIP }}")
 	if err != nil {
 		return "", fmt.Errorf("Unable to parse default advertise address: %v", err)
 	}
@@ -1578,6 +1642,10 @@ func (s *ServerConfig) Merge(b *ServerConfig) *ServerConfig {
 		result.EventBufferSize = b.EventBufferSize
 	}
 
+	if b.PlanRejectionTracker != nil {
+		result.PlanRejectionTracker = result.PlanRejectionTracker.Merge(b.PlanRejectionTracker)
+	}
+
 	if b.DefaultSchedulerConfig != nil {
 		c := *b.DefaultSchedulerConfig
 		result.DefaultSchedulerConfig = &c
@@ -1597,6 +1665,12 @@ func (s *ServerConfig) Merge(b *ServerConfig) *ServerConfig {
 		}
 		if b.Search.MinTermLength > 0 {
 			result.Search.MinTermLength = b.Search.MinTermLength
+		}
+	}
+
+	if b.RaftBoltConfig != nil {
+		result.RaftBoltConfig = &RaftBoltConfig{
+			NoFreelistSync: b.RaftBoltConfig.NoFreelistSync,
 		}
 	}
 
@@ -1695,11 +1769,8 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 		result.DisableRemoteExec = b.DisableRemoteExec
 	}
 
-	if result.TemplateConfig == nil && b.TemplateConfig != nil {
-		templateConfig := *b.TemplateConfig
-		result.TemplateConfig = &templateConfig
-	} else if b.TemplateConfig != nil {
-		result.TemplateConfig = result.TemplateConfig.Merge(b.TemplateConfig)
+	if b.TemplateConfig != nil {
+		result.TemplateConfig = b.TemplateConfig
 	}
 
 	// Add the servers
@@ -1760,6 +1831,16 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 
 	if b.BindWildcardDefaultHostNetwork {
 		result.BindWildcardDefaultHostNetwork = true
+	}
+
+	// This value is a pointer, therefore if it is not nil the user has
+	// supplied an override value.
+	if b.NomadServiceDiscovery != nil {
+		result.NomadServiceDiscovery = b.NomadServiceDiscovery
+	}
+
+	if b.CgroupParent != "" {
+		result.CgroupParent = b.CgroupParent
 	}
 
 	result.Artifact = a.Artifact.Merge(b.Artifact)

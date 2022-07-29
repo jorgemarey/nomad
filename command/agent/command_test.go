@@ -3,7 +3,6 @@ package agent
 import (
 	"io/ioutil"
 	"math"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,11 +25,7 @@ func TestCommand_Implements(t *testing.T) {
 
 func TestCommand_Args(t *testing.T) {
 	ci.Parallel(t)
-	tmpDir, err := ioutil.TempDir("", "nomad")
-	if err != nil {
-		t.Fatalf("err: %s", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	type tcase struct {
 		args   []string
@@ -48,6 +43,10 @@ func TestCommand_Args(t *testing.T) {
 		{
 			[]string{"-data-dir=" + tmpDir, "-server", "-bootstrap-expect=1"},
 			"WARNING: Bootstrap mode enabled!",
+		},
+		{
+			[]string{"-data-dir=" + tmpDir, "-server", "-bootstrap-expect=2"},
+			"Number of bootstrap servers should ideally be set to an odd number",
 		},
 		{
 			[]string{"-server"},
@@ -101,11 +100,7 @@ func TestCommand_Args(t *testing.T) {
 func TestCommand_MetaConfigValidation(t *testing.T) {
 	ci.Parallel(t)
 
-	tmpDir, err := ioutil.TempDir("", "nomad")
-	if err != nil {
-		t.Fatalf("err: %s", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	tcases := []string{
 		"foo..invalid",
@@ -114,7 +109,7 @@ func TestCommand_MetaConfigValidation(t *testing.T) {
 	}
 	for _, tc := range tcases {
 		configFile := filepath.Join(tmpDir, "conf1.hcl")
-		err = ioutil.WriteFile(configFile, []byte(`client{
+		err := ioutil.WriteFile(configFile, []byte(`client{
 			enabled = true
 			meta = {
 				"valid" = "yes"
@@ -156,11 +151,7 @@ func TestCommand_MetaConfigValidation(t *testing.T) {
 func TestCommand_NullCharInDatacenter(t *testing.T) {
 	ci.Parallel(t)
 
-	tmpDir, err := ioutil.TempDir("", "nomad")
-	if err != nil {
-		t.Fatalf("err: %s", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	tcases := []string{
 		"char-\\000-in-the-middle",
@@ -169,7 +160,7 @@ func TestCommand_NullCharInDatacenter(t *testing.T) {
 	}
 	for _, tc := range tcases {
 		configFile := filepath.Join(tmpDir, "conf1.hcl")
-		err = ioutil.WriteFile(configFile, []byte(`
+		err := ioutil.WriteFile(configFile, []byte(`
         datacenter = "`+tc+`"
         client{
 			enabled = true
@@ -207,11 +198,7 @@ func TestCommand_NullCharInDatacenter(t *testing.T) {
 func TestCommand_NullCharInRegion(t *testing.T) {
 	ci.Parallel(t)
 
-	tmpDir, err := ioutil.TempDir("", "nomad")
-	if err != nil {
-		t.Fatalf("err: %s", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	tcases := []string{
 		"char-\\000-in-the-middle",
@@ -220,7 +207,7 @@ func TestCommand_NullCharInRegion(t *testing.T) {
 	}
 	for _, tc := range tcases {
 		configFile := filepath.Join(tmpDir, "conf1.hcl")
-		err = ioutil.WriteFile(configFile, []byte(`
+		err := ioutil.WriteFile(configFile, []byte(`
         region = "`+tc+`"
         client{
 			enabled = true
@@ -420,7 +407,7 @@ func TestIsValidConfig(t *testing.T) {
 			mui := cli.NewMockUi()
 			cmd := &Command{Ui: mui}
 			config := DefaultConfig().Merge(&tc.conf)
-			result := cmd.isValidConfig(config, DefaultConfig())
+			result := cmd.IsValidConfig(config, DefaultConfig())
 			if tc.err == "" {
 				// No error expected
 				assert.True(t, result, mui.ErrorWriter.String())

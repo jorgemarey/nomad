@@ -1,7 +1,6 @@
 package nomad
 
 import (
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -26,23 +25,6 @@ const (
 	DefaultDC       = "dc1"
 	DefaultSerfPort = 4648
 )
-
-// These are the protocol versions that Nomad can understand
-const (
-	ProtocolVersionMin uint8 = 1
-	ProtocolVersionMax       = 1
-)
-
-// ProtocolVersionMap is the mapping of Nomad protocol versions
-// to Serf protocol versions. We mask the Serf protocols using
-// our own protocol version.
-var protocolVersionMap map[uint8]uint8
-
-func init() {
-	protocolVersionMap = map[uint8]uint8{
-		1: 4,
-	}
-}
 
 func DefaultRPCAddr() *net.TCPAddr {
 	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 4647}
@@ -92,10 +74,6 @@ type Config struct {
 
 	// Logger is the logger used by the server.
 	Logger log.InterceptLogger
-
-	// ProtocolVersion is the protocol version to speak. This must be between
-	// ProtocolVersionMin and ProtocolVersionMax.
-	ProtocolVersion uint8
 
 	// RPCAddr is the RPC address used by Nomad. This should be reachable
 	// by the other servers and clients
@@ -254,6 +232,17 @@ type Config struct {
 	// additional delay is selected from this range randomly.
 	EvalFailedFollowupDelayRange time.Duration
 
+	// NodePlanRejectionEnabled controls if node rejection tracker is enabled.
+	NodePlanRejectionEnabled bool
+
+	// NodePlanRejectionThreshold is the number of times a node must have a
+	// plan rejection before it is set as ineligible.
+	NodePlanRejectionThreshold int
+
+	// NodePlanRejectionWindow is the time window used to track plan
+	// rejections for nodes.
+	NodePlanRejectionWindow time.Duration
+
 	// MinHeartbeatTTL is the minimum time between heartbeats.
 	// This is used as a floor to prevent excessive updates.
 	MinHeartbeatTTL time.Duration
@@ -361,6 +350,9 @@ type Config struct {
 	// SearchConfig provides knobs for Search API.
 	SearchConfig *structs.SearchConfig
 
+	// RaftBoltNoFreelistSync configures whether freelist syncing is enabled.
+	RaftBoltNoFreelistSync bool
+
 	// AgentShutdown is used to call agent.Shutdown from the context of a Server
 	// It is used primarily for licensing
 	AgentShutdown func() error
@@ -368,18 +360,6 @@ type Config struct {
 	// DeploymentQueryRateLimit is in queries per second and is used by the
 	// DeploymentWatcher to throttle the amount of simultaneously deployments
 	DeploymentQueryRateLimit float64
-}
-
-// CheckVersion is used to check if the ProtocolVersion is valid
-func (c *Config) CheckVersion() error {
-	if c.ProtocolVersion < ProtocolVersionMin {
-		return fmt.Errorf("Protocol version '%d' too low. Must be in range: [%d, %d]",
-			c.ProtocolVersion, ProtocolVersionMin, ProtocolVersionMax)
-	} else if c.ProtocolVersion > ProtocolVersionMax {
-		return fmt.Errorf("Protocol version '%d' too high. Must be in range: [%d, %d]",
-			c.ProtocolVersion, ProtocolVersionMin, ProtocolVersionMax)
-	}
-	return nil
 }
 
 // DefaultConfig returns the default configuration. Only used as the basis for
@@ -396,7 +376,6 @@ func DefaultConfig() *Config {
 		Datacenter:                       DefaultDC,
 		NodeName:                         hostname,
 		NodeID:                           uuid.Generate(),
-		ProtocolVersion:                  ProtocolVersionMax,
 		RaftConfig:                       raft.DefaultConfig(),
 		RaftTimeout:                      10 * time.Second,
 		LogOutput:                        os.Stderr,
@@ -427,6 +406,9 @@ func DefaultConfig() *Config {
 		MaxHeartbeatsPerSecond:           50.0,
 		HeartbeatGrace:                   10 * time.Second,
 		FailoverHeartbeatTTL:             300 * time.Second,
+		NodePlanRejectionEnabled:         false,
+		NodePlanRejectionThreshold:       15,
+		NodePlanRejectionWindow:          10 * time.Minute,
 		ConsulConfig:                     config.DefaultConsulConfig(),
 		VaultConfig:                      config.DefaultVaultConfig(),
 		RPCHoldTimeout:                   5 * time.Second,
@@ -478,8 +460,8 @@ func DefaultConfig() *Config {
 	// Disable shutdown on removal
 	c.RaftConfig.ShutdownOnRemove = false
 
-	// Default to Raft v2, update to v3 to enable new Raft and autopilot features.
-	c.RaftConfig.ProtocolVersion = 2
+	// Default to Raft v3 since Nomad 1.3
+	c.RaftConfig.ProtocolVersion = 3
 
 	return c
 }

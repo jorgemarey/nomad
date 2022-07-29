@@ -2,21 +2,22 @@ import { Factory, trait } from 'ember-cli-mirage';
 import faker from 'nomad-ui/mirage/faker';
 import { provide } from '../utils';
 import { generateResources } from '../common';
+import { dasherize } from '@ember/string';
 
 const DISK_RESERVATIONS = [200, 500, 1000, 2000, 5000, 10000, 100000];
 
 export default Factory.extend({
-  name: id => `${faker.hacker.noun().dasherize()}-g-${id}`,
+  name: id => `${dasherize(faker.hacker.noun())}-g-${id}`,
   count: () => faker.random.number({ min: 1, max: 2 }),
 
   ephemeralDisk: () => ({
     Sticky: faker.random.boolean(),
     SizeMB: faker.helpers.randomize(DISK_RESERVATIONS),
-    Migrate: faker.random.boolean(),
+    Migrate: faker.random.boolean()
   }),
 
   noHostVolumes: trait({
-    volumes: () => ({}),
+    volumes: () => ({})
   }),
 
   withScaling: faker.random.boolean,
@@ -63,19 +64,20 @@ export default Factory.extend({
                   'scalar(avg((haproxy_server_current_sessions{backend="http_back"}) and (haproxy_server_up{backend="http_back"} == 1)))',
                 Strategy: {
                   'target-value': {
-                    target: 20,
-                  },
-                },
-              },
-            },
-          },
-        },
+                    target: 20
+                  }
+                }
+              }
+            }
+          }
+        }
       });
     }
 
     if (!group.shallow) {
       const resources =
-        group.resourceSpec && divide(group.count, parseResourceSpec(group.resourceSpec));
+        group.resourceSpec &&
+        divide(group.count, parseResourceSpec(group.resourceSpec));
       const tasks = provide(group.count, (_, idx) => {
         const mounts = faker.helpers
           .shuffle(volumes)
@@ -92,16 +94,16 @@ export default Factory.extend({
             Volume: mount,
             Destination: `/${faker.internet.userName()}/${faker.internet.domainWord()}/${faker.internet.color()}`,
             PropagationMode: '',
-            ReadOnly: faker.random.boolean(),
+            ReadOnly: faker.random.boolean()
           })),
-          createRecommendations: group.createRecommendations,
+          createRecommendations: group.createRecommendations
         });
       });
       taskIds = tasks.mapBy('id');
     }
 
     group.update({
-      taskIds: taskIds,
+      taskIds: taskIds
     });
 
     if (group.createAllocations) {
@@ -113,10 +115,12 @@ export default Factory.extend({
             namespace: group.job.namespace,
             taskGroup: group.name,
             name: `${group.name}.[${i}]`,
-            rescheduleSuccess: group.withRescheduling ? faker.random.boolean() : null,
+            rescheduleSuccess: group.withRescheduling
+              ? faker.random.boolean()
+              : null,
             rescheduleAttempts: group.withRescheduling
               ? faker.random.number({ min: 1, max: 5 })
-              : 0,
+              : 0
           };
 
           if (group.withRescheduling) {
@@ -132,11 +136,11 @@ export default Factory.extend({
         .fill(null)
         .forEach(() => {
           server.create('service', {
-            taskGroup: group,
+            taskGroup: group
           });
         });
     }
-  },
+  }
 });
 
 function makeHostVolumes() {
@@ -144,7 +148,7 @@ function makeHostVolumes() {
     Name: faker.internet.domainWord(),
     Type: 'host',
     Source: faker.internet.domainWord(),
-    ReadOnly: faker.random.boolean(),
+    ReadOnly: faker.random.boolean()
   });
 
   const volumes = provide(faker.random.number({ min: 1, max: 5 }), generate);
@@ -159,7 +163,7 @@ function parseResourceSpec(spec) {
     M: 'MemoryMB',
     C: 'CPU',
     D: 'DiskMB',
-    I: 'IOPS',
+    I: 'IOPS'
   };
 
   const terms = spec.split(',').map(t => {
@@ -201,12 +205,17 @@ function roulette(total, divisions, variance = 0.8) {
   let roulette = new Array(divisions).fill(total / divisions);
   roulette.forEach((v, i) => {
     if (i === roulette.length - 1) return;
-    roulette.splice(i, 2, ...rngDistribute(roulette[i], roulette[i + 1], variance));
+    roulette.splice(
+      i,
+      2,
+      ...rngDistribute(roulette[i], roulette[i + 1], variance)
+    );
   });
   return roulette;
 }
 
 function rngDistribute(a, b, variance = 0.8) {
-  const move = a * faker.random.number({ min: 0, max: variance, precision: 0.01 });
+  const move =
+    a * faker.random.number({ min: 0, max: variance, precision: 0.01 });
   return [a - move, b + move];
 }

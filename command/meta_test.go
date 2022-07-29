@@ -7,8 +7,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/creack/pty"
 	"github.com/hashicorp/nomad/ci"
-	"github.com/kr/pty"
 	"github.com/mitchellh/cli"
 	"github.com/stretchr/testify/require"
 )

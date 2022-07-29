@@ -9,6 +9,7 @@ import JobRun from 'nomad-ui/tests/pages/jobs/run';
 
 const newJobName = 'new-job';
 const newJobTaskGroupName = 'redis';
+const newJobNamespace = 'default';
 
 let managementToken, clientToken;
 
@@ -18,7 +19,7 @@ const jsonJob = overrides => {
       {},
       {
         Name: newJobName,
-        Namespace: 'default',
+        Namespace: newJobNamespace,
         Datacenters: ['dc1'],
         Priority: 50,
         TaskGroups: [
@@ -27,11 +28,11 @@ const jsonJob = overrides => {
             Tasks: [
               {
                 Name: 'redis',
-                Driver: 'docker',
-              },
-            ],
-          },
-        ],
+                Driver: 'docker'
+              }
+            ]
+          }
+        ]
       },
       overrides
     ),
@@ -56,6 +57,8 @@ module('Acceptance | job run', function(hooks) {
   });
 
   test('it passes an accessibility audit', async function(assert) {
+    assert.expect(1);
+
     await JobRun.visit();
     await a11yAudit(assert);
   });
@@ -77,7 +80,7 @@ module('Acceptance | job run', function(hooks) {
     await JobRun.editor.run();
     assert.equal(
       currentURL(),
-      `/jobs/${newJobName}`,
+      `/jobs/${newJobName}@${newJobNamespace}`,
       `Redirected to the job overview page for ${newJobName}`
     );
   });
@@ -95,7 +98,7 @@ module('Acceptance | job run', function(hooks) {
     await JobRun.editor.run();
     assert.equal(
       currentURL(),
-      `/jobs/${newJobName}?namespace=${newNamespace}`,
+      `/jobs/${newJobName}@${newNamespace}`,
       `Redirected to the job overview page for ${newJobName} and switched the namespace to ${newNamespace}`
     );
   });
@@ -117,7 +120,7 @@ module('Acceptance | job run', function(hooks) {
       createAllocations: false,
       shallow: true,
       noActiveDeployment: true,
-      namespaceId: newNamespace,
+      namespaceId: newNamespace
     });
 
     const policy = server.create('policy', {
@@ -127,10 +130,10 @@ module('Acceptance | job run', function(hooks) {
         Namespaces: [
           {
             Name: newNamespace,
-            Capabilities: ['scale-job', 'submit-job', 'read-job', 'list-jobs'],
-          },
-        ],
-      },
+            Capabilities: ['scale-job', 'submit-job', 'read-job', 'list-jobs']
+          }
+        ]
+      }
     });
 
     clientTokenWithPolicy.policyIds = [policy.id];

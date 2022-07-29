@@ -1,3 +1,4 @@
+/* eslint-disable qunit/require-expect */
 import { currentURL } from '@ember/test-helpers';
 import { module, test } from 'qunit';
 import { setupApplicationTest } from 'ember-qunit';
@@ -6,6 +7,7 @@ import a11yAudit from 'nomad-ui/tests/helpers/a11y-audit';
 import { findLeader } from '../../mirage/config';
 import ServersList from 'nomad-ui/tests/pages/servers/list';
 import formatHost from 'nomad-ui/utils/format-host';
+import percySnapshot from '@percy/ember';
 
 const minimumSetup = () => {
   server.createList('node', 1);
@@ -40,10 +42,20 @@ module('Acceptance | servers list', function(hooks) {
 
     await ServersList.visit();
 
-    assert.equal(ServersList.servers.length, ServersList.pageSize, 'List is stopped at pageSize');
+    await percySnapshot(assert);
+
+    assert.equal(
+      ServersList.servers.length,
+      ServersList.pageSize,
+      'List is stopped at pageSize'
+    );
 
     ServersList.servers.forEach((server, index) => {
-      assert.equal(server.name, sortedAgents[index].name, 'Servers are ordered');
+      assert.equal(
+        server.name,
+        sortedAgents[index].name,
+        'Servers are ordered'
+      );
     });
 
     assert.equal(document.title, 'Servers - Nomad');
@@ -73,7 +85,11 @@ module('Acceptance | servers list', function(hooks) {
     await ServersList.visit();
     await ServersList.servers.objectAt(0).clickRow();
 
-    assert.equal(currentURL(), `/servers/${agent.name}`, 'Now at the server detail page');
+    assert.equal(
+      currentURL(),
+      `/servers/${agent.name}`,
+      'Now at the server detail page'
+    );
   });
 
   test('when accessing servers is forbidden, show a message with a link to the tokens page', async function(assert) {

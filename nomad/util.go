@@ -15,6 +15,14 @@ import (
 	"github.com/hashicorp/serf/serf"
 )
 
+const (
+	// Deprecated: Through Nomad v1.2 these values were configurable but
+	// functionally unused. We still need to advertise them in Serf for
+	// compatibility with v1.2 and earlier.
+	deprecatedAPIMajorVersion    = 1
+	deprecatedAPIMajorVersionStr = "1"
+)
+
 // MinVersionPlanNormalization is the minimum version to support the
 // normalization of Plan in SubmitPlan, and the denormalization raft log entry committed
 // in ApplyPlanResultsRequest
@@ -30,21 +38,23 @@ func ensurePath(path string, dir bool) error {
 
 // serverParts is used to return the parts of a server role
 type serverParts struct {
-	Name         string
-	ID           string
-	Region       string
-	Datacenter   string
-	Port         int
-	Bootstrap    bool
-	Expect       int
+	Name        string
+	ID          string
+	Region      string
+	Datacenter  string
+	Port        int
+	Bootstrap   bool
+	Expect      int
+	Build       version.Version
+	RaftVersion int
+	Addr        net.Addr
+	RPCAddr     net.Addr
+	Status      serf.MemberStatus
+	NonVoter    bool
+
+	// Deprecated: Functionally unused but needs to always be set by 1 for
+	// compatibility with v1.2.x and earlier.
 	MajorVersion int
-	MinorVersion int
-	Build        version.Version
-	RaftVersion  int
-	Addr         net.Addr
-	RPCAddr      net.Addr
-	Status       serf.MemberStatus
-	NonVoter     bool
 }
 
 func (s *serverParts) String() string {
@@ -100,21 +110,6 @@ func isNomadServer(m serf.Member) (bool, *serverParts) {
 		return false, nil
 	}
 
-	// The "vsn" tag was Version, which is now the MajorVersion number.
-	majorVersionStr := m.Tags["vsn"]
-	majorVersion, err := strconv.Atoi(majorVersionStr)
-	if err != nil {
-		return false, nil
-	}
-
-	// To keep some semblance of convention, "mvn" is now the "Minor
-	// Version Number."
-	minorVersionStr := m.Tags["mvn"]
-	minorVersion, err := strconv.Atoi(minorVersionStr)
-	if err != nil {
-		minorVersion = 0
-	}
-
 	raftVsn := 0
 	raftVsnString, ok := m.Tags["raft_vsn"]
 	if ok {
@@ -139,12 +134,11 @@ func isNomadServer(m serf.Member) (bool, *serverParts) {
 		Expect:       expect,
 		Addr:         addr,
 		RPCAddr:      rpcAddr,
-		MajorVersion: majorVersion,
-		MinorVersion: minorVersion,
 		Build:        *buildVersion,
 		RaftVersion:  raftVsn,
 		Status:       m.Status,
 		NonVoter:     nonVoter,
+		MajorVersion: deprecatedAPIMajorVersion,
 	}
 	return true, parts
 }

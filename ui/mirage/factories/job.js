@@ -3,6 +3,7 @@ import { Factory, trait } from 'ember-cli-mirage';
 import faker from 'nomad-ui/mirage/faker';
 import { provide, pickOne } from '../utils';
 import { DATACENTERS } from '../common';
+import { dasherize } from '@ember/string';
 
 const REF_TIME = new Date();
 const JOB_PREFIXES = provide(5, faker.hacker.abbreviation);
@@ -17,9 +18,9 @@ export default Factory.extend({
       return `${this.parentId}/${dispatchId}`;
     }
 
-    return `${faker.helpers.randomize(
-      JOB_PREFIXES
-    )}-${faker.hacker.noun().dasherize()}-${i}`.toLowerCase();
+    return `${faker.helpers.randomize(JOB_PREFIXES)}-${dasherize(
+      faker.hacker.noun()
+    )}-${i}`.toLowerCase();
   },
 
   name() {
@@ -40,7 +41,9 @@ export default Factory.extend({
   resourceSpec: null,
 
   groupsCount() {
-    return this.resourceSpec ? this.resourceSpec.length : faker.random.number({ min: 1, max: 2 });
+    return this.resourceSpec
+      ? this.resourceSpec.length
+      : faker.random.number({ min: 1, max: 2 });
   },
 
   region: () => 'global',
@@ -49,7 +52,9 @@ export default Factory.extend({
   allAtOnce: faker.random.boolean,
   status: () => faker.helpers.randomize(JOB_STATUSES),
   datacenters: () =>
-    faker.helpers.shuffle(DATACENTERS).slice(0, faker.random.number({ min: 1, max: 4 })),
+    faker.helpers
+      .shuffle(DATACENTERS)
+      .slice(0, faker.random.number({ min: 1, max: 4 })),
 
   childrenCount: () => faker.random.number({ min: 1, max: 2 }),
 
@@ -65,8 +70,8 @@ export default Factory.extend({
       ProhibitOverlap: true,
       Spec: '*/5 * * * * *',
       SpecType: 'cron',
-      TimeZone: 'UTC',
-    }),
+      TimeZone: 'UTC'
+    })
   }),
 
   periodicSysbatch: trait({
@@ -79,8 +84,8 @@ export default Factory.extend({
       ProhibitOverlap: true,
       Spec: '*/5 * * * * *',
       SpecType: 'cron',
-      TimeZone: 'UTC',
-    }),
+      TimeZone: 'UTC'
+    })
   }),
 
   parameterized: trait({
@@ -91,8 +96,8 @@ export default Factory.extend({
     parameterizedJob: () => ({
       MetaOptional: generateMetaFields(faker.random.number(10), 'optional'),
       MetaRequired: generateMetaFields(faker.random.number(10), 'required'),
-      Payload: faker.random.boolean() ? 'required' : null,
-    }),
+      Payload: faker.random.boolean() ? 'required' : null
+    })
   }),
 
   parameterizedSysbatch: trait({
@@ -103,22 +108,22 @@ export default Factory.extend({
     parameterizedJob: () => ({
       MetaOptional: generateMetaFields(faker.random.number(10), 'optional'),
       MetaRequired: generateMetaFields(faker.random.number(10), 'required'),
-      Payload: faker.random.boolean() ? 'required' : null,
-    }),
+      Payload: faker.random.boolean() ? 'required' : null
+    })
   }),
 
   periodicChild: trait({
     // Periodic children need a parent job,
     // It is the Periodic job's responsibility to create
     // periodicChild jobs and provide a parent job.
-    type: 'batch',
+    type: 'batch'
   }),
 
   periodicSysbatchChild: trait({
     // Periodic children need a parent job,
     // It is the Periodic job's responsibility to create
     // periodicChild jobs and provide a parent job.
-    type: 'sysbatch',
+    type: 'sysbatch'
   }),
 
   parameterizedChild: trait({
@@ -128,7 +133,7 @@ export default Factory.extend({
     type: 'batch',
     parameterized: true,
     dispatched: true,
-    payload: window.btoa(faker.lorem.sentence()),
+    payload: window.btoa(faker.lorem.sentence())
   }),
 
   parameterizedSysbatchChild: trait({
@@ -138,14 +143,14 @@ export default Factory.extend({
     type: 'sysbatch',
     parameterized: true,
     dispatched: true,
-    payload: window.btoa(faker.lorem.sentence()),
+    payload: window.btoa(faker.lorem.sentence())
   }),
 
   pack: trait({
     meta: () => ({
       'pack.name': faker.hacker.noun(),
-      'pack.version': faker.system.semver(),
-    }),
+      'pack.version': faker.system.semver()
+    })
   }),
 
   createIndex: i => i,
@@ -188,14 +193,16 @@ export default Factory.extend({
 
   afterCreate(job, server) {
     if (!job.namespaceId) {
-      const namespace = server.db.namespaces.length ? pickOne(server.db.namespaces).id : null;
+      const namespace = server.db.namespaces.length
+        ? pickOne(server.db.namespaces).id
+        : null;
       job.update({
         namespace,
-        namespaceId: namespace,
+        namespaceId: namespace
       });
     } else {
       job.update({
-        namespace: job.namespaceId,
+        namespace: job.namespaceId
       });
     }
 
@@ -205,7 +212,7 @@ export default Factory.extend({
       withRescheduling: job.withRescheduling,
       withServices: job.withGroupServices,
       createRecommendations: job.createRecommendations,
-      shallow: job.shallow,
+      shallow: job.shallow
     };
 
     if (job.groupTaskCount) {
@@ -217,42 +224,48 @@ export default Factory.extend({
       groups = provide(job.groupsCount, (_, idx) =>
         server.create('task-group', 'noHostVolumes', {
           ...groupProps,
-          resourceSpec: job.resourceSpec && job.resourceSpec.length && job.resourceSpec[idx],
+          resourceSpec:
+            job.resourceSpec && job.resourceSpec.length && job.resourceSpec[idx]
         })
       );
     } else {
       groups = provide(job.groupsCount, (_, idx) =>
         server.create('task-group', {
           ...groupProps,
-          resourceSpec: job.resourceSpec && job.resourceSpec.length && job.resourceSpec[idx],
+          resourceSpec:
+            job.resourceSpec && job.resourceSpec.length && job.resourceSpec[idx]
         })
       );
     }
 
     job.update({
-      taskGroupIds: groups.mapBy('id'),
+      taskGroupIds: groups.mapBy('id')
     });
 
     const hasChildren = job.periodic || (job.parameterized && !job.parentId);
-    const jobSummary = server.create('job-summary', hasChildren ? 'withChildren' : 'withSummary', {
-      jobId: job.id,
-      groupNames: groups.mapBy('name'),
-      namespace: job.namespace,
-    });
+    const jobSummary = server.create(
+      'job-summary',
+      hasChildren ? 'withChildren' : 'withSummary',
+      {
+        jobId: job.id,
+        groupNames: groups.mapBy('name'),
+        namespace: job.namespace
+      }
+    );
 
     job.update({
-      jobSummaryId: jobSummary.id,
+      jobSummaryId: jobSummary.id
     });
 
     const jobScale = server.create('job-scale', {
       groupNames: groups.mapBy('name'),
       jobId: job.id,
       namespace: job.namespace,
-      shallow: job.shallow,
+      shallow: job.shallow
     });
 
     job.update({
-      jobScaleId: jobScale.id,
+      jobScaleId: jobScale.id
     });
 
     if (!job.noDeployments) {
@@ -264,15 +277,15 @@ export default Factory.extend({
             namespace: job.namespace,
             version: index,
             noActiveDeployment: job.noActiveDeployment,
-            activeDeployment: job.activeDeployment,
+            activeDeployment: job.activeDeployment
           });
         });
     }
 
     if (!job.shallow) {
       const knownEvaluationProperties = {
-        job,
-        namespace: job.namespace,
+        jobId: job.id,
+        namespace: job.namespace
       };
       server.createList(
         'evaluation',
@@ -293,7 +306,7 @@ export default Factory.extend({
           'evaluation',
           'withPlacementFailures',
           assign(knownEvaluationProperties, {
-            modifyIndex: 4000,
+            modifyIndex: 4000
           })
         );
       }
@@ -317,7 +330,7 @@ export default Factory.extend({
         namespace: job.namespace,
         datacenters: job.datacenters,
         createAllocations: job.createAllocations,
-        shallow: job.shallow,
+        shallow: job.shallow
       });
     }
 
@@ -339,10 +352,10 @@ export default Factory.extend({
         namespace: job.namespace,
         datacenters: job.datacenters,
         createAllocations: job.createAllocations,
-        shallow: job.shallow,
+        shallow: job.shallow
       });
     }
-  },
+  }
 });
 
 function generateMetaFields(num, prefix = '') {

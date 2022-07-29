@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/nomad/ci"
-	raftboltdb "github.com/hashicorp/raft-boltdb"
+	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

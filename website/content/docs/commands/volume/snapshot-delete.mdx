@@ -29,6 +29,11 @@ volume` and `plugin:read` capabilities.
 
 @include 'general_options.mdx'
 
+## Snapshot Delete Options
+
+- `-secret`: Secrets to pass to the plugin to delete the
+  snapshot. Accepts multiple flags in the form `-secret key=value`
+
 ## Examples
 
 Delete a volume snapshot:
@@ -41,4 +46,4 @@ Deleted snapshot snap-12345.
 [csi]: https://github.com/container-storage-interface/spec
 [csi_plugin]: /docs/job-specification/csi_plugin
 [registered]: /docs/commands/volume/register
-[csi_plugins_internals]: /docs/internals/plugins/csi#csi-plugins
+[csi_plugins_internals]: /docs/concepts/plugins/csi#csi-plugins

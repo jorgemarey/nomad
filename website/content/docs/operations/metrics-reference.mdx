@@ -109,6 +109,8 @@ signals.
 | `nomad.nomad.rpc.query`                      | Number of RPC queries                                                                                                                                                                                             | RPC Queries / `interval`       | Counter |
 | `nomad.nomad.rpc.request_error`              | Number of RPC requests being handled that result in an error                                                                                                                                                      | RPC Errors / `interval`        | Counter |
 | `nomad.nomad.rpc.request`                    | Number of RPC requests being handled                                                                                                                                                                              | RPC Requests / `interval`      | Counter |
+| `nomad.nomad.vault.token_last_renewal`       | Time since last successful Vault token renewal                                                                                                                                                                    | Milliseconds                   | Gauge   |
+| `nomad.nomad.vault.token_next_renewal`       | Time until next Vault token renewal attempt                                                                                                                                                                       | Milliseconds                   | Gauge   |
 | `nomad.nomad.worker.invoke_scheduler.<type>` | Time to run the scheduler of the given type                                                                                                                                                                       | ms / Scheduler Run             | Timer   |
 | `nomad.nomad.worker.wait_for_index`          | Time waiting for Raft log replication from leader. High delays result in lower scheduling throughput                                                                                                              | ms / Raft Index Wait           | Timer   |
 | `nomad.raft.apply`                           | Number of Raft transactions                                                                                                                                                                                       | Raft transactions / `interval` | Counter |
@@ -211,6 +213,7 @@ Job summary metrics are emitted by the Nomad leader server.
 | `nomad.nomad.job_summary.complete` | Number of complete allocations for a job | Integer | Gauge | host, job, namespace, task_group |
 | `nomad.nomad.job_summary.failed`   | Number of failed allocations for a job   | Integer | Gauge | host, job, namespace, task_group |
 | `nomad.nomad.job_summary.lost`     | Number of lost allocations for a job     | Integer | Gauge | host, job, namespace, task_group |
+| `nomad.nomad.job_summary.unknown`  | Number of unknown allocations for a job  | Integer | Gauge | host, job, namespace, task_group |
 | `nomad.nomad.job_summary.queued`   | Number of queued allocations for a job   | Integer | Gauge | host, job, namespace, task_group |
 | `nomad.nomad.job_summary.running`  | Number of running allocations for a job  | Integer | Gauge | host, job, namespace, task_group |
 | `nomad.nomad.job_summary.starting` | Number of starting allocations for a job | Integer | Gauge | host, job, namespace, task_group |
@@ -256,7 +259,7 @@ those listed in [Key Metrics](#key-metrics) above.
 | `nomad.nomad.blocked_evals.job.cpu`                  | Amount of CPU shares requested by blocked evals of a job                       | Integer              | Gauge   | host, job, namespace                                    |
 | `nomad.nomad.blocked_evals.job.memory`               | Amount of memory requested by blocked evals of a job                           | Integer              | Gauge   | host, job, namespace                                    |
 | `nomad.nomad.blocked_evals.total_blocked`            | Count of evals in the blocked state                                            | Integer              | Gauge   | host                                                    |
-| `nomad.nomad.blocked_evals.total_escaped`            | Count of evals that have escaped computed node classes                         | Integer              | Gauge   | host                                                    |
+| `nomad.nomad.blocked_evals.total_escaped`            | Count of evals that have escaped computed node classes. This indicates a scheduler optimization was skipped and is not usually a source of concern. | Integer | Gauge | host |
 | `nomad.nomad.blocked_evals.total_quota_limit`        | Count of blocked evals due to quota limits                                     | Integer              | Gauge   | host                                                    |
 | `nomad.nomad.broker.batch_ready`                     | Count of batch evals ready to be scheduled                                     | Integer              | Gauge   | host                                                    |
 | `nomad.nomad.broker.batch_unacked`                   | Count of unacknowledged batch evals                                            | Integer              | Gauge   | host                                                    |
@@ -391,6 +394,7 @@ those listed in [Key Metrics](#key-metrics) above.
 | `nomad.nomad.plan.apply`                             | Time elapsed to apply a plan                                                   | Nanoseconds          | Summary | host                                                    |
 | `nomad.nomad.plan.evaluate`                          | Time elapsed to evaluate a plan                                                | Nanoseconds          | Summary | host                                                    |
 | `nomad.nomad.plan.node_rejected`                     | Number of times a node has had a plan rejected                                 | Integer              | Counter | host, node_id                                           |
+| `nomad.nomad.plan.rejection_tracker.node_score`      | Number of times a node has had a plan rejected within the tracker window       | Integer              | Gauge   | host, node_id                                           |
 | `nomad.nomad.plan.queue_depth`                       | Count of evals in the plan queue                                               | Integer              | Gauge   | host                                                    |
 | `nomad.nomad.plan.submit`                            | Time elapsed for `Plan.Submit` RPC call                                        | Nanoseconds          | Summary | host                                                    |
 | `nomad.nomad.plan.wait_for_index`                    | Time elapsed that planner waits for the raft index of the plan to be processed | Nanoseconds          | Summary | host                                                    |
@@ -406,7 +410,9 @@ those listed in [Key Metrics](#key-metrics) above.
 | `nomad.nomad.vault.renew_failed`                     | Count of failed attempts to renew Vault token                                  | Integer              | Gauge   | host                                                    |
 | `nomad.nomad.vault.renew`                            | Time elapsed to renew Vault token                                              | Nanoseconds          | Gauge   | host                                                    |
 | `nomad.nomad.vault.revoke_tokens`                    | Time elapsed to revoke Vault tokens                                            | Nanoseconds          | Gauge   | host                                                    |
-| `nomad.nomad.vault.token_ttl`                        | Time to live for Vault token                                                   | Integer              | Gauge   | host                                                    |
+| `nomad.nomad.vault.token_last_renewal`               | Time since last successful Vault token renewal                                 | Milliseconds         | Gauge   | host                                                    |
+| `nomad.nomad.vault.token_next_renewal`               | Time until next Vault token renewal attempt                                    | Milliseconds         | Gauge   | host                                                    |
+| `nomad.nomad.vault.token_ttl`                        | Time to live for Vault token                                                   | Milliseconds         | Gauge   | host                                                    |
 | `nomad.nomad.vault.undistributed_tokens_abandoned`   | Count of abandoned tokens                                                      | Integer              | Gauge   | host                                                    |
 | `nomad.nomad.volume.claim`                           | Time elapsed for `CSIVolume.Claim` RPC call                                    | Nanoseconds          | Summary | host                                                    |
 | `nomad.nomad.volume.deregister`                      | Time elapsed for `CSIVolume.Deregister` RPC call                               | Nanoseconds          | Summary | host                                                    |
@@ -449,6 +455,30 @@ those listed in [Key Metrics](#key-metrics) above.
 | `nomad.scheduler.allocs.rescheduled.wait_until`      | Time that a rescheduled allocation will be delayed                             | Float                | Gauge   | alloc_id, job, namespace, task_group, follow_up_eval_id |
 | `nomad.state.snapshotIndex`                          | Current snapshot index                                                         | Integer              | Gauge   | host                                                    |
 
+## Raft BoltDB Metrics
+
+Raft database metrics are emitted by the `raft-boltdb` library.
+
+| Metric                                    | Description                               | Unit        | Type    |
+| ----------------------------------------- | ----------------------------------------- | ----------- | ------- |
+| `nomad.raft.boltdb.numFreePages`          | Number of free pages                      | Integer     | Gauge   |
+| `nomad.raft.boltdb.numPendingPages`       | Number of pending pages                   | Integer     | Gauge   |
+| `nomad.raft.boltdb.freePageBytes`         | Number of free page bytes                 | Integer     | Gauge   |
+| `nomad.raft.boltdb.freelistBytes`         | Number of freelist bytes                  | Integer     | Gauge   |
+| `nomad.raft.boltdb.totalReadTxn`          | Count of total read transactions          | Integer     | Counter |
+| `nomad.raft.boltdb.openReadTxn`           | Number of current open read transactions  | Integer     | Gauge   |
+| `nomad.raft.boltdb.txstats.pageCount`     | Number of pages in use                    | Integer     | Gauge   |
+| `nomad.raft.boltdb.txstats.pageAlloc`     | Number of page allocations                | Integer     | Gauge   |
+| `nomad.raft.boltdb.txstats.cursorCount`   | Count of total database cursors           | Integer     | Counter |
+| `nomad.raft.boltdb.txstats.nodeCount`     | Count of total database nodes             | Integer     | Counter |
+| `nomad.raft.boltdb.txstats.nodeDeref`     | Count of total database node dereferences | Integer     | Counter |
+| `nomad.raft.boltdb.txstats.rebalance`     | Count of total rebalance operations       | Integer     | Counter |
+| `nomad.raft.boltdb.txstats.rebalanceTime` | Sample of rebalance operation times       | Nanoseconds | Summary |
+| `nomad.raft.boltdb.txstats.split`         | Count of total split operations           | Integer     | Counter |
+| `nomad.raft.boltdb.txstats.spill`         | Count of total spill operations           | Integer     | Counter |
+| `nomad.raft.boltdb.txstats.spillTime`     | Sample of spill operation times           | Nanoseconds | Summary |
+| `nomad.raft.boltdb.txstats.write`         | Count of total write operations           | Integer     | Counter |
+| `nomad.raft.boltdb.txstats.writeTime`     | Sample of write operation times           | Nanoseconds | Summary |
 
 [tagged-metrics]: /docs/telemetry/metrics#tagged-metrics
 [s_port_plan_failure]: /s/port-plan-failure

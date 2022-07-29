@@ -179,21 +179,21 @@ jobs:
       - run:
           name: Install golang dependencies
           command: |
-            export PATH=$PATH:/c/go/bin:/c/gopath/bin
+            export PATH=/c/go/bin:/c/gopath/bin:$PATH
             make deps
       - run:
           name: Pre-download docker test image
-          command: docker pull docker.mirror.hashicorp.services/hashicorpnomad/busybox-windows:server2016-0.1
+          command: docker pull docker.mirror.hashicorp.services/hashicorpdev/busybox-windows:server2016-0.1
       - run:
           name: Build nomad
           command: |
-            export PATH=$PATH:/c/go/bin:/c/gopath/bin
+            export PATH=/c/go/bin:/c/gopath/bin:$PATH
             go build -o $GOBIN\nomad.exe
       - run:
           name: Run tests with gotestsum
           command: |
             # Only test docker driver tests for now
-            export PATH=$PATH:/c/go/bin:/c/gopath/bin
+            export PATH=/c/go/bin:/c/gopath/bin:$PATH
             gotestsum --format=short-verbose \
               --junitfile $GOTESTSUM_PATH/results.xml \
               github.com/hashicorp/nomad/drivers/docker \
@@ -206,7 +206,7 @@ jobs:
           path: c:\tmp\test-reports
   test-ui:
     docker:
-      - image: docker.mirror.hashicorp.services/circleci/node:12-browsers
+      - image: docker.mirror.hashicorp.services/circleci/node:14-browsers
         environment:
           # See https://git.io/vdao3 for details.
           JOBS: 2
@@ -379,6 +379,7 @@ jobs:
             ./scripts/vagrant-linux-unpriv-ui.sh
 
             export PATH="$GOPATH/bin:/usr/local/go/bin:$PATH"
+            
             source ${BASH_ENV}
             . ~/.nvm/nvm.sh
             cd ui && yarn install --frozen-lockfile && cd ..
@@ -456,7 +457,7 @@ executors:
   go:
     working_directory: /go/src/github.com/hashicorp/nomad
     docker:
-      - image: docker.mirror.hashicorp.services/golang:1.17.9
+      - image: docker.mirror.hashicorp.services/golang:1.18.3
     resource_class: medium
     environment:
       <<: *common_envs
@@ -469,16 +470,16 @@ executors:
       resource_class: large
     environment: &machine_env
       <<: *common_envs
-      GOLANG_VERSION: 1.17.9
+      GOLANG_VERSION: 1.18.3
 
   go-macos:
     working_directory: ~/go/src/github.com/hashicorp/nomad
     macos:
-      xcode: 12.4.0
+      xcode: 13.4.1
     environment:
       <<: *common_envs
       GOPATH: /Users/distiller/go
-      GOLANG_VERSION: 1.17.9
+      GOLANG_VERSION: 1.18.3
 
   go-windows:
     machine:
@@ -490,7 +491,7 @@ executors:
       GOPATH: c:\gopath
       GOBIN: c:\gopath\bin
       GOTESTSUM_PATH: c:\tmp\test-reports
-      GOLANG_VERSION: 1.17.9
+      GOLANG_VERSION: 1.18.3
       GOTESTSUM_VERSION: 1.7.0
       VAULT_VERSION: 1.4.1
 

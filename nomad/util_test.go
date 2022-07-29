@@ -53,6 +53,7 @@ func TestIsNomadServer(t *testing.T) {
 	if parts.RPCAddr.String() != "1.1.1.1:10000" {
 		t.Fatalf("bad: %v", parts.RPCAddr.String())
 	}
+	require.Equal(t, 1, parts.MajorVersion)
 	if seg := parts.Build.Segments(); len(seg) != 3 {
 		t.Fatalf("bad: %v", parts.Build)
 	} else if seg[0] != 0 && seg[1] != 7 && seg[2] != 0 {
@@ -69,9 +70,6 @@ func TestIsNomadServer(t *testing.T) {
 	}
 	if parts.Addr.String() != "127.0.0.1:10000" {
 		t.Fatalf("bad addr: %v", parts.Addr)
-	}
-	if parts.MajorVersion != 1 {
-		t.Fatalf("bad: %v", parts)
 	}
 
 	m.Tags["expect"] = "3"
@@ -183,6 +181,44 @@ func TestServersMeetMinimumVersionIncludingFailed(t *testing.T) {
 				makeMember("0.7.0", serf.StatusFailed),
 			},
 			ver:      version.Must(version.NewVersion("0.7.5")),
+			expected: false,
+		},
+	}
+
+	for _, tc := range cases {
+		result := ServersMeetMinimumVersion(tc.members, tc.ver, true)
+		if result != tc.expected {
+			t.Fatalf("bad: %v, %v, %v", result, tc.ver.String(), tc)
+		}
+	}
+}
+
+func TestServersMeetMinimumVersionSuffix(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		members  []serf.Member
+		ver      *version.Version
+		expected bool
+	}{
+		// Multiple servers, meets req version
+		{
+			members: []serf.Member{
+				makeMember("1.3.0", serf.StatusAlive),
+				makeMember("1.2.6", serf.StatusAlive),
+				makeMember("1.2.6-dev", serf.StatusFailed),
+			},
+			ver:      version.Must(version.NewVersion("1.2.6-dev")),
+			expected: true,
+		},
+		// Multiple servers, doesn't meet req version
+		{
+			members: []serf.Member{
+				makeMember("1.1.18", serf.StatusAlive),
+				makeMember("1.2.6-dev", serf.StatusAlive),
+				makeMember("1.0.11", serf.StatusFailed),
+			},
+			ver:      version.Must(version.NewVersion("1.2.6-dev")),
 			expected: false,
 		},
 	}

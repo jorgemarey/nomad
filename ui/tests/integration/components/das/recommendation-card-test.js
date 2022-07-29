@@ -24,23 +24,25 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
 
       urlFor(route, slug, { queryParams: { namespace } }) {
         return `${route}:${slug}?namespace=${namespace}`;
-      },
+      }
     });
 
     this.owner.register('service:router', mockRouter);
   });
 
   test('it renders a recommendation card', async function(assert) {
+    assert.expect(49);
+
     const task1 = {
       name: 'jortle',
       reservedCPU: 150,
-      reservedMemory: 128,
+      reservedMemory: 128
     };
 
     const task2 = {
       name: 'tortle',
       reservedCPU: 125,
-      reservedMemory: 256,
+      reservedMemory: 256
     };
 
     this.set(
@@ -53,29 +55,29 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
             stats: {},
             task: task1,
             value: 192,
-            currentValue: task1.reservedMemory,
+            currentValue: task1.reservedMemory
           },
           {
             resource: 'CPU',
             stats: {},
             task: task1,
             value: 50,
-            currentValue: task1.reservedCPU,
+            currentValue: task1.reservedCPU
           },
           {
             resource: 'CPU',
             stats: {},
             task: task2,
             value: 150,
-            currentValue: task2.reservedCPU,
+            currentValue: task2.reservedCPU
           },
           {
             resource: 'MemoryMB',
             stats: {},
             task: task2,
             value: 320,
-            currentValue: task2.reservedMemory,
-          },
+            currentValue: task2.reservedMemory
+          }
         ],
 
         taskGroup: {
@@ -84,12 +86,12 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
           job: {
             name: 'job-name',
             namespace: {
-              name: 'namespace',
-            },
+              name: 'namespace'
+            }
           },
           reservedCPU: task1.reservedCPU + task2.reservedCPU,
-          reservedMemory: task1.reservedMemory + task2.reservedMemory,
-        },
+          reservedMemory: task1.reservedMemory + task2.reservedMemory
+        }
       })
     );
 
@@ -127,18 +129,28 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
       )
     );
 
-    assert.equal(RecommendationCard.activeTask.totalsTable.current.cpu.text, '150 MHz');
-    assert.equal(RecommendationCard.activeTask.totalsTable.current.memory.text, '128 MiB');
+    assert.equal(
+      RecommendationCard.activeTask.totalsTable.current.cpu.text,
+      '150 MHz'
+    );
+    assert.equal(
+      RecommendationCard.activeTask.totalsTable.current.memory.text,
+      '128 MiB'
+    );
 
-    RecommendationCard.activeTask.totalsTable.recommended.cpu.as(RecommendedCpu => {
-      assert.equal(RecommendedCpu.text, '50 MHz');
-      assert.ok(RecommendedCpu.isDecrease);
-    });
+    RecommendationCard.activeTask.totalsTable.recommended.cpu.as(
+      RecommendedCpu => {
+        assert.equal(RecommendedCpu.text, '50 MHz');
+        assert.ok(RecommendedCpu.isDecrease);
+      }
+    );
 
-    RecommendationCard.activeTask.totalsTable.recommended.memory.as(RecommendedMemory => {
-      assert.equal(RecommendedMemory.text, '192 MiB');
-      assert.ok(RecommendedMemory.isIncrease);
-    });
+    RecommendationCard.activeTask.totalsTable.recommended.memory.as(
+      RecommendedMemory => {
+        assert.equal(RecommendedMemory.text, '192 MiB');
+        assert.ok(RecommendedMemory.isIncrease);
+      }
+    );
 
     assert.equal(RecommendationCard.activeTask.charts.length, 2);
     assert.equal(
@@ -177,10 +189,12 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
       assert.ok(RecommendedCpu.isIncrease);
     });
 
-    RecommendationCard.activeTask.totalsTable.recommended.cpu.as(RecommendedCpu => {
-      assert.equal(RecommendedCpu.text, '150 MHz');
-      assert.ok(RecommendedCpu.isNeutral);
-    });
+    RecommendationCard.activeTask.totalsTable.recommended.cpu.as(
+      RecommendedCpu => {
+        assert.equal(RecommendedCpu.text, '150 MHz');
+        assert.ok(RecommendedCpu.isNeutral);
+      }
+    );
 
     await RecommendationCard.togglesTable.toggleAllMemory.toggle();
 
@@ -198,7 +212,10 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
     assert.ok(RecommendationCard.togglesTable.tasks[1].isActive);
 
     assert.equal(RecommendationCard.activeTask.name, 'tortle task');
-    assert.equal(RecommendationCard.activeTask.totalsTable.current.cpu.text, '125 MHz');
+    assert.equal(
+      RecommendationCard.activeTask.totalsTable.current.cpu.text,
+      '125 MHz'
+    );
 
     await componentA11yAudit(this.element, assert);
   });
@@ -207,7 +224,7 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
     const task1 = {
       name: 'jortle',
       reservedCPU: 150,
-      reservedMemory: 128,
+      reservedMemory: 128
     };
 
     this.set(
@@ -218,21 +235,21 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
             resource: 'CPU',
             stats: {},
             task: task1,
-            value: 50,
+            value: 50
           },
           {
             resource: 'MemoryMB',
             stats: {},
             task: task1,
-            value: 192,
-          },
+            value: 192
+          }
         ],
 
         taskGroup: {
           count: 1,
           reservedCPU: task1.reservedCPU,
-          reservedMemory: task1.reservedMemory,
-        },
+          reservedMemory: task1.reservedMemory
+        }
       })
     );
 
@@ -247,7 +264,7 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
     const task1 = {
       name: 'jortle',
       reservedCPU: 150,
-      reservedMemory: 128,
+      reservedMemory: 128
     };
 
     this.set(
@@ -258,21 +275,21 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
             resource: 'CPU',
             stats: {},
             task: task1,
-            value: 50,
+            value: 50
           },
           {
             resource: 'MemoryMB',
             stats: {},
             task: task1,
-            value: 192,
-          },
+            value: 192
+          }
         ],
 
         taskGroup: {
           count: 1,
           reservedCPU: task1.reservedCPU,
-          reservedMemory: task1.reservedMemory,
-        },
+          reservedMemory: task1.reservedMemory
+        }
       })
     );
 
@@ -288,7 +305,7 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
     const task1 = {
       name: 'jortle',
       reservedCPU: 150,
-      reservedMemory: 128,
+      reservedMemory: 128
     };
 
     this.set(
@@ -299,25 +316,28 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
             resource: 'CPU',
             stats: {},
             task: task1,
-            value: 50,
-          },
+            value: 50
+          }
         ],
 
         taskGroup: {
           count: 2,
           name: 'group-name',
           job: {
-            name: 'job-name',
+            name: 'job-name'
           },
           reservedCPU: task1.reservedCPU,
-          reservedMemory: task1.reservedMemory,
-        },
+          reservedMemory: task1.reservedMemory
+        }
       })
     );
 
     await render(hbs`<Das::RecommendationCard @summary={{this.summary}} />`);
 
-    assert.equal(RecommendationCard.totalsTable.recommended.memory.text, '128 MiB');
+    assert.equal(
+      RecommendationCard.totalsTable.recommended.memory.text,
+      '128 MiB'
+    );
     assert.equal(RecommendationCard.totalsTable.unitDiff.memory, '0 MiB');
     assert.equal(RecommendationCard.totalsTable.percentDiff.memory, '+0%');
 
@@ -334,13 +354,13 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
     const task1 = {
       name: 'jortle',
       reservedCPU: 150,
-      reservedMemory: 128,
+      reservedMemory: 128
     };
 
     const task2 = {
       name: 'tortle',
       reservedCPU: 150,
-      reservedMemory: 128,
+      reservedMemory: 128
     };
 
     this.set(
@@ -351,25 +371,25 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
             resource: 'CPU',
             stats: {},
             task: task1,
-            value: 50,
+            value: 50
           },
           {
             resource: 'CPU',
             stats: {},
             task: task2,
-            value: 50,
-          },
+            value: 50
+          }
         ],
 
         taskGroup: {
           count: 2,
           name: 'group-name',
           job: {
-            name: 'job-name',
+            name: 'job-name'
           },
           reservedCPU: task1.reservedCPU + task2.reservedCPU,
-          reservedMemory: task1.reservedMemory + task2.reservedMemory,
-        },
+          reservedMemory: task1.reservedMemory + task2.reservedMemory
+        }
       })
     );
 
@@ -384,13 +404,13 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
     const task1 = {
       name: 'jortle',
       reservedCPU: 150,
-      reservedMemory: 128,
+      reservedMemory: 128
     };
 
     const task2 = {
       name: 'tortle',
       reservedCPU: 125,
-      reservedMemory: 256,
+      reservedMemory: 256
     };
 
     this.set(
@@ -402,29 +422,29 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
             stats: {},
             task: task1,
             value: 50,
-            currentValue: task1.reservedCPU,
+            currentValue: task1.reservedCPU
           },
           {
             resource: 'MemoryMB',
             stats: {},
             task: task1,
             value: 192,
-            currentValue: task1.reservedMemory,
+            currentValue: task1.reservedMemory
           },
           {
             resource: 'CPU',
             stats: {},
             task: task2,
             value: 150,
-            currentValue: task2.reservedCPU,
+            currentValue: task2.reservedCPU
           },
           {
             resource: 'MemoryMB',
             stats: {},
             task: task2,
             value: 320,
-            currentValue: task2.reservedMemory,
-          },
+            currentValue: task2.reservedMemory
+          }
         ],
 
         taskGroup: {
@@ -433,12 +453,12 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
           job: {
             name: 'job-name',
             namespace: {
-              name: 'namespace',
-            },
+              name: 'namespace'
+            }
           },
           reservedCPU: task1.reservedCPU + task2.reservedCPU,
-          reservedMemory: task1.reservedMemory + task2.reservedMemory,
-        },
+          reservedMemory: task1.reservedMemory + task2.reservedMemory
+        }
       })
     );
 
@@ -511,13 +531,13 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
     const task1 = {
       name: 'jortle',
       reservedCPU: 150,
-      reservedMemory: 128,
+      reservedMemory: 128
     };
 
     const task2 = {
       name: 'tortle',
       reservedCPU: 125,
-      reservedMemory: 256,
+      reservedMemory: 256
     };
 
     this.set(
@@ -529,29 +549,29 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
             stats: {},
             task: task1,
             value: 50,
-            currentValue: task1.reservedCPU,
+            currentValue: task1.reservedCPU
           },
           {
             resource: 'MemoryMB',
             stats: {},
             task: task1,
             value: 192,
-            currentValue: task1.reservedMemory,
+            currentValue: task1.reservedMemory
           },
           {
             resource: 'CPU',
             stats: {},
             task: task2,
             value: 150,
-            currentValue: task2.reservedCPU,
+            currentValue: task2.reservedCPU
           },
           {
             resource: 'MemoryMB',
             stats: {},
             task: task2,
             value: 320,
-            currentValue: task2.reservedMemory,
-          },
+            currentValue: task2.reservedMemory
+          }
         ],
 
         taskGroup: {
@@ -560,12 +580,12 @@ module('Integration | Component | das/recommendation-card', function(hooks) {
           job: {
             name: 'job-name',
             namespace: {
-              name: 'namespace',
-            },
+              name: 'namespace'
+            }
           },
           reservedCPU: task1.reservedCPU + task2.reservedCPU,
-          reservedMemory: task1.reservedMemory + task2.reservedMemory,
-        },
+          reservedMemory: task1.reservedMemory + task2.reservedMemory
+        }
       })
     );
 
@@ -601,9 +621,14 @@ class MockRecommendationSummary {
   @action
   toggleAllRecommendationsForResource(resource, enabled) {
     if (enabled) {
-      this.excludedRecommendations = this.excludedRecommendations.rejectBy('resource', resource);
+      this.excludedRecommendations = this.excludedRecommendations.rejectBy(
+        'resource',
+        resource
+      );
     } else {
-      this.excludedRecommendations.pushObjects(this.recommendations.filterBy('resource', resource));
+      this.excludedRecommendations.pushObjects(
+        this.recommendations.filterBy('resource', resource)
+      );
     }
   }
 }

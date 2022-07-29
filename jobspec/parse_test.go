@@ -201,6 +201,7 @@ func TestParse(t *testing.T) {
 							},
 						},
 						StopAfterClientDisconnect: timeToPtr(120 * time.Second),
+						MaxClientDisconnect:       timeToPtr(120 * time.Hour),
 						ReschedulePolicy: &api.ReschedulePolicy{
 							Interval: timeToPtr(12 * time.Hour),
 							Attempts: intToPtr(5),
@@ -625,9 +626,10 @@ func TestParse(t *testing.T) {
 								Name:   "binstore",
 								Driver: "docker",
 								CSIPluginConfig: &api.TaskCSIPluginConfig{
-									ID:       "org.hashicorp.csi",
-									Type:     api.CSIPluginTypeMonolith,
-									MountDir: "/csi/test",
+									ID:            "org.hashicorp.csi",
+									Type:          api.CSIPluginTypeMonolith,
+									MountDir:      "/csi/test",
+									HealthTimeout: 1 * time.Minute,
 								},
 							},
 						},
@@ -1537,7 +1539,9 @@ func TestParse(t *testing.T) {
 								},
 								Ingress: &api.ConsulIngressConfigEntry{
 									TLS: &api.ConsulGatewayTLSConfig{
-										Enabled: true,
+										Enabled:       true,
+										TLSMinVersion: "TLSv1_2",
+										CipherSuites:  []string{"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"},
 									},
 									Listeners: []*api.ConsulIngressListener{{
 										Port:     8001,
@@ -1758,6 +1762,32 @@ func TestParse(t *testing.T) {
 								Resources: &api.Resources{
 									Cores:    intToPtr(4),
 									MemoryMB: intToPtr(128),
+								},
+							},
+						},
+					},
+				},
+			},
+			false,
+		},
+		{
+			"service-provider.hcl",
+			&api.Job{
+				ID:   stringToPtr("service-provider"),
+				Name: stringToPtr("service-provider"),
+				TaskGroups: []*api.TaskGroup{
+					{
+						Count: intToPtr(5),
+						Name:  stringToPtr("group"),
+						Tasks: []*api.Task{
+							{
+								Name:   "task",
+								Driver: "docker",
+								Services: []*api.Service{
+									{
+										Name:     "service-provider",
+										Provider: "nomad",
+									},
 								},
 							},
 						},

@@ -75,38 +75,38 @@
     "divider": true
   },
   {
-    "title": "Internals",
+    "title": "Concepts",
     "routes": [
       {
         "title": "Overview",
-        "path": "internals"
+        "path": "concepts"
       },
       {
         "title": "Architecture",
-        "path": "internals/architecture"
+        "path": "concepts/architecture"
       },
       {
         "title": "Plugins",
         "routes": [
           {
             "title": "Overview",
-            "path": "internals/plugins"
+            "path": "concepts/plugins"
           },
           {
             "title": "Base",
-            "path": "internals/plugins/base"
+            "path": "concepts/plugins/base"
           },
           {
             "title": "Task Drivers",
-            "path": "internals/plugins/task-drivers"
+            "path": "concepts/plugins/task-drivers"
           },
           {
             "title": "Devices",
-            "path": "internals/plugins/devices"
+            "path": "concepts/plugins/devices"
           },
           {
             "title": "Storage",
-            "path": "internals/plugins/csi"
+            "path": "concepts/plugins/csi"
           }
         ]
       },
@@ -115,33 +115,33 @@
         "routes": [
           {
             "title": "Overview",
-            "path": "internals/scheduling"
+            "path": "concepts/scheduling"
           },
           {
-            "title": "Internals",
-            "path": "internals/scheduling/scheduling"
+            "title": "Concepts",
+            "path": "concepts/scheduling/scheduling"
           },
           {
             "title": "Preemption",
-            "path": "internals/scheduling/preemption"
+            "path": "concepts/scheduling/preemption"
           }
         ]
       },
       {
         "title": "Consensus Protocol",
-        "path": "internals/consensus"
+        "path": "concepts/consensus"
       },
       {
         "title": "Filesystem",
-        "path": "internals/filesystem"
+        "path": "concepts/filesystem"
       },
       {
         "title": "Gossip Protocol",
-        "path": "internals/gossip"
+        "path": "concepts/gossip"
       },
       {
         "title": "Security Model",
-        "path": "internals/security"
+        "path": "concepts/security"
       }
     ]
   },
@@ -316,6 +316,19 @@
         ]
       },
       {
+        "title": "config",
+        "routes": [
+          {
+            "title": "Overview",
+            "path": "commands/config"
+          },
+          {
+            "title": "validate",
+            "path": "commands/config/validate"
+          }
+        ]
+      },
+      {
         "title": "deployment",
         "routes": [
           {
@@ -358,6 +371,10 @@
           {
             "title": "Overview",
             "path": "commands/eval"
+          },
+          {
+            "title": "delete",
+            "path": "commands/eval/delete"
           },
           {
             "title": "list",
@@ -525,12 +542,21 @@
             "path": "commands/operator"
           },
           {
-            "title": "autopilot get-config",
-            "path": "commands/operator/autopilot-get-config"
+            "title": "api",
+            "path": "commands/operator/api"
           },
           {
-            "title": "autopilot set-config",
-            "path": "commands/operator/autopilot-set-config"
+            "title": "autopilot",
+            "routes": [
+              {
+                "title": "get-config",
+                "path": "commands/operator/autopilot/get-config"
+              },
+              {
+                "title": "set-config",
+                "path": "commands/operator/autopilot/set-config"
+              }
+            ]
           },
           {
             "title": "debug",
@@ -549,44 +575,67 @@
             "path": "commands/operator/metrics"
           },
           {
-            "title": "raft info",
-            "path": "commands/operator/raft-info"
+            "title": "raft",
+            "routes": [
+              {
+                "title": "info",
+                "path": "commands/operator/raft/info"
+              },
+              {
+                "title": "list-peers",
+                "path": "commands/operator/raft/list-peers"
+              },
+              {
+                "title": "logs",
+                "path": "commands/operator/raft/logs"
+              },
+              {
+                "title": "remove-peer",
+                "path": "commands/operator/raft/remove-peer"
+              },
+              {
+                "title": "state",
+                "path": "commands/operator/raft/state"
+              }
+            ]
           },
           {
-            "title": "raft list-peers",
-            "path": "commands/operator/raft-list-peers"
+            "title": "scheduler",
+            "routes": [
+              {
+                "title": "get-config",
+                "path": "commands/operator/scheduler/get-config"
+              },
+              {
+                "title": "set-config",
+                "path": "commands/operator/scheduler/set-config"
+              }
+            ]
           },
           {
-            "title": "raft logs",
-            "path": "commands/operator/raft-logs"
-          },
-          {
-            "title": "raft remove-peer",
-            "path": "commands/operator/raft-remove-peer"
-          },
-          {
-            "title": "raft state",
-            "path": "commands/operator/raft-state"
-          },
-          {
-            "title": "snapshot agent",
-            "path": "commands/operator/snapshot-agent"
-          },
-          {
-            "title": "snapshot inspect",
-            "path": "commands/operator/snapshot-inspect"
-          },
-          {
-            "title": "snapshot restore",
-            "path": "commands/operator/snapshot-restore"
-          },
-          {
-            "title": "snapshot save",
-            "path": "commands/operator/snapshot-save"
-          },
-          {
-            "title": "snapshot state",
-            "path": "commands/operator/snapshot-state"
+            "title": "snapshot",
+            "routes": [
+              {
+                "title": "agent",
+                "path": "commands/operator/snapshot/agent"
+              },
+              {
+                "title": "inspect",
+                "path": "commands/operator/snapshot/inspect"
+              },
+              {
+                "title": "restore",
+                "path": "commands/operator/snapshot/restore"
+              },
+              {
+                "title": "save",
+                "path": "commands/operator/snapshot/save"
+              },
+              {
+                "title": "state",
+                "path": "commands/operator/snapshot/state"
+              }
+            ]
           }
         ]
       },
@@ -721,6 +770,27 @@
           {
             "title": "members",
             "path": "commands/server/members"
+          }
+        ]
+      },
+      {
+        "title": "service",
+        "routes": [
+          {
+            "title": "Overview",
+            "path": "commands/service"
+          },
+          {
+            "title": "service delete",
+            "path": "commands/service/delete"
+          },
+          {
+            "title": "service info",
+            "path": "commands/service/info"
+          },
+          {
+            "title": "service list",
+            "path": "commands/service/list"
           }
         ]
       },
@@ -1045,6 +1115,10 @@
                     "path": "job-specification/hcl2/functions/file/file"
                   },
                   {
+                    "title": "filebase64",
+                    "path": "job-specification/hcl2/functions/file/filebase64"
+                  },
+                  {
                     "title": "fileexists",
                     "path": "job-specification/hcl2/functions/file/fileexists"
                   },
@@ -1243,7 +1317,7 @@
         "path": "job-specification/constraint"
       },
       {
-        "title": "csi_plugin <sup>Beta</sup>",
+        "title": "csi_plugin",
         "path": "job-specification/csi_plugin"
       },
       {
@@ -1373,6 +1447,36 @@
       {
         "title": "volume_mount",
         "path": "job-specification/volume_mount"
+      }
+    ]
+  },
+  {
+    "title": "Other Specifications",
+    "routes": [
+      {
+        "title": "Overview",
+        "path": "other-specifications"
+      },
+      {
+        "title": "Volume",
+        "routes": [
+          {
+            "title": "Overview",
+            "path": "other-specifications/volume"
+          },
+          {
+            "title": "capability",
+            "path": "other-specifications/volume/capability"
+          },
+          {
+            "title": "mount_options",
+            "path": "other-specifications/volume/mount_options"
+          },
+          {
+            "title": "topology_request",
+            "path": "other-specifications/volume/topology_request"
+          }
+        ]
       }
     ]
   },

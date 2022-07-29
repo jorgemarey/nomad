@@ -52,6 +52,7 @@ func parseService(o *ast.ObjectItem) (*api.Service, error) {
 		"canary_meta",
 		"tagged_addresses",
 		"on_update",
+		"provider",
 	}
 	if err := checkHCLKeys(o.Val, valid); err != nil {
 		return nil, err
@@ -540,6 +541,9 @@ func parseConsulIngressListener(o *ast.ObjectItem) (*api.ConsulIngressListener, 
 func parseConsulGatewayTLS(o *ast.ObjectItem) (*api.ConsulGatewayTLSConfig, error) {
 	valid := []string{
 		"enabled",
+		"tls_min_version",
+		"tls_max_version",
+		"cipher_suites",
 	}
 
 	if err := checkHCLKeys(o.Val, valid); err != nil {

@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NYTimes/gziphandler"
 	assetfs "github.com/elazarl/go-bindata-assetfs"
+	"github.com/gorilla/handlers"
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/go-connlimit"
 	log "github.com/hashicorp/go-hclog"
@@ -87,12 +87,6 @@ func NewHTTPServers(agent *Agent, config *Config) ([]*HTTPServer, error) {
 	var srvs []*HTTPServer
 	var serverInitializationErrors error
 
-	// Handle requests with gzip compression
-	gzip, err := gziphandler.GzipHandlerWithOpts(gziphandler.MinSize(0))
-	if err != nil {
-		return srvs, err
-	}
-
 	// Get connection handshake timeout limit
 	handshakeTimeout, err := time.ParseDuration(config.Limits.HTTPSHandshakeTimeout)
 	if err != nil {
@@ -122,9 +116,6 @@ func NewHTTPServers(agent *Agent, config *Config) ([]*HTTPServer, error) {
 
 	// Start the listener
 	for _, addr := range config.normalizedAddrs.HTTP {
-		// Create the mux
-		mux := http.NewServeMux()
-
 		lnAddr, err := net.ResolveTCPAddr("tcp", addr)
 		if err != nil {
 			serverInitializationErrors = multierror.Append(serverInitializationErrors, err)
@@ -149,7 +140,7 @@ func NewHTTPServers(agent *Agent, config *Config) ([]*HTTPServer, error) {
 		// Create the server
 		srv := &HTTPServer{
 			agent:      agent,
-			mux:        mux,
+			mux:        http.NewServeMux(),
 			listener:   ln,
 			listenerCh: make(chan struct{}),
 			logger:     agent.httpLogger,
@@ -161,7 +152,7 @@ func NewHTTPServers(agent *Agent, config *Config) ([]*HTTPServer, error) {
 		// Create HTTP server with timeouts
 		httpServer := http.Server{
 			Addr:      srv.Addr,
-			Handler:   gzip(mux),
+			Handler:   handlers.CompressHandler(srv.mux),
 			ConnState: makeConnState(config.TLSConfig.EnableHTTP, handshakeTimeout, maxConns),
 			ErrorLog:  newHTTPServerLogger(srv.logger),
 		}
@@ -169,6 +160,35 @@ func NewHTTPServers(agent *Agent, config *Config) ([]*HTTPServer, error) {
 		go func() {
 			defer close(srv.listenerCh)
 			httpServer.Serve(ln)
+		}()
+
+		srvs = append(srvs, srv)
+	}
+
+	// This HTTP server is only create when running in client mode, otherwise
+	// the builtinDialer and builtinListener will be nil.
+	if agent.builtinDialer != nil && agent.builtinListener != nil {
+		srv := &HTTPServer{
+			agent:      agent,
+			mux:        http.NewServeMux(),
+			listener:   agent.builtinListener,
+			listenerCh: make(chan struct{}),
+			logger:     agent.httpLogger,
+			Addr:       "builtin",
+			wsUpgrader: wsUpgrader,
+		}
+
+		srv.registerHandlers(config.EnableDebug)
+
+		httpServer := http.Server{
+			Addr:     srv.Addr,
+			Handler:  srv.mux,
+			ErrorLog: newHTTPServerLogger(srv.logger),
+		}
+
+		go func() {
+			defer close(srv.listenerCh)
+			httpServer.Serve(agent.builtinListener)
 		}()
 
 		srvs = append(srvs, srv)
@@ -346,6 +366,10 @@ func (s HTTPServer) registerHandlers(enableDebug bool) {
 	s.mux.HandleFunc("/v1/agent/keyring/", s.wrap(s.KeyringOperationRequest))
 	s.mux.HandleFunc("/v1/agent/health", s.wrap(s.HealthRequest))
 	s.mux.HandleFunc("/v1/agent/host", s.wrap(s.AgentHostRequest))
+
+	// Register our service registration handlers.
+	s.mux.HandleFunc("/v1/services", s.wrap(s.ServiceRegistrationListRequest))
+	s.mux.HandleFunc("/v1/service/", s.wrap(s.ServiceRegistrationRequest))
 
 	// Monitor is *not* an untrusted endpoint despite the log contents
 	// potentially containing unsanitized user input. Monitor, like
@@ -543,6 +567,9 @@ func (s *HTTPServer) wrap(handler func(resp http.ResponseWriter, req *http.Reque
 				} else if strings.HasSuffix(errMsg, structs.ErrJobRegistrationDisabled.Error()) {
 					errMsg = structs.ErrJobRegistrationDisabled.Error()
 					code = 403
+				} else if strings.HasSuffix(errMsg, structs.ErrIncompatibleFiltering.Error()) {
+					errMsg = structs.ErrIncompatibleFiltering.Error()
+					code = 400
 				}
 			}
 
@@ -779,6 +806,27 @@ func (s *HTTPServer) parseToken(req *http.Request, token *string) {
 		*token = other
 		return
 	}
+
+	if other := req.Header.Get("Authorization"); other != "" {
+		// HTTP Authorization headers are in the format: <Scheme>[SPACE]<Value>
+		// Ref. https://tools.ietf.org/html/rfc7236#section-3
+		parts := strings.Split(other, " ")
+
+		// Authorization Header is invalid if containing 1 or 0 parts, e.g.:
+		// "" || "<Scheme><Value>" || "<Scheme>" || "<Value>"
+		if len(parts) > 1 {
+			scheme := parts[0]
+			// Everything after "<Scheme>" is "<Value>", trimmed
+			value := strings.TrimSpace(strings.Join(parts[1:], " "))
+
+			// <Scheme> must be "Bearer"
+			if strings.ToLower(scheme) == "bearer" {
+				// Since Bearer tokens shouldn't contain spaces (rfc6750#section-2.1)
+				// "value" is tokenized, only the first item is used
+				*token = strings.TrimSpace(strings.Split(value, " ")[0])
+			}
+		}
+	}
 }
 
 // parse is a convenience method for endpoints that need to parse multiple flags
@@ -790,6 +838,8 @@ func (s *HTTPServer) parse(resp http.ResponseWriter, req *http.Request, r *strin
 	parsePrefix(req, b)
 	parseNamespace(req, &b.Namespace)
 	parsePagination(req, b)
+	parseFilter(req, b)
+	parseReverse(req, b)
 	return parseWait(resp, req, b)
 }
 
@@ -798,13 +848,27 @@ func parsePagination(req *http.Request, b *structs.QueryOptions) {
 	query := req.URL.Query()
 	rawPerPage := query.Get("per_page")
 	if rawPerPage != "" {
-		perPage, err := strconv.Atoi(rawPerPage)
+		perPage, err := strconv.ParseInt(rawPerPage, 10, 32)
 		if err == nil {
 			b.PerPage = int32(perPage)
 		}
 	}
 
 	b.NextToken = query.Get("next_token")
+}
+
+// parseFilter parses the filter query parameter for QueryOptions
+func parseFilter(req *http.Request, b *structs.QueryOptions) {
+	query := req.URL.Query()
+	if filter := query.Get("filter"); filter != "" {
+		b.Filter = filter
+	}
+}
+
+// parseReverse parses the reverse query parameter for QueryOptions
+func parseReverse(req *http.Request, b *structs.QueryOptions) {
+	query := req.URL.Query()
+	b.Reverse = query.Get("reverse") == "true"
 }
 
 // parseWriteRequest is a convenience method for endpoints that need to parse a

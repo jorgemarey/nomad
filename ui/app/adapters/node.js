@@ -1,6 +1,8 @@
 import Watchable from './watchable';
 import addToPath from 'nomad-ui/utils/add-to-path';
+import classic from 'ember-classic-decorator';
 
+@classic
 export default class NodeAdapter extends Watchable {
   setEligible(node) {
     return this.setEligibility(node, true);
@@ -11,12 +13,15 @@ export default class NodeAdapter extends Watchable {
   }
 
   setEligibility(node, isEligible) {
-    const url = addToPath(this.urlForFindRecord(node.id, 'node'), '/eligibility');
+    const url = addToPath(
+      this.urlForFindRecord(node.id, 'node'),
+      '/eligibility'
+    );
     return this.ajax(url, 'POST', {
       data: {
         NodeID: node.id,
-        Eligibility: isEligible ? 'eligible' : 'ineligible',
-      },
+        Eligibility: isEligible ? 'eligible' : 'ineligible'
+      }
     });
   }
 
@@ -30,11 +35,11 @@ export default class NodeAdapter extends Watchable {
         DrainSpec: Object.assign(
           {
             Deadline: 0,
-            IgnoreSystemJobs: true,
+            IgnoreSystemJobs: true
           },
           drainSpec
-        ),
-      },
+        )
+      }
     });
   }
 
@@ -42,7 +47,7 @@ export default class NodeAdapter extends Watchable {
     return this.drain(
       node,
       Object.assign({}, drainSpec, {
-        Deadline: -1,
+        Deadline: -1
       })
     );
   }
@@ -52,8 +57,8 @@ export default class NodeAdapter extends Watchable {
     return this.ajax(url, 'POST', {
       data: {
         NodeID: node.id,
-        DrainSpec: null,
-      },
+        DrainSpec: null
+      }
     });
   }
 }

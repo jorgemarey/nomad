@@ -19,14 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func tmpDir(t testing.TB) string {
-	dir, err := ioutil.TempDir("", "nomad")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	return dir
-}
-
 func TestAgent_RPC_Ping(t *testing.T) {
 	ci.Parallel(t)
 	agent := NewTestAgent(t, t.Name(), nil)
@@ -373,6 +365,82 @@ func TestAgent_ServerConfig_Limits_OK(t *testing.T) {
 	}
 }
 
+func TestAgent_ServerConfig_PlanRejectionTracker(t *testing.T) {
+	ci.Parallel(t)
+
+	cases := []struct {
+		name           string
+		trackerConfig  *PlanRejectionTracker
+		expectedConfig *PlanRejectionTracker
+		expectedErr    string
+	}{
+		{
+			name:          "default",
+			trackerConfig: nil,
+			expectedConfig: &PlanRejectionTracker{
+				NodeThreshold: 100,
+				NodeWindow:    5 * time.Minute,
+			},
+			expectedErr: "",
+		},
+		{
+			name: "valid config",
+			trackerConfig: &PlanRejectionTracker{
+				Enabled:       helper.BoolToPtr(true),
+				NodeThreshold: 123,
+				NodeWindow:    17 * time.Minute,
+			},
+			expectedConfig: &PlanRejectionTracker{
+				Enabled:       helper.BoolToPtr(true),
+				NodeThreshold: 123,
+				NodeWindow:    17 * time.Minute,
+			},
+			expectedErr: "",
+		},
+		{
+			name: "invalid node window",
+			trackerConfig: &PlanRejectionTracker{
+				NodeThreshold: 123,
+			},
+			expectedErr: "node_window must be greater than 0",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := DevConfig(nil)
+			require.NoError(t, config.normalizeAddrs())
+
+			if tc.trackerConfig != nil {
+				config.Server.PlanRejectionTracker = tc.trackerConfig
+			}
+
+			serverConfig, err := convertServerConfig(config)
+
+			if tc.expectedErr != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.expectedErr)
+			} else {
+				require.NoError(t, err)
+				if tc.expectedConfig.Enabled != nil {
+					require.Equal(t,
+						*tc.expectedConfig.Enabled,
+						serverConfig.NodePlanRejectionEnabled,
+					)
+				}
+				require.Equal(t,
+					tc.expectedConfig.NodeThreshold,
+					serverConfig.NodePlanRejectionThreshold,
+				)
+				require.Equal(t,
+					tc.expectedConfig.NodeWindow,
+					serverConfig.NodePlanRejectionWindow,
+				)
+			}
+		})
+	}
+}
+
 func TestAgent_ServerConfig_RaftMultiplier_Ok(t *testing.T) {
 	ci.Parallel(t)
 
@@ -522,6 +590,14 @@ func TestAgent_ClientConfig(t *testing.T) {
 	if c.Node.HTTPAddr != expectedHttpAddr {
 		t.Fatalf("Expected http addr: %v, got: %v", expectedHttpAddr, c.Node.HTTPAddr)
 	}
+
+	// Test the default, and then custom setting of the client service
+	// discovery boolean.
+	require.True(t, c.NomadServiceDiscovery)
+	conf.Client.NomadServiceDiscovery = helper.BoolToPtr(false)
+	c, err = a.clientConfig()
+	require.NoError(t, err)
+	require.False(t, c.NomadServiceDiscovery)
 }
 
 func TestAgent_ClientConfig_ReservedCores(t *testing.T) {
@@ -908,8 +984,6 @@ func TestServer_Reload_TLS_UpgradeToTLS(t *testing.T) {
 		foocert = "../../helper/tlsutil/testdata/nomad-foo.pem"
 		fookey  = "../../helper/tlsutil/testdata/nomad-foo-key.pem"
 	)
-	dir := tmpDir(t)
-	defer os.RemoveAll(dir)
 
 	logger := testlog.HCLogger(t)
 
@@ -951,8 +1025,6 @@ func TestServer_Reload_TLS_DowngradeFromTLS(t *testing.T) {
 		foocert = "../../helper/tlsutil/testdata/nomad-foo.pem"
 		fookey  = "../../helper/tlsutil/testdata/nomad-foo-key.pem"
 	)
-	dir := tmpDir(t)
-	defer os.RemoveAll(dir)
 
 	logger := testlog.HCLogger(t)
 
@@ -994,8 +1066,6 @@ func TestServer_ShouldReload_ReturnFalseForNoChanges(t *testing.T) {
 		foocert = "../../helper/tlsutil/testdata/nomad-foo.pem"
 		fookey  = "../../helper/tlsutil/testdata/nomad-foo-key.pem"
 	)
-	dir := tmpDir(t)
-	defer os.RemoveAll(dir)
 
 	sameAgentConfig := &Config{
 		TLSConfig: &config.TLSConfig{
@@ -1034,8 +1104,6 @@ func TestServer_ShouldReload_ReturnTrueForOnlyHTTPChanges(t *testing.T) {
 		foocert = "../../helper/tlsutil/testdata/nomad-foo.pem"
 		fookey  = "../../helper/tlsutil/testdata/nomad-foo-key.pem"
 	)
-	dir := tmpDir(t)
-	defer os.RemoveAll(dir)
 
 	sameAgentConfig := &Config{
 		TLSConfig: &config.TLSConfig{
@@ -1074,8 +1142,6 @@ func TestServer_ShouldReload_ReturnTrueForOnlyRPCChanges(t *testing.T) {
 		foocert = "../../helper/tlsutil/testdata/nomad-foo.pem"
 		fookey  = "../../helper/tlsutil/testdata/nomad-foo-key.pem"
 	)
-	dir := tmpDir(t)
-	defer os.RemoveAll(dir)
 
 	sameAgentConfig := &Config{
 		TLSConfig: &config.TLSConfig{
@@ -1116,8 +1182,6 @@ func TestServer_ShouldReload_ReturnTrueForConfigChanges(t *testing.T) {
 		foocert2 = "../../helper/tlsutil/testdata/nomad-bad.pem"
 		fookey2  = "../../helper/tlsutil/testdata/nomad-bad-key.pem"
 	)
-	dir := tmpDir(t)
-	defer os.RemoveAll(dir)
 
 	agent := NewTestAgent(t, t.Name(), func(c *Config) {
 		c.TLSConfig = &config.TLSConfig{
@@ -1172,14 +1236,10 @@ func TestServer_ShouldReload_ReturnTrueForFileChanges(t *testing.T) {
 	`
 
 	content := []byte(oldCertificate)
-	dir, err := ioutil.TempDir("", "certificate")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir) // clean up
+	dir := t.TempDir()
 
 	tmpfn := filepath.Join(dir, "testcert")
-	err = ioutil.WriteFile(tmpfn, content, 0666)
+	err := ioutil.WriteFile(tmpfn, content, 0666)
 	require.Nil(err)
 
 	const (
@@ -1261,8 +1321,6 @@ func TestServer_ShouldReload_ShouldHandleMultipleChanges(t *testing.T) {
 		foocert2 = "../../helper/tlsutil/testdata/nomad-bad.pem"
 		fookey2  = "../../helper/tlsutil/testdata/nomad-bad-key.pem"
 	)
-	dir := tmpDir(t)
-	defer os.RemoveAll(dir)
 
 	sameAgentConfig := &Config{
 		TLSConfig: &config.TLSConfig{

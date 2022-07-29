@@ -765,7 +765,7 @@ func TestClient_RPC_ControllerCreateVolume(t *testing.T) {
 		},
 
 		{
-			Name: "handles success with capacity range and source",
+			Name: "handles success with capacity range, source, and topology",
 			CapacityRange: &CapacityRange{
 				RequiredBytes: 500,
 				LimitBytes:    1000,
@@ -782,6 +782,9 @@ func TestClient_RPC_ControllerCreateVolume(t *testing.T) {
 								SnapshotId: "snap-12345",
 							},
 						},
+					},
+					AccessibleTopology: []*csipbv1.Topology{
+						{Segments: map[string]string{"rack": "R1"}},
 					},
 				},
 			},
@@ -801,10 +804,19 @@ func TestClient_RPC_ControllerCreateVolume(t *testing.T) {
 						AccessMode: VolumeAccessModeMultiNodeMultiWriter,
 					},
 				},
-				Parameters:                map[string]string{},
-				Secrets:                   structs.CSISecrets{},
-				ContentSource:             tc.ContentSource,
-				AccessibilityRequirements: &TopologyRequirement{},
+				Parameters:    map[string]string{},
+				Secrets:       structs.CSISecrets{},
+				ContentSource: tc.ContentSource,
+				AccessibilityRequirements: &TopologyRequirement{
+					Requisite: []*Topology{
+						{
+							Segments: map[string]string{"rack": "R1"},
+						},
+						{
+							Segments: map[string]string{"rack": "R2"},
+						},
+					},
+				},
 			}
 
 			cc.NextCreateVolumeResponse = tc.Response
@@ -827,6 +839,14 @@ func TestClient_RPC_ControllerCreateVolume(t *testing.T) {
 				require.Equal(t, tc.ContentSource.CloneID, resp.Volume.ContentSource.CloneID)
 				require.Equal(t, tc.ContentSource.SnapshotID, resp.Volume.ContentSource.SnapshotID)
 			}
+			if tc.Response != nil && tc.Response.Volume != nil {
+				require.Len(t, resp.Volume.AccessibleTopology, 1)
+				require.Equal(t,
+					req.AccessibilityRequirements.Requisite[0].Segments,
+					resp.Volume.AccessibleTopology[0].Segments,
+				)
+			}
+
 		})
 	}
 }
@@ -1288,7 +1308,6 @@ func TestClient_RPC_NodePublishVolume(t *testing.T) {
 }
 func TestClient_RPC_NodeUnpublishVolume(t *testing.T) {
 	ci.Parallel(t)
-	
 	cases := []struct {
 		Name        string
 		ExternalID  string

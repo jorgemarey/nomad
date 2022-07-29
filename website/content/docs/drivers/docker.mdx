@@ -22,7 +22,7 @@ task "webservice" {
   driver = "docker"
 
   config {
-    image = "redis:3.2"
+    image = "redis:7"
     labels {
       group = "webservice-cache"
     }
@@ -42,7 +42,7 @@ The `docker` driver supports the following configuration in the job spec. Only
 
   ```hcl
   config {
-    image = "https://hub.docker.internal/redis:3.2"
+    image = "https://hub.docker.internal/redis:7"
   }
   ```
 
@@ -199,11 +199,16 @@ config {
   ```
 
 - `load` - (Optional) Load an image from a `tar` archive file instead of from a
-  remote repository. Equivalent to the `docker load -i <filename>` command.
+  remote repository. Equivalent to the `docker load -i <filename>` command. If
+  you're using an `artifact` block to fetch the archive file, you'll need to
+  ensure that Nomad keeps the archive intact after download.
 
   ```hcl
   artifact {
     source = "http://path.to/redis.tar"
+    options {
+      archive = false
+    }
   }
   config {
     load = "redis.tar"
@@ -268,6 +273,12 @@ config {
   the Envoy sidecar proxy. You must also set any DNS options in the `network.dns`
   block and not in the task configuration.
 
+  If you are in the process of migrating from the default Docker network to
+  group-wide bridge networking, you may encounter issues preventing your
+  containers from reaching networks outside of the bridge interface on systems with
+  firewalld enabled. This behavior is often caused by the CNI plugin not registering the group
+  network as trusted and can be resolved as described in the [network stanza] documentation.
+
 - `pid_mode` - (Optional) `host` or not set (default). Set to `host` to share
   the PID namespace with the host. Note that this also requires the Nomad agent
   to be configured to allow privileged containers.
@@ -323,9 +334,9 @@ config {
   working directory] is prevented by default and limits volumes to directories
   that exist inside the allocation working directory. You can allow mounting
   host paths outside of the [allocation working directory] on individual clients
-  by setting the `docker.volumes.enabled` option to `true` in the client's
-  configuration. We recommend using [`mounts`](#mounts) if you wish to have more
-  control over volume definitions.
+  by setting the `docker.volumes.enabled` option to `true` in the
+  [client's configuration](#client-requirements). We recommend using
+  [`mount`](#mount) if you wish to have more control over volume definitions.
 
   ```hcl
   config {
@@ -750,7 +761,7 @@ through Nomad plugins or dynamic job configuration.
 
 ## Capabilities
 
-The `docker` driver implements the following [capabilities](/docs/internals/plugins/task-drivers#capabilities-capabilities-error).
+The `docker` driver implements the following [capabilities](/docs/concepts/plugins/task-drivers#capabilities-capabilities-error).
 
 | Feature              | Implementation    |
 | -------------------- | ----------------- |
@@ -932,7 +943,7 @@ host system.
   - `image_delay` - A time duration, as [defined
     here](https://golang.org/pkg/time/#ParseDuration), that defaults to `3m`.
     The delay controls how long Nomad will wait between an image being unused
-    and deleting it. If a tasks is received that uses the same image within
+    and deleting it. If a task is received that uses the same image within
     the delay, the image will be reused.
 
   - `container` - Defaults to `true`. This option can be used to disable Nomad
@@ -970,7 +981,8 @@ host system.
 
 - `infra_image` - This is the Docker image to use when creating the parent
   container necessary when sharing network namespaces between tasks. Defaults to
-  `gcr.io/google_containers/pause-<goarch>:3.1`.
+  `gcr.io/google_containers/pause-<goarch>:3.1`. The image will only be pulled from
+  the container registry if its tag is `latest` or the image doesn't yet exist locally.
 
 - `infra_image_pull_timeout` - A time duration that controls how long Nomad will
   wait before cancelling an in-progress pull of the Docker image as specified in
@@ -1086,5 +1098,6 @@ Windows is relatively new and rapidly evolving you may want to consult the
 [docker_caps]: https://docs.docker.com/engine/reference/run/#runtime-privilege-and-linux-capabilities
 [allow_caps]: /docs/drivers/docker#allow_caps
 [Connect]: /docs/job-specification/connect
-[`bridge`]: docs/job-specification/network#bridge
+[`bridge`]: /docs/job-specification/network#bridge
+[network stanza]: /docs/job-specification/network#bridge-mode
 [`pids_limit`]: /docs/drivers/docker#pids_limit

@@ -2,12 +2,13 @@ import { Factory } from 'ember-cli-mirage';
 import faker from 'nomad-ui/mirage/faker';
 import { pickOne } from '../utils';
 import { STORAGE_PROVIDERS } from '../common';
+import { dasherize } from '@ember/string';
 
 const ACCESS_MODES = ['multi-node-single-writer'];
 const ATTACHMENT_MODES = ['file-system'];
 
 export default Factory.extend({
-  id: i => `${faker.hacker.noun().dasherize()}-${i}`.toLowerCase(),
+  id: i => `${dasherize(faker.hacker.noun())}-${i}`.toLowerCase(),
   name() {
     return this.id;
   },
@@ -36,26 +37,30 @@ export default Factory.extend({
 
   afterCreate(volume, server) {
     if (!volume.namespaceId) {
-      const namespace = server.db.namespaces.length ? pickOne(server.db.namespaces).id : null;
+      const namespace = server.db.namespaces.length
+        ? pickOne(server.db.namespaces).id
+        : null;
       volume.update({
         namespace,
-        namespaceId: namespace,
+        namespaceId: namespace
       });
     } else {
       volume.update({
-        namespace: volume.namespaceId,
+        namespace: volume.namespaceId
       });
     }
 
     if (!volume.plugin) {
-      const plugin = server.db.csiPlugins.length ? pickOne(server.db.csiPlugins) : null;
+      const plugin = server.db.csiPlugins.length
+        ? pickOne(server.db.csiPlugins)
+        : null;
       volume.update({
-        PluginId: plugin && plugin.id,
+        PluginId: plugin && plugin.id
       });
     } else {
       volume.update({
-        PluginId: volume.plugin.id,
+        PluginId: volume.plugin.id
       });
     }
-  },
+  }
 });

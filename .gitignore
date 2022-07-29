@@ -74,8 +74,10 @@ GNUMakefile.local
 
 rkt-*
 
+# Common editor config
 ./idea
 *.iml
+.vscode
 
 # UI rules
 
@@ -89,6 +91,7 @@ rkt-*
 
 # misc
 /ui/.sass-cache
+/ui/.eslintcache
 /ui/.storybook/preview-head.html
 /ui/connect.lock
 /ui/coverage/*

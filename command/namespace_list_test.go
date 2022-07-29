@@ -1,6 +1,3 @@
-//go:build ent
-// +build ent
-
 package command
 
 import (
@@ -11,10 +8,7 @@ import (
 	"github.com/mitchellh/cli"
 )
 
-func TestNamespaceListCommand_Implements(t *testing.T) {
-	t.Parallel()
-	var _ cli.Command = &NamespaceListCommand{}
-}
+var _ cli.Command = (*NamespaceListCommand)(nil)
 
 func TestNamespaceListCommand_Fails(t *testing.T) {
 	ci.Parallel(t)

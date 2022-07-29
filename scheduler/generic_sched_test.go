@@ -6268,7 +6268,7 @@ func TestServiceSched_CSIVolumesPerAlloc(t *testing.T) {
 	// once its been fixed
 	shared.AccessMode = structs.CSIVolumeAccessModeMultiNodeReader
 
-	require.NoError(h.State.CSIVolumeRegister(
+	require.NoError(h.State.UpsertCSIVolume(
 		h.NextIndex(), []*structs.CSIVolume{shared, vol0, vol1, vol2}))
 
 	// Create a job that uses both
@@ -6353,7 +6353,7 @@ func TestServiceSched_CSIVolumesPerAlloc(t *testing.T) {
 	require.NotEqual("", h.Evals[1].BlockedEval,
 		"expected a blocked eval to be spawned")
 	require.Equal(2, h.Evals[1].QueuedAllocations["web"], "expected 2 queued allocs")
-	require.Equal(1, h.Evals[1].FailedTGAllocs["web"].
+	require.Equal(5, h.Evals[1].FailedTGAllocs["web"].
 		ConstraintFiltered["missing CSI Volume volume-unique[3]"])
 
 	// Upsert 2 more per-alloc volumes
@@ -6361,7 +6361,7 @@ func TestServiceSched_CSIVolumesPerAlloc(t *testing.T) {
 	vol4.ID = "volume-unique[3]"
 	vol5 := vol0.Copy()
 	vol5.ID = "volume-unique[4]"
-	require.NoError(h.State.CSIVolumeRegister(
+	require.NoError(h.State.UpsertCSIVolume(
 		h.NextIndex(), []*structs.CSIVolume{vol4, vol5}))
 
 	// Process again with failure fixed. It should create a new plan
@@ -6394,6 +6394,93 @@ func TestServiceSched_CSIVolumesPerAlloc(t *testing.T) {
 		require.False(ok, "allocations should be scheduled to separate nodes")
 		seen[alloc.NodeID] = struct{}{}
 	}
+
+}
+
+func TestServiceSched_CSITopology(t *testing.T) {
+	ci.Parallel(t)
+	h := NewHarness(t)
+
+	zones := []string{"zone-0", "zone-1", "zone-2", "zone-3"}
+
+	// Create some nodes, each running a CSI plugin with topology for
+	// a different "zone"
+	for i := 0; i < 12; i++ {
+		node := mock.Node()
+		node.Datacenter = zones[i%4]
+		node.CSINodePlugins = map[string]*structs.CSIInfo{
+			"test-plugin-" + zones[i%4]: {
+				PluginID: "test-plugin-" + zones[i%4],
+				Healthy:  true,
+				NodeInfo: &structs.CSINodeInfo{
+					MaxVolumes: 3,
+					AccessibleTopology: &structs.CSITopology{
+						Segments: map[string]string{"zone": zones[i%4]}},
+				},
+			},
+		}
+		require.NoError(t, h.State.UpsertNode(
+			structs.MsgTypeTestSetup, h.NextIndex(), node))
+	}
+
+	// create 2 per-alloc volumes for those zones
+	vol0 := structs.NewCSIVolume("myvolume[0]", 0)
+	vol0.PluginID = "test-plugin-zone-0"
+	vol0.Namespace = structs.DefaultNamespace
+	vol0.AccessMode = structs.CSIVolumeAccessModeSingleNodeWriter
+	vol0.AttachmentMode = structs.CSIVolumeAttachmentModeFilesystem
+	vol0.RequestedTopologies = &structs.CSITopologyRequest{
+		Required: []*structs.CSITopology{{
+			Segments: map[string]string{"zone": "zone-0"},
+		}},
+	}
+
+	vol1 := vol0.Copy()
+	vol1.ID = "myvolume[1]"
+	vol1.PluginID = "test-plugin-zone-1"
+	vol1.RequestedTopologies.Required[0].Segments["zone"] = "zone-1"
+
+	require.NoError(t, h.State.UpsertCSIVolume(
+		h.NextIndex(), []*structs.CSIVolume{vol0, vol1}))
+
+	// Create a job that uses those volumes
+	job := mock.Job()
+	job.Datacenters = zones
+	job.TaskGroups[0].Count = 2
+	job.TaskGroups[0].Volumes = map[string]*structs.VolumeRequest{
+		"myvolume": {
+			Type:     "csi",
+			Name:     "unique",
+			Source:   "myvolume",
+			PerAlloc: true,
+		},
+	}
+
+	require.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), job))
+
+	// Create a mock evaluation to register the job
+	eval := &structs.Evaluation{
+		Namespace:   structs.DefaultNamespace,
+		ID:          uuid.Generate(),
+		Priority:    job.Priority,
+		TriggeredBy: structs.EvalTriggerJobRegister,
+		JobID:       job.ID,
+		Status:      structs.EvalStatusPending,
+	}
+
+	require.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup,
+		h.NextIndex(), []*structs.Evaluation{eval}))
+
+	// Process the evaluation and expect a single plan without annotations
+	err := h.Process(NewServiceScheduler, eval)
+	require.NoError(t, err)
+	require.Len(t, h.Plans, 1, "expected one plan")
+	require.Nil(t, h.Plans[0].Annotations, "expected no annotations")
+
+	// Expect the eval has not spawned a blocked eval
+	require.Equal(t, len(h.CreateEvals), 0)
+	require.Equal(t, "", h.Evals[0].BlockedEval, "did not expect a blocked eval")
+	require.Equal(t, structs.EvalStatusComplete, h.Evals[0].Status)
 
 }
 
@@ -6513,4 +6600,116 @@ func TestPropagateTaskState(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Tests that a client disconnect generates attribute updates and follow up evals.
+func TestServiceSched_Client_Disconnect_Creates_Updates_and_Evals(t *testing.T) {
+	h := NewHarness(t)
+	count := 1
+	maxClientDisconnect := 10 * time.Minute
+
+	disconnectedNode, job, unknownAllocs := initNodeAndAllocs(t, h, count, maxClientDisconnect,
+		structs.NodeStatusReady, structs.AllocClientStatusRunning)
+
+	// Now disconnect the node
+	disconnectedNode.Status = structs.NodeStatusDisconnected
+	require.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), disconnectedNode))
+
+	// Create an evaluation triggered by the disconnect
+	evals := []*structs.Evaluation{{
+		Namespace:   structs.DefaultNamespace,
+		ID:          uuid.Generate(),
+		Priority:    50,
+		TriggeredBy: structs.EvalTriggerNodeUpdate,
+		JobID:       job.ID,
+		NodeID:      disconnectedNode.ID,
+		Status:      structs.EvalStatusPending,
+	}}
+	nodeStatusUpdateEval := evals[0]
+	require.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), evals))
+
+	// Process the evaluation
+	err := h.Process(NewServiceScheduler, nodeStatusUpdateEval)
+	require.NoError(t, err)
+	require.Equal(t, structs.EvalStatusComplete, h.Evals[0].Status)
+	require.Len(t, h.Plans, 1, "plan")
+
+	// One followup delayed eval created
+	require.Len(t, h.CreateEvals, 1)
+	followUpEval := h.CreateEvals[0]
+	require.Equal(t, nodeStatusUpdateEval.ID, followUpEval.PreviousEval)
+	require.Equal(t, "pending", followUpEval.Status)
+	require.NotEmpty(t, followUpEval.WaitUntil)
+
+	// Insert eval in the state store
+	testutil.WaitForResult(func() (bool, error) {
+		found, err := h.State.EvalByID(nil, followUpEval.ID)
+		if err != nil {
+			return false, err
+		}
+		if found == nil {
+			return false, nil
+		}
+
+		require.Equal(t, nodeStatusUpdateEval.ID, found.PreviousEval)
+		require.Equal(t, "pending", found.Status)
+		require.NotEmpty(t, found.WaitUntil)
+
+		return true, nil
+	}, func(err error) {
+		require.NoError(t, err)
+	})
+
+	// Validate that the ClientStatus updates are part of the plan.
+	require.Len(t, h.Plans[0].NodeAllocation[disconnectedNode.ID], count)
+	// Pending update should have unknown status.
+	for _, nodeAlloc := range h.Plans[0].NodeAllocation[disconnectedNode.ID] {
+		require.Equal(t, nodeAlloc.ClientStatus, structs.AllocClientStatusUnknown)
+	}
+
+	// Simulate that NodeAllocation got processed.
+	err = h.State.UpsertAllocs(structs.MsgTypeTestSetup, h.NextIndex(), h.Plans[0].NodeAllocation[disconnectedNode.ID])
+	require.NoError(t, err, "plan.NodeUpdate")
+
+	// Validate that the StateStore Upsert applied the ClientStatus we specified.
+	for _, alloc := range unknownAllocs {
+		alloc, err = h.State.AllocByID(nil, alloc.ID)
+		require.NoError(t, err)
+		require.Equal(t, alloc.ClientStatus, structs.AllocClientStatusUnknown)
+
+		// Allocations have been transitioned to unknown
+		require.Equal(t, structs.AllocDesiredStatusRun, alloc.DesiredStatus)
+		require.Equal(t, structs.AllocClientStatusUnknown, alloc.ClientStatus)
+	}
+}
+
+func initNodeAndAllocs(t *testing.T, h *Harness, allocCount int,
+	maxClientDisconnect time.Duration, nodeStatus, clientStatus string) (*structs.Node, *structs.Job, []*structs.Allocation) {
+	// Node, which is ready
+	node := mock.Node()
+	node.Status = nodeStatus
+	require.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
+
+	// Job with allocations and max_client_disconnect
+	job := mock.Job()
+	job.TaskGroups[0].Count = allocCount
+	job.TaskGroups[0].MaxClientDisconnect = &maxClientDisconnect
+	require.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), job))
+
+	allocs := make([]*structs.Allocation, allocCount)
+	for i := 0; i < allocCount; i++ {
+		// Alloc for the running group
+		alloc := mock.Alloc()
+		alloc.Job = job
+		alloc.JobID = job.ID
+		alloc.NodeID = node.ID
+		alloc.Name = fmt.Sprintf("my-job.web[%d]", i)
+		alloc.DesiredStatus = structs.AllocDesiredStatusRun
+		alloc.ClientStatus = clientStatus
+
+		allocs[i] = alloc
+	}
+
+	require.NoError(t, h.State.UpsertAllocs(structs.MsgTypeTestSetup, h.NextIndex(), allocs))
+	return node, job, allocs
 }

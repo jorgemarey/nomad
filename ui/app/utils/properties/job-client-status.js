@@ -9,6 +9,7 @@ const STATUS = [
   'degraded',
   'failed',
   'lost',
+  'unknown'
 ];
 
 // An Ember.Computed property that computes the aggregated status of a job in a
@@ -45,7 +46,7 @@ export default function jobClientStatus(nodesKey, jobKey) {
       const result = {
         byNode: {},
         byStatus: {},
-        totalNodes: filteredNodes.length,
+        totalNodes: filteredNodes.length
       };
       filteredNodes.forEach(n => {
         const status = jobStatus(allocsByNodeID[n.id], job.taskGroups.length);
@@ -67,7 +68,7 @@ function allQueued(nodes) {
   return {
     byNode: Object.fromEntries(nodeIDs.map(id => [id, 'queued'])),
     byStatus: canonicalizeStatus({ queued: nodeIDs }),
-    totalNodes: nodes.length,
+    totalNodes: nodes.length
   };
 }
 
@@ -135,6 +136,10 @@ function jobStatus(allocs, expected) {
 
   if (summary['running'] > 0) {
     return 'running';
+  }
+
+  if (summary['unknown'] > 0) {
+    return 'unknown';
   }
 
   return 'starting';

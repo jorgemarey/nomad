@@ -25,6 +25,8 @@ import (
 	cinterfaces "github.com/hashicorp/nomad/client/interfaces"
 	"github.com/hashicorp/nomad/client/pluginmanager/csimanager"
 	"github.com/hashicorp/nomad/client/pluginmanager/drivermanager"
+	"github.com/hashicorp/nomad/client/serviceregistration"
+	"github.com/hashicorp/nomad/client/serviceregistration/wrapper"
 	cstate "github.com/hashicorp/nomad/client/state"
 	cstructs "github.com/hashicorp/nomad/client/structs"
 	"github.com/hashicorp/nomad/client/taskenv"
@@ -166,7 +168,7 @@ type TaskRunner struct {
 
 	// consulClient is the client used by the consul service hook for
 	// registering services and checks
-	consulServiceClient consul.ConsulServiceAPI
+	consulServiceClient serviceregistration.Handler
 
 	// consulProxiesClient is the client used by the envoy version hook for
 	// asking consul what version of envoy nomad should inject into the connect
@@ -239,6 +241,10 @@ type TaskRunner struct {
 
 	allocHookResources *cstructs.AllocHookResources
 
+	// serviceRegWrapper is the handler wrapper that is used by service hooks
+	// to perform service and check registration and deregistration.
+	serviceRegWrapper *wrapper.HandlerWrapper
+
 	// getter is an interface for retrieving artifacts.
 	getter cinterfaces.ArtifactGetter
 }
@@ -251,7 +257,7 @@ type Config struct {
 	Logger       log.Logger
 
 	// Consul is the client to use for managing Consul service registrations
-	Consul consul.ConsulServiceAPI
+	Consul serviceregistration.Handler
 
 	// ConsulProxies is the client to use for looking up supported envoy versions
 	// from Consul.
@@ -302,6 +308,10 @@ type Config struct {
 
 	// ShutdownDelayCancelFn should only be used in testing.
 	ShutdownDelayCancelFn context.CancelFunc
+
+	// ServiceRegWrapper is the handler wrapper that is used by service hooks
+	// to perform service and check registration and deregistration.
+	ServiceRegWrapper *wrapper.HandlerWrapper
 
 	// Getter is an interface for retrieving artifacts.
 	Getter cinterfaces.ArtifactGetter
@@ -362,6 +372,7 @@ func NewTaskRunner(config *Config) (*TaskRunner, error) {
 		startConditionMetCtx:   config.StartConditionMetCtx,
 		shutdownDelayCtx:       config.ShutdownDelayCtx,
 		shutdownDelayCancelFn:  config.ShutdownDelayCancelFn,
+		serviceRegWrapper:      config.ServiceRegWrapper,
 		getter:                 config.Getter,
 	}
 
@@ -779,6 +790,7 @@ func (tr *TaskRunner) runDriver() error {
 
 	taskConfig := tr.buildTaskConfig()
 	if tr.cpusetCgroupPathGetter != nil {
+		tr.logger.Trace("waiting for cgroup to exist for", "allocID", tr.allocID, "task", tr.task)
 		cpusetCgroupPath, err := tr.cpusetCgroupPathGetter(tr.killCtx)
 		if err != nil {
 			return err
@@ -871,7 +883,7 @@ func (tr *TaskRunner) runDriver() error {
 	}
 	tr.stateLock.Unlock()
 
-	tr.setDriverHandle(NewDriverHandle(tr.driver, taskConfig.ID, tr.Task(), net))
+	tr.setDriverHandle(NewDriverHandle(tr.driver, taskConfig.ID, tr.Task(), tr.clientConfig.MaxKillTimeout, net))
 
 	// Emit an event that we started
 	tr.UpdateState(structs.TaskStateRunning, structs.NewTaskEvent(structs.TaskStarted))
@@ -1037,10 +1049,11 @@ func (tr *TaskRunner) buildTaskConfig() *drivers.TaskConfig {
 	if alloc.AllocatedResources != nil && len(alloc.AllocatedResources.Shared.Networks) > 0 {
 		allocDNS := alloc.AllocatedResources.Shared.Networks[0].DNS
 		if allocDNS != nil {
+			interpolatedNetworks := taskenv.InterpolateNetworks(env, alloc.AllocatedResources.Shared.Networks)
 			dns = &drivers.DNSConfig{
-				Servers:  allocDNS.Servers,
-				Searches: allocDNS.Searches,
-				Options:  allocDNS.Options,
+				Servers:  interpolatedNetworks[0].DNS.Servers,
+				Searches: interpolatedNetworks[0].DNS.Searches,
+				Options:  interpolatedNetworks[0].DNS.Options,
 			}
 		}
 	}
@@ -1169,7 +1182,7 @@ func (tr *TaskRunner) restoreHandle(taskHandle *drivers.TaskHandle, net *drivers
 	}
 
 	// Update driver handle on task runner
-	tr.setDriverHandle(NewDriverHandle(tr.driver, taskHandle.Config.ID, tr.Task(), net))
+	tr.setDriverHandle(NewDriverHandle(tr.driver, taskHandle.Config.ID, tr.Task(), tr.clientConfig.MaxKillTimeout, net))
 	return true
 }
 

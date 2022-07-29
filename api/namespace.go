@@ -58,7 +58,7 @@ func (n *Namespaces) Register(namespace *Namespace, q *WriteOptions) (*WriteMeta
 
 // Delete is used to delete a namespace
 func (n *Namespaces) Delete(namespace string, q *WriteOptions) (*WriteMeta, error) {
-	wm, err := n.client.delete(fmt.Sprintf("/v1/namespace/%s", namespace), nil, q)
+	wm, err := n.client.delete(fmt.Sprintf("/v1/namespace/%s", namespace), nil, nil, q)
 	if err != nil {
 		return nil, err
 	}
@@ -67,11 +67,18 @@ func (n *Namespaces) Delete(namespace string, q *WriteOptions) (*WriteMeta, erro
 
 // Namespace is used to serialize a namespace.
 type Namespace struct {
-	Name        string
-	Description string
-	Quota       string
-	CreateIndex uint64
-	ModifyIndex uint64
+	Name         string
+	Description  string
+	Quota        string
+	Capabilities *NamespaceCapabilities `hcl:"capabilities,block"`
+	Meta         map[string]string
+	CreateIndex  uint64
+	ModifyIndex  uint64
+}
+
+type NamespaceCapabilities struct {
+	EnabledTaskDrivers  []string `hcl:"enabled_task_drivers"`
+	DisabledTaskDrivers []string `hcl:"disabled_task_drivers"`
 }
 
 // NamespaceIndexSort is a wrapper to sort Namespaces by CreateIndex. We

@@ -16,8 +16,8 @@ module('Integration | Component | job-client-status-bar', function(hooks) {
     onSliceClick: sinon.spy(),
     job: {
       namespace: {
-        get: () => 'my-namespace',
-      },
+        get: () => 'my-namespace'
+      }
     },
     jobClientStatus: {
       byStatus: {
@@ -29,9 +29,10 @@ module('Integration | Component | job-client-status-bar', function(hooks) {
         failed: [],
         lost: [],
         notScheduled: [],
-      },
+        unknown: []
+      }
     },
-    isNarrow: true,
+    isNarrow: true
   });
 
   const commonTemplate = hbs`
@@ -43,6 +44,8 @@ module('Integration | Component | job-client-status-bar', function(hooks) {
     />`;
 
   test('it renders', async function(assert) {
+    assert.expect(2);
+
     const props = commonProperties();
     this.setProperties(props);
     await render(commonTemplate);
@@ -67,8 +70,12 @@ module('Integration | Component | job-client-status-bar', function(hooks) {
       ...props,
       jobClientStatus: {
         ...props.jobClientStatus,
-        byStatus: { ...props.jobClientStatus.byStatus, starting: [], running: ['someNodeId'] },
-      },
+        byStatus: {
+          ...props.jobClientStatus.byStatus,
+          starting: [],
+          running: ['someNodeId']
+        }
+      }
     };
     this.setProperties(newProps);
     await JobClientStatusBar.visitSlice('running');

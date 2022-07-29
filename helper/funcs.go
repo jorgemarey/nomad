@@ -83,7 +83,12 @@ func Int8ToPtr(i int8) *int8 {
 	return &i
 }
 
-// Int64ToPtr returns the pointer to an int
+// Int32ToPtr returns the pointer to an int32
+func Int32ToPtr(i int32) *int32 {
+	return &i
+}
+
+// Int64ToPtr returns the pointer to an int64
 func Int64ToPtr(i int64) *int64 {
 	return &i
 }
@@ -164,6 +169,14 @@ func SliceStringToSet(s []string) map[string]struct{} {
 		m[k] = struct{}{}
 	}
 	return m
+}
+
+func SetToSliceString(set map[string]struct{}) []string {
+	flattened := make([]string, 0, len(set))
+	for x := range set {
+		flattened = append(flattened, x)
+	}
+	return flattened
 }
 
 // SliceStringIsSubset returns whether the smaller set of strings is a subset of
@@ -337,6 +350,29 @@ func CopyMapStringInterface(m map[string]interface{}) map[string]interface{} {
 		c[k] = v
 	}
 	return c
+}
+
+// MergeMapStringString will merge two maps into one. If a duplicate key exists
+// the value in the second map will replace the value in the first map. If both
+// maps are empty or nil this returns an empty map.
+func MergeMapStringString(m map[string]string, n map[string]string) map[string]string {
+	if len(m) == 0 && len(n) == 0 {
+		return map[string]string{}
+	}
+	if len(m) == 0 {
+		return n
+	}
+	if len(n) == 0 {
+		return m
+	}
+
+	result := CopyMapStringString(m)
+
+	for k, v := range n {
+		result[k] = v
+	}
+
+	return result
 }
 
 func CopyMapStringInt(m map[string]int) map[string]int {

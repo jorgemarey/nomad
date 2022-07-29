@@ -5,7 +5,9 @@ import JSONSerializer from '@ember-data/serializer/json';
 import { pluralize, singularize } from 'ember-inflector';
 import removeRecord from '../utils/remove-record';
 import { assign } from '@ember/polyfills';
-
+import classic from 'ember-classic-decorator';
+import { camelize, capitalize, dasherize } from '@ember/string';
+@classic
 export default class Application extends JSONSerializer {
   primaryKey = 'ID';
 
@@ -58,13 +60,11 @@ export default class Application extends JSONSerializer {
   separateNanos = null;
 
   keyForAttribute(attr) {
-    return attr.camelize().capitalize();
+    return capitalize(camelize(attr));
   }
 
   keyForRelationship(attr, relationshipType) {
-    const key = `${singularize(attr)
-      .camelize()
-      .capitalize()}ID`;
+    const key = `${capitalize(camelize(singularize(attr)))}ID`;
     return relationshipType === 'hasMany' ? pluralize(key) : key;
   }
 
@@ -72,7 +72,7 @@ export default class Application extends JSONSerializer {
   pushPayload(store, payload) {
     const documentHash = {
       data: [],
-      included: [],
+      included: []
     };
 
     Object.keys(payload).forEach(key => {
@@ -163,7 +163,9 @@ export default class Application extends JSONSerializer {
       .filter(record => get(record, 'id'))
       .filter(storeFilter)
       .forEach(old => {
-        const newRecord = newRecords.find(record => get(record, 'id') === get(old, 'id'));
+        const newRecord = newRecords.find(
+          record => get(record, 'id') === get(old, 'id')
+        );
         if (!newRecord) {
           removeRecord(store, old);
         } else {
@@ -173,6 +175,6 @@ export default class Application extends JSONSerializer {
   }
 
   modelNameFromPayloadKey(key) {
-    return singularize(key.dasherize());
+    return singularize(dasherize(key));
   }
 }

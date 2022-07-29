@@ -8,6 +8,7 @@ import RSVP from 'rsvp';
 @classic
 export default class OptimizeRoute extends Route {
   @service can;
+  @service store;
 
   beforeModel() {
     if (this.can.cannot('accept recommendation')) {
@@ -23,12 +24,12 @@ export default class OptimizeRoute extends Route {
       ...jobs
         .filter(job => job)
         .filterBy('isPartial')
-        .map(j => j.reload()),
+        .map(j => j.reload())
     ]);
 
     return {
       summaries: summaries.sortBy('submitTime').reverse(),
-      namespaces,
+      namespaces
     };
   }
 

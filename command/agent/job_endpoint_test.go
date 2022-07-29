@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -2248,6 +2249,114 @@ func TestJobs_NamespaceForJob(t *testing.T) {
 	}
 }
 
+func TestHTTPServer_jobServiceRegistrations(t *testing.T) {
+	ci.Parallel(t)
+
+	testCases := []struct {
+		testFn func(srv *TestAgent)
+		name   string
+	}{
+		{
+			testFn: func(s *TestAgent) {
+
+				// Grab the state, so we can manipulate it and test against it.
+				testState := s.Agent.server.State()
+
+				// Generate a job and upsert this.
+				job := mock.Job()
+				require.NoError(t, testState.UpsertJob(structs.MsgTypeTestSetup, 10, job))
+
+				// Generate a service registration, assigned the jobID to the
+				// mocked jobID, and upsert this.
+				serviceReg := mock.ServiceRegistrations()[0]
+				serviceReg.JobID = job.ID
+				require.NoError(t, testState.UpsertServiceRegistrations(
+					structs.MsgTypeTestSetup, 20, []*structs.ServiceRegistration{serviceReg}))
+
+				// Build the HTTP request.
+				path := fmt.Sprintf("/v1/job/%s/services", job.ID)
+				req, err := http.NewRequest(http.MethodGet, path, nil)
+				require.NoError(t, err)
+				respW := httptest.NewRecorder()
+
+				// Send the HTTP request.
+				obj, err := s.Server.JobSpecificRequest(respW, req)
+				require.NoError(t, err)
+
+				// Check the response.
+				require.Equal(t, "20", respW.Header().Get("X-Nomad-Index"))
+				require.ElementsMatch(t, []*structs.ServiceRegistration{serviceReg},
+					obj.([]*structs.ServiceRegistration))
+			},
+			name: "job has registrations",
+		},
+		{
+			testFn: func(s *TestAgent) {
+
+				// Grab the state, so we can manipulate it and test against it.
+				testState := s.Agent.server.State()
+
+				// Generate a job and upsert this.
+				job := mock.Job()
+				require.NoError(t, testState.UpsertJob(structs.MsgTypeTestSetup, 10, job))
+
+				// Build the HTTP request.
+				path := fmt.Sprintf("/v1/job/%s/services", job.ID)
+				req, err := http.NewRequest(http.MethodGet, path, nil)
+				require.NoError(t, err)
+				respW := httptest.NewRecorder()
+
+				// Send the HTTP request.
+				obj, err := s.Server.JobSpecificRequest(respW, req)
+				require.NoError(t, err)
+
+				// Check the response.
+				require.Equal(t, "1", respW.Header().Get("X-Nomad-Index"))
+				require.ElementsMatch(t, []*structs.ServiceRegistration{}, obj.([]*structs.ServiceRegistration))
+			},
+			name: "job without registrations",
+		},
+		{
+			testFn: func(s *TestAgent) {
+
+				// Build the HTTP request.
+				req, err := http.NewRequest(http.MethodGet, "/v1/job/example/services", nil)
+				require.NoError(t, err)
+				respW := httptest.NewRecorder()
+
+				// Send the HTTP request.
+				obj, err := s.Server.JobSpecificRequest(respW, req)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "job not found")
+				require.Nil(t, obj)
+			},
+			name: "job not found",
+		},
+		{
+			testFn: func(s *TestAgent) {
+
+				// Build the HTTP request.
+				req, err := http.NewRequest(http.MethodHead, "/v1/job/example/services", nil)
+				require.NoError(t, err)
+				respW := httptest.NewRecorder()
+
+				// Send the HTTP request.
+				obj, err := s.Server.JobSpecificRequest(respW, req)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "Invalid method")
+				require.Nil(t, obj)
+			},
+			name: "incorrect method",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			httpTest(t, nil, tc.testFn)
+		})
+	}
+}
+
 func TestJobs_ApiJobToStructsJob(t *testing.T) {
 	ci.Parallel(t)
 
@@ -2405,6 +2514,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						CanaryTags:        []string{"d", "e"},
 						EnableTagOverride: true,
 						PortLabel:         "1234",
+						Address:           "group.example.com",
 						Meta: map[string]string{
 							"servicemeta": "foobar",
 						},
@@ -2414,7 +2524,6 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						},
 						Checks: []api.ServiceCheck{
 							{
-								Id:            "hello",
 								Name:          "bar",
 								Type:          "http",
 								Command:       "foo",
@@ -2449,6 +2558,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						},
 					},
 				},
+				MaxClientDisconnect: helper.TimeToPtr(30 * time.Second),
 				Tasks: []*api.Task{
 					{
 						Name:   "task1",
@@ -2492,12 +2602,12 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						},
 						Services: []*api.Service{
 							{
-								Id:                "id",
 								Name:              "serviceA",
 								Tags:              []string{"1", "2"},
 								CanaryTags:        []string{"3", "4"},
 								EnableTagOverride: true,
 								PortLabel:         "foo",
+								Address:           "task.example.com",
 								Meta: map[string]string{
 									"servicemeta": "foobar",
 								},
@@ -2507,7 +2617,6 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 								},
 								Checks: []api.ServiceCheck{
 									{
-										Id:                     "hello",
 										Name:                   "bar",
 										Type:                   "http",
 										Command:                "foo",
@@ -2529,7 +2638,6 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 										},
 									},
 									{
-										Id:        "check2id",
 										Name:      "check2",
 										Type:      "tcp",
 										PortLabel: "foo",
@@ -2797,11 +2905,13 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 				Services: []*structs.Service{
 					{
 						Name:              "groupserviceA",
+						Provider:          "consul",
 						Tags:              []string{"a", "b"},
 						CanaryTags:        []string{"d", "e"},
 						EnableTagOverride: true,
 						PortLabel:         "1234",
 						AddressMode:       "auto",
+						Address:           "group.example.com",
 						Meta: map[string]string{
 							"servicemeta": "foobar",
 						},
@@ -2844,6 +2954,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						},
 					},
 				},
+				MaxClientDisconnect: helper.TimeToPtr(30 * time.Second),
 				Tasks: []*structs.Task{
 					{
 						Name:   "task1",
@@ -2888,11 +2999,13 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						Services: []*structs.Service{
 							{
 								Name:              "serviceA",
+								Provider:          "consul",
 								Tags:              []string{"1", "2"},
 								CanaryTags:        []string{"3", "4"},
 								EnableTagOverride: true,
 								PortLabel:         "foo",
 								AddressMode:       "auto",
+								Address:           "task.example.com",
 								Meta: map[string]string{
 									"servicemeta": "foobar",
 								},
@@ -3566,17 +3679,19 @@ func TestConversion_apiUpstreamsToStructs(t *testing.T) {
 	require.Nil(t, apiUpstreamsToStructs(nil))
 	require.Nil(t, apiUpstreamsToStructs(make([]*api.ConsulUpstream, 0)))
 	require.Equal(t, []structs.ConsulUpstream{{
-		DestinationName:  "upstream",
-		LocalBindPort:    8000,
-		Datacenter:       "dc2",
-		LocalBindAddress: "127.0.0.2",
-		MeshGateway:      &structs.ConsulMeshGateway{Mode: "local"},
+		DestinationName:      "upstream",
+		DestinationNamespace: "ns2",
+		LocalBindPort:        8000,
+		Datacenter:           "dc2",
+		LocalBindAddress:     "127.0.0.2",
+		MeshGateway:          &structs.ConsulMeshGateway{Mode: "local"},
 	}}, apiUpstreamsToStructs([]*api.ConsulUpstream{{
-		DestinationName:  "upstream",
-		LocalBindPort:    8000,
-		Datacenter:       "dc2",
-		LocalBindAddress: "127.0.0.2",
-		MeshGateway:      &api.ConsulMeshGateway{Mode: "local"},
+		DestinationName:      "upstream",
+		DestinationNamespace: "ns2",
+		LocalBindPort:        8000,
+		Datacenter:           "dc2",
+		LocalBindAddress:     "127.0.0.2",
+		MeshGateway:          &api.ConsulMeshGateway{Mode: "local"},
 	}}))
 }
 
@@ -3696,7 +3811,12 @@ func TestConversion_ApiConsulConnectToStructs(t *testing.T) {
 		require.Equal(t, &structs.ConsulConnect{
 			Gateway: &structs.ConsulGateway{
 				Ingress: &structs.ConsulIngressConfigEntry{
-					TLS: &structs.ConsulGatewayTLSConfig{Enabled: true},
+					TLS: &structs.ConsulGatewayTLSConfig{
+						Enabled:       true,
+						TLSMinVersion: "TLSv1_2",
+						TLSMaxVersion: "TLSv1_3",
+						CipherSuites:  []string{"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"},
+					},
 					Listeners: []*structs.ConsulIngressListener{{
 						Port:     1111,
 						Protocol: "http",
@@ -3711,7 +3831,12 @@ func TestConversion_ApiConsulConnectToStructs(t *testing.T) {
 			&api.ConsulConnect{
 				Gateway: &api.ConsulGateway{
 					Ingress: &api.ConsulIngressConfigEntry{
-						TLS: &api.ConsulGatewayTLSConfig{Enabled: true},
+						TLS: &api.ConsulGatewayTLSConfig{
+							Enabled:       true,
+							TLSMinVersion: "TLSv1_2",
+							TLSMaxVersion: "TLSv1_3",
+							CipherSuites:  []string{"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"},
+						},
 						Listeners: []*api.ConsulIngressListener{{
 							Port:     1111,
 							Protocol: "http",

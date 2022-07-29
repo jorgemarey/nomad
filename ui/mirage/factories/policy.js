@@ -6,7 +6,8 @@ export default Factory.extend({
   name() {
     return this.id;
   },
-  description: () => (faker.random.number(10) >= 2 ? faker.lorem.sentence() : null),
+  description: () =>
+    faker.random.number(10) >= 2 ? faker.lorem.sentence() : null,
   rules: `
 # Allow read only access to the default namespace
 namespace "default" {
@@ -16,4 +17,9 @@ namespace "default" {
 node {
     policy = "read"
 }`,
+  rulesJSON: () => ({
+    Node: {
+      Policy: 'read'
+    }
+  })
 });

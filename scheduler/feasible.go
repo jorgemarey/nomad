@@ -27,6 +27,7 @@ const (
 	FilterConstraintCSIVolumeGCdAllocationTemplate = "CSI volume %s has exhausted its available writer claims and is claimed by a garbage collected allocation %s; waiting for claim to be released"
 	FilterConstraintDrivers                        = "missing drivers"
 	FilterConstraintDevices                        = "missing devices"
+	FilterConstraintsCSIPluginTopology             = "did not meet topology requirement"
 )
 
 var (
@@ -122,7 +123,8 @@ func (iter *StaticIterator) SetNodes(nodes []*structs.Node) {
 // is applied in-place
 func NewRandomIterator(ctx Context, nodes []*structs.Node) *StaticIterator {
 	// shuffle with the Fisher-Yates algorithm
-	shuffleNodes(nodes)
+	idx, _ := ctx.State().LatestIndex()
+	shuffleNodes(ctx.Plan(), idx, nodes)
 
 	// Create a static iterator
 	return NewStaticIterator(ctx, nodes)
@@ -312,6 +314,15 @@ func (c *CSIVolumeChecker) isFeasible(n *structs.Node) (bool, string) {
 			return false, fmt.Sprintf(FilterConstraintCSIPluginMaxVolumesTemplate, vol.PluginID, n.ID)
 		}
 
+		// CSI spec: "If requisite is specified, the provisioned
+		// volume MUST be accessible from at least one of the
+		// requisite topologies."
+		if len(vol.Topologies) > 0 {
+			if !plugin.NodeInfo.AccessibleTopology.MatchFound(vol.Topologies) {
+				return false, FilterConstraintsCSIPluginTopology
+			}
+		}
+
 		if req.ReadOnly {
 			if !vol.ReadSchedulable() {
 				return false, fmt.Sprintf(FilterConstraintCSIVolumeNoReadTemplate, vol.ID)
@@ -406,13 +417,13 @@ func (c *NetworkChecker) hasHostNetworks(option *structs.Node) bool {
 			}
 			found := false
 			for _, net := range option.NodeResources.NodeNetworks {
-				if net.HasAlias(hostNetworkValue.(string)) {
+				if net.HasAlias(hostNetworkValue) {
 					found = true
 					break
 				}
 			}
 			if !found {
-				c.ctx.Metrics().FilterNode(option, fmt.Sprintf("missing host network %q for port %q", hostNetworkValue.(string), port.Label))
+				c.ctx.Metrics().FilterNode(option, fmt.Sprintf("missing host network %q for port %q", hostNetworkValue, port.Label))
 				return false
 			}
 		}
@@ -755,7 +766,7 @@ func (c *ConstraintChecker) meetsConstraint(constraint *structs.Constraint, opti
 }
 
 // resolveTarget is used to resolve the LTarget and RTarget of a Constraint.
-func resolveTarget(target string, node *structs.Node) (interface{}, bool) {
+func resolveTarget(target string, node *structs.Node) (string, bool) {
 	// If no prefix, this must be a literal value
 	if !strings.HasPrefix(target, "${") {
 		return target, true
@@ -786,7 +797,7 @@ func resolveTarget(target string, node *structs.Node) (interface{}, bool) {
 		return val, ok
 
 	default:
-		return nil, false
+		return "", false
 	}
 }
 
@@ -1124,9 +1135,8 @@ OUTER:
 			if w.available(option) {
 				return option
 			}
-			// We match the class but are temporarily unavailable, the eval
-			// should be blocked
-			return nil
+			// We match the class but are temporarily unavailable
+			continue OUTER
 		case EvalComputedClassEscaped:
 			tgEscaped = true
 		case EvalComputedClassUnknown:
