@@ -789,6 +789,7 @@ func TestNetworkIndex_AssignTaskNetwork_Dynamic_Contention_Old(t *testing.T) {
 
 func TestIntContains(t *testing.T) {
 	ci.Parallel(t)
+
 	l := []int{1, 2, 10, 20}
 	if isPortReserved(l, 50) {
 		t.Fatalf("bad")

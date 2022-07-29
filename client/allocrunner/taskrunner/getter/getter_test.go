@@ -116,51 +116,6 @@ func TestGetter_getClient(t *testing.T) {
 
 }
 
-func TestGetter_getClient(t *testing.T) {
-	getter := NewGetter(&clientconfig.ArtifactConfig{
-		HTTPReadTimeout: time.Minute,
-		HTTPMaxBytes:    100_000,
-		GCSTimeout:      1 * time.Minute,
-		GitTimeout:      2 * time.Minute,
-		HgTimeout:       3 * time.Minute,
-		S3Timeout:       4 * time.Minute,
-	})
-	client := getter.getClient("src", nil, gg.ClientModeAny, "dst")
-
-	t.Run("check symlink config", func(t *testing.T) {
-		require.True(t, client.DisableSymlinks)
-	})
-
-	t.Run("check http config", func(t *testing.T) {
-		require.True(t, client.Getters["http"].(*gg.HttpGetter).XTerraformGetDisabled)
-		require.Equal(t, time.Minute, client.Getters["http"].(*gg.HttpGetter).ReadTimeout)
-		require.Equal(t, int64(100_000), client.Getters["http"].(*gg.HttpGetter).MaxBytes)
-	})
-
-	t.Run("check https config", func(t *testing.T) {
-		require.True(t, client.Getters["https"].(*gg.HttpGetter).XTerraformGetDisabled)
-		require.Equal(t, time.Minute, client.Getters["https"].(*gg.HttpGetter).ReadTimeout)
-		require.Equal(t, int64(100_000), client.Getters["https"].(*gg.HttpGetter).MaxBytes)
-	})
-
-	t.Run("check gcs config", func(t *testing.T) {
-		require.Equal(t, client.Getters["gcs"].(*gg.GCSGetter).Timeout, 1*time.Minute)
-	})
-
-	t.Run("check git config", func(t *testing.T) {
-		require.Equal(t, client.Getters["git"].(*gg.GitGetter).Timeout, 2*time.Minute)
-	})
-
-	t.Run("check hg config", func(t *testing.T) {
-		require.Equal(t, client.Getters["hg"].(*gg.HgGetter).Timeout, 3*time.Minute)
-	})
-
-	t.Run("check s3 config", func(t *testing.T) {
-		require.Equal(t, client.Getters["s3"].(*gg.S3Getter).Timeout, 4*time.Minute)
-	})
-
-}
-
 func TestGetArtifact_getHeaders(t *testing.T) {
 	t.Run("nil", func(t *testing.T) {
 		require.Nil(t, getHeaders(noopTaskEnv(""), nil))

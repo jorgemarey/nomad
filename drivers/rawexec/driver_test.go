@@ -349,6 +349,7 @@ func TestRawExecDriver_Start_Wait_AllocDir(t *testing.T) {
 func TestRawExecDriver_Start_Kill_Wait_Cgroup(t *testing.T) {
 	ci.Parallel(t)
 	ctestutil.ExecCompatible(t)
+
 	require := require.New(t)
 	pidFile := "pid"
 

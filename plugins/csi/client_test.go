@@ -1308,6 +1308,7 @@ func TestClient_RPC_NodePublishVolume(t *testing.T) {
 }
 func TestClient_RPC_NodeUnpublishVolume(t *testing.T) {
 	ci.Parallel(t)
+
 	cases := []struct {
 		Name        string
 		ExternalID  string

@@ -1546,6 +1546,7 @@ func TestConsul_ServiceDeregistration_OutProbation(t *testing.T) {
 // before deregistering them
 func TestConsul_ServiceDeregistration_InProbation(t *testing.T) {
 	ci.Parallel(t)
+
 	ctx := setupFake(t)
 	require := require.New(t)
 

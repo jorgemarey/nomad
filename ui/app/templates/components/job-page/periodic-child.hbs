@@ -8,7 +8,11 @@
           <span class="term">
             Parent
           </span>
-          <LinkTo @route="jobs.job" @model={{@job.parent}} @query={{hash namespace=@job.parent.namespace.name}}>
+          <LinkTo
+            @route="jobs.job"
+            @model={{@job.parent}}
+            @query={{hash namespace=@job.parent.namespace.name}}
+          >
             {{@job.parent.name}}
           </LinkTo>
         </span>

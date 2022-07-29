@@ -158,7 +158,6 @@ func (c *VolumeSnapshotListCommand) Run(args []string) int {
 			Params:    map[string]string{},
 		},
 	}
-	pluginID = plugs[0].ID
 
 	resp, _, err := client.CSIVolumes().ListSnapshotsOpts(req)
 	if err != nil && !errors.Is(err, io.EOF) {

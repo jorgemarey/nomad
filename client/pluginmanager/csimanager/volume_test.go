@@ -269,6 +269,7 @@ func TestVolumeManager_publishVolume(t *testing.T) {
 	if !checkMountSupport() {
 		t.Skip("mount point detection not supported for this platform")
 	}
+
 	ci.Parallel(t)
 
 	cases := []struct {
