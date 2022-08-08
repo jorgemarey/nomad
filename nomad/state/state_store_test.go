@@ -1009,6 +1009,41 @@ func TestStateStore_DeleteNamespaces_NonTerminalJobs(t *testing.T) {
 	require.False(t, watchFired(ws))
 }
 
+func TestStateStore_DeleteNamespaces_CSIVolumes(t *testing.T) {
+	ci.Parallel(t)
+
+	state := testStateStore(t)
+
+	ns := mock.Namespace()
+	require.NoError(t, state.UpsertNamespaces(1000, []*structs.Namespace{ns}))
+
+	plugin := mock.CSIPlugin()
+	vol := mock.CSIVolume(plugin)
+	vol.Namespace = ns.Name
+
+	require.NoError(t, state.UpsertCSIVolume(1001, []*structs.CSIVolume{vol}))
+
+	// Create a watchset so we can test that delete fires the watch
+	ws := memdb.NewWatchSet()
+	_, err := state.NamespaceByName(ws, ns.Name)
+	require.NoError(t, err)
+
+	err = state.DeleteNamespaces(1002, []string{ns.Name})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "one CSI volume")
+	require.False(t, watchFired(ws))
+
+	ws = memdb.NewWatchSet()
+	out, err := state.NamespaceByName(ws, ns.Name)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	index, err := state.Index(TableNamespaces)
+	require.NoError(t, err)
+	require.EqualValues(t, 1000, index)
+	require.False(t, watchFired(ws))
+}
+
 func TestStateStore_Namespaces(t *testing.T) {
 	ci.Parallel(t)
 
@@ -8912,9 +8947,9 @@ func TestStateStore_OneTimeTokens(t *testing.T) {
 
 	// now verify expiration
 
-	getExpiredTokens := func() []*structs.OneTimeToken {
+	getExpiredTokens := func(now time.Time) []*structs.OneTimeToken {
 		txn := state.db.ReadTxn()
-		iter, err := state.oneTimeTokensExpiredTxn(txn, nil)
+		iter, err := state.oneTimeTokensExpiredTxn(txn, nil, now)
 		require.NoError(t, err)
 
 		results := []*structs.OneTimeToken{}
@@ -8930,7 +8965,7 @@ func TestStateStore_OneTimeTokens(t *testing.T) {
 		return results
 	}
 
-	results = getExpiredTokens()
+	results = getExpiredTokens(time.Now())
 	require.Len(t, results, 2)
 
 	// results aren't ordered
@@ -8942,10 +8977,10 @@ func TestStateStore_OneTimeTokens(t *testing.T) {
 
 	// clear the expired tokens and verify they're gone
 	index++
-	require.NoError(t,
-		state.ExpireOneTimeTokens(structs.MsgTypeTestSetup, index))
+	require.NoError(t, state.ExpireOneTimeTokens(
+		structs.MsgTypeTestSetup, index, time.Now()))
 
-	results = getExpiredTokens()
+	results = getExpiredTokens(time.Now())
 	require.Len(t, results, 0)
 
 	// query the unexpired token

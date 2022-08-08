@@ -441,6 +441,8 @@ func parseTemplates(result *[]*api.Template, list *ast.ObjectList) error {
 			"destination",
 			"left_delimiter",
 			"perms",
+			"uid",
+			"gid",
 			"right_delimiter",
 			"source",
 			"splay",
@@ -460,6 +462,8 @@ func parseTemplates(result *[]*api.Template, list *ast.ObjectList) error {
 			ChangeMode: stringToPtr("restart"),
 			Splay:      timeToPtr(5 * time.Second),
 			Perms:      stringToPtr("0644"),
+			Uid:        intToPtr(-1),
+			Gid:        intToPtr(-1),
 		}
 
 		dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{

@@ -11,7 +11,7 @@ import statsTrackerFrameMissingBehavior from './behaviors/stats-tracker-frame-mi
 
 import { settled } from '@ember/test-helpers';
 
-module('Unit | Util | AllocationStatsTracker', function() {
+module('Unit | Util | AllocationStatsTracker', function () {
   const refDate = Date.now() * 1000000;
   const makeDate = ts => new Date(ts / 1000000);
 
@@ -53,8 +53,9 @@ module('Unit | Util | AllocationStatsTracker', function() {
         TotalTicks: step + 100
       },
       MemoryStats: {
-        RSS: (step + 400) * 1024 * 1024
-      }
+        RSS: (step + 400) * 1024 * 1024,
+        Usage: (step + 400) * 1024 * 1024,
+      },
     },
     Tasks: {
       service: {
@@ -63,8 +64,9 @@ module('Unit | Util | AllocationStatsTracker', function() {
             TotalTicks: step + 50
           },
           MemoryStats: {
-            RSS: (step + 100) * 1024 * 1024
-          }
+            RSS: (step + 100) * 1024 * 1024,
+            Usage: (step + 100) * 1024 * 1024,
+          },
         },
         Timestamp: refDate + step
       },
@@ -74,8 +76,9 @@ module('Unit | Util | AllocationStatsTracker', function() {
             TotalTicks: step + 25
           },
           MemoryStats: {
-            RSS: (step + 50) * 1024 * 1024
-          }
+            RSS: (step + 50) * 1024 * 1024,
+            Usage: (step + 50) * 1024 * 1024,
+          },
         },
         Timestamp: refDate + step * 10
       },
@@ -85,8 +88,9 @@ module('Unit | Util | AllocationStatsTracker', function() {
             TotalTicks: step + 26
           },
           MemoryStats: {
-            RSS: (step + 51) * 1024 * 1024
-          }
+            RSS: (step + 51) * 1024 * 1024,
+            Usage: (step + 51) * 1024 * 1024,
+          },
         },
         Timestamp: refDate + step * 100
       }
@@ -94,7 +98,7 @@ module('Unit | Util | AllocationStatsTracker', function() {
     Timestamp: refDate + step * 1000
   });
 
-  test('the AllocationStatsTracker constructor expects a fetch definition and an allocation', async function(assert) {
+  test('the AllocationStatsTracker constructor expects a fetch definition and an allocation', async function (assert) {
     const tracker = AllocationStatsTracker.create();
     assert.throws(
       () => {
@@ -105,7 +109,7 @@ module('Unit | Util | AllocationStatsTracker', function() {
     );
   });
 
-  test('the url property is computed based off the allocation id', async function(assert) {
+  test('the url property is computed based off the allocation id', async function (assert) {
     const allocation = MockAllocation();
     const tracker = AllocationStatsTracker.create({ fetch, allocation });
 
@@ -116,7 +120,7 @@ module('Unit | Util | AllocationStatsTracker', function() {
     );
   });
 
-  test('reservedCPU and reservedMemory properties come from the allocation', async function(assert) {
+  test('reservedCPU and reservedMemory properties come from the allocation', async function (assert) {
     const allocation = MockAllocation();
     const tracker = AllocationStatsTracker.create({ fetch, allocation });
 
@@ -132,7 +136,7 @@ module('Unit | Util | AllocationStatsTracker', function() {
     );
   });
 
-  test('the tasks list comes from the allocation', async function(assert) {
+  test('the tasks list comes from the allocation', async function (assert) {
     assert.expect(7);
 
     const allocation = MockAllocation();
@@ -158,7 +162,7 @@ module('Unit | Util | AllocationStatsTracker', function() {
     });
   });
 
-  test('poll results in requesting the url and calling append with the resulting JSON', async function(assert) {
+  test('poll results in requesting the url and calling append with the resulting JSON', async function (assert) {
     const allocation = MockAllocation();
     const tracker = AllocationStatsTracker.create({
       fetch,
@@ -172,7 +176,7 @@ module('Unit | Util | AllocationStatsTracker', function() {
       }
     };
 
-    const server = new Pretender(function() {
+    const server = new Pretender(function () {
       this.get('/v1/client/allocation/:id/stats', () => [
         200,
         {},
@@ -198,7 +202,7 @@ module('Unit | Util | AllocationStatsTracker', function() {
     server.shutdown();
   });
 
-  test('append appropriately maps a data frame to the tracked stats for cpu and memory for the allocation as well as individual tasks', async function(assert) {
+  test('append appropriately maps a data frame to the tracked stats for cpu and memory for the allocation as well as individual tasks', async function (assert) {
     const allocation = MockAllocation();
     const tracker = AllocationStatsTracker.create({ fetch, allocation });
 
@@ -251,7 +255,6 @@ module('Unit | Util | AllocationStatsTracker', function() {
       ],
       'One frame of memory'
     );
-
     assert.deepEqual(
       tracker.get('tasks'),
       [
@@ -474,7 +477,7 @@ module('Unit | Util | AllocationStatsTracker', function() {
     );
   });
 
-  test('each stat list has maxLength equal to bufferSize', async function(assert) {
+  test('each stat list has maxLength equal to bufferSize', async function (assert) {
     assert.expect(16);
 
     const allocation = MockAllocation();
@@ -558,12 +561,12 @@ module('Unit | Util | AllocationStatsTracker', function() {
     );
   });
 
-  test('the stats computed property macro constructs an AllocationStatsTracker based on an allocationProp and a fetch definition', async function(assert) {
+  test('the stats computed property macro constructs an AllocationStatsTracker based on an allocationProp and a fetch definition', async function (assert) {
     const allocation = MockAllocation();
     const fetchSpy = sinon.spy();
 
     const SomeClass = EmberObject.extend({
-      stats: stats('alloc', function() {
+      stats: stats('alloc', function () {
         return () => fetchSpy(this);
       })
     });
@@ -585,7 +588,7 @@ module('Unit | Util | AllocationStatsTracker', function() {
     );
   });
 
-  test('changing the value of the allocationProp constructs a new AllocationStatsTracker', async function(assert) {
+  test('changing the value of the allocationProp constructs a new AllocationStatsTracker', async function (assert) {
     const alloc1 = MockAllocation();
     const alloc2 = MockAllocation();
     const SomeClass = EmberObject.extend({

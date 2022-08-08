@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	sconfig "github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/nomad/testutil"
 	"github.com/kr/pretty"
+	"github.com/shoenig/test/must"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -512,6 +514,8 @@ func TestTaskTemplateManager_Permissions(t *testing.T) {
 		DestPath:     file,
 		ChangeMode:   structs.TemplateChangeModeNoop,
 		Perms:        "777",
+		Uid:          503,
+		Gid:          20,
 	}
 
 	harness := newTestHarness(t, []*structs.Template{template}, false, false)
@@ -535,6 +539,13 @@ func TestTaskTemplateManager_Permissions(t *testing.T) {
 	if m := fi.Mode(); m != os.ModePerm {
 		t.Fatalf("Got mode %v; want %v", m, os.ModePerm)
 	}
+
+	sys := fi.Sys()
+	uid := int(sys.(*syscall.Stat_t).Uid)
+	gid := int(sys.(*syscall.Stat_t).Gid)
+
+	must.Eq(t, template.Uid, uid)
+	must.Eq(t, template.Gid, gid)
 }
 
 func TestTaskTemplateManager_Unblock_Static_NomadEnv(t *testing.T) {
@@ -1948,6 +1959,7 @@ func TestTaskTemplateManager_ClientTemplateConfig_Set(t *testing.T) {
 	clientConfig.TemplateConfig.Wait = waitConfig.Copy()
 	clientConfig.TemplateConfig.ConsulRetry = retryConfig.Copy()
 	clientConfig.TemplateConfig.VaultRetry = retryConfig.Copy()
+	clientConfig.TemplateConfig.NomadRetry = retryConfig.Copy()
 
 	alloc := mock.Alloc()
 	allocWithOverride := mock.Alloc()
@@ -1975,6 +1987,7 @@ func TestTaskTemplateManager_ClientTemplateConfig_Set(t *testing.T) {
 				Wait:               waitConfig.Copy(),
 				ConsulRetry:        retryConfig.Copy(),
 				VaultRetry:         retryConfig.Copy(),
+				NomadRetry:         retryConfig.Copy(),
 			},
 			&TaskTemplateManagerConfig{
 				ClientConfig: clientConfig,
@@ -1988,6 +2001,7 @@ func TestTaskTemplateManager_ClientTemplateConfig_Set(t *testing.T) {
 					Wait:               waitConfig.Copy(),
 					ConsulRetry:        retryConfig.Copy(),
 					VaultRetry:         retryConfig.Copy(),
+					NomadRetry:         retryConfig.Copy(),
 				},
 			},
 			&templateconfig.TemplateConfig{
@@ -2006,6 +2020,7 @@ func TestTaskTemplateManager_ClientTemplateConfig_Set(t *testing.T) {
 				Wait:               waitConfig.Copy(),
 				ConsulRetry:        retryConfig.Copy(),
 				VaultRetry:         retryConfig.Copy(),
+				NomadRetry:         retryConfig.Copy(),
 			},
 			&TaskTemplateManagerConfig{
 				ClientConfig: clientConfig,
@@ -2019,6 +2034,7 @@ func TestTaskTemplateManager_ClientTemplateConfig_Set(t *testing.T) {
 					Wait:               waitConfig.Copy(),
 					ConsulRetry:        retryConfig.Copy(),
 					VaultRetry:         retryConfig.Copy(),
+					NomadRetry:         retryConfig.Copy(),
 				},
 			},
 			&templateconfig.TemplateConfig{
@@ -2041,6 +2057,7 @@ func TestTaskTemplateManager_ClientTemplateConfig_Set(t *testing.T) {
 				},
 				ConsulRetry: retryConfig.Copy(),
 				VaultRetry:  retryConfig.Copy(),
+				NomadRetry:  retryConfig.Copy(),
 			},
 			&TaskTemplateManagerConfig{
 				ClientConfig: clientConfig,
@@ -2066,6 +2083,7 @@ func TestTaskTemplateManager_ClientTemplateConfig_Set(t *testing.T) {
 					},
 					ConsulRetry: retryConfig.Copy(),
 					VaultRetry:  retryConfig.Copy(),
+					NomadRetry:  retryConfig.Copy(),
 				},
 			},
 			&templateconfig.TemplateConfig{
@@ -2106,6 +2124,12 @@ func TestTaskTemplateManager_ClientTemplateConfig_Set(t *testing.T) {
 			require.Equal(t, *_case.ExpectedRunnerConfig.TemplateConfig.VaultRetry.Attempts, *runnerConfig.Vault.Retry.Attempts)
 			require.Equal(t, *_case.ExpectedRunnerConfig.TemplateConfig.VaultRetry.Backoff, *runnerConfig.Vault.Retry.Backoff)
 			require.Equal(t, *_case.ExpectedRunnerConfig.TemplateConfig.VaultRetry.MaxBackoff, *runnerConfig.Vault.Retry.MaxBackoff)
+			// Nomad Retry
+			require.NotNil(t, runnerConfig.Nomad)
+			require.NotNil(t, runnerConfig.Nomad.Retry)
+			require.Equal(t, *_case.ExpectedRunnerConfig.TemplateConfig.NomadRetry.Attempts, *runnerConfig.Nomad.Retry.Attempts)
+			require.Equal(t, *_case.ExpectedRunnerConfig.TemplateConfig.NomadRetry.Backoff, *runnerConfig.Nomad.Retry.Backoff)
+			require.Equal(t, *_case.ExpectedRunnerConfig.TemplateConfig.NomadRetry.MaxBackoff, *runnerConfig.Nomad.Retry.MaxBackoff)
 
 			// Test that wait_bounds are enforced
 			for _, tmpl := range *runnerConfig.Templates {
