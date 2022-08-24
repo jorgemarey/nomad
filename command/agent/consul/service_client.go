@@ -974,11 +974,10 @@ func (c *ServiceClient) serviceRegs(
 	}
 
 	ci := connectInformation{
-		Task:     workload.Task,
-		Group:    workload.Group,
-		JobID:    workload.AllocID,
-		Namespae: workload.Namespace,
-		AllocID:  workload.AllocID,
+		Group:     workload.Group,
+		JobID:     workload.JobID,
+		Namespace: workload.NomadNamespace,
+		AllocID:   workload.AllocID,
 	}
 
 	// newConnect returns (nil, nil) if there's no Connect-enabled service.

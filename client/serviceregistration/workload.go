@@ -31,6 +31,8 @@ type WorkloadServices struct {
 	// registered, if the provider supports this functionality.
 	Namespace string
 
+	NomadNamespace string
+
 	// Restarter allows restarting the task or task group depending on the
 	// check_restart stanzas.
 	Restarter WorkloadRestarter

@@ -154,6 +154,7 @@ func (ar *allocRunner) initRunnerHooks(config *clientconfig.Config) error {
 		newGroupServiceHook(groupServiceHookConfig{
 			alloc:               alloc,
 			namespace:           alloc.ServiceProviderNamespace(),
+			nomadNamespace:      alloc.Namespace,
 			serviceRegWrapper:   ar.serviceRegWrapper,
 			restarter:           ar,
 			taskEnvBuilder:      envBuilder,

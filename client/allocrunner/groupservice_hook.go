@@ -38,6 +38,8 @@ type groupServiceHook struct {
 	// registrations will be made. This field may be updated.
 	namespace string
 
+	nomadNamespace string
+
 	// serviceRegWrapper is the handler wrapper that is used to perform service
 	// and check registration and deregistration.
 	serviceRegWrapper *wrapper.HandlerWrapper
@@ -69,6 +71,8 @@ type groupServiceHookConfig struct {
 	// registrations will be made.
 	namespace string
 
+	nomadNamespace string
+
 	// serviceRegWrapper is the handler wrapper that is used to perform service
 	// and check registration and deregistration.
 	serviceRegWrapper *wrapper.HandlerWrapper
@@ -88,6 +92,7 @@ func newGroupServiceHook(cfg groupServiceHookConfig) *groupServiceHook {
 		group:               cfg.alloc.TaskGroup,
 		restarter:           cfg.restarter,
 		namespace:           cfg.namespace,
+		nomadNamespace:      cfg.nomadNamespace,
 		taskEnvBuilder:      cfg.taskEnvBuilder,
 		delay:               shutdownDelay,
 		networkStatusGetter: cfg.networkStatusGetter,
@@ -253,15 +258,16 @@ func (h *groupServiceHook) getWorkloadServices() *serviceregistration.WorkloadSe
 
 	// Create task services struct with request's driver metadata
 	return &serviceregistration.WorkloadServices{
-		AllocID:       h.allocID,
-		JobID:         h.jobID,
-		Group:         h.group,
-		Namespace:     h.namespace,
-		Restarter:     h.restarter,
-		Services:      interpolatedServices,
-		Networks:      h.networks,
-		NetworkStatus: netStatus,
-		Ports:         h.ports,
-		Canary:        h.canary,
+		AllocID:        h.allocID,
+		JobID:          h.jobID,
+		Group:          h.group,
+		Namespace:      h.namespace,
+		NomadNamespace: h.nomadNamespace,
+		Restarter:      h.restarter,
+		Services:       interpolatedServices,
+		Networks:       h.networks,
+		NetworkStatus:  netStatus,
+		Ports:          h.ports,
+		Canary:         h.canary,
 	}
 }

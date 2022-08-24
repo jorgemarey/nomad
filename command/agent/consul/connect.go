@@ -12,11 +12,10 @@ import (
 )
 
 type connectInformation struct {
-	Task     string
-	Group    string
-	JobID    string
-	Namespae string
-	AllocID  string
+	Group     string
+	JobID     string
+	Namespace string
+	AllocID   string
 }
 
 // newConnect creates a new Consul AgentServiceConnect struct based on a Nomad
@@ -246,10 +245,9 @@ func connectProxyConfig(cfg map[string]interface{}, port int, ci connectInformat
 	cfg["bind_port"] = port
 
 	tags := map[string]string{
-		"nomad.task=":      ci.Task,
 		"nomad.group=":     ci.Group,
 		"nomad.job=":       ci.JobID,
-		"nomad.namespace=": ci.Namespae,
+		"nomad.namespace=": ci.Namespace,
 		"nomad.alloc_id=":  ci.AllocID,
 	}
 	injectNomadStatsTags(cfg, tags)
