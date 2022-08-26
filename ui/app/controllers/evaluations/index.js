@@ -18,16 +18,16 @@ export default class EvaluationsController extends Controller {
   @use
   statechart = useMachine(evaluationsMachine).withConfig({
     services: {
-      loadEvaluation: this.loadEvaluation
+      loadEvaluation: this.loadEvaluation,
     },
     actions: {
       updateEvaluationQueryParameter: this.updateEvaluationQueryParameter,
-      removeCurrentEvaluationQueryParameter: this
-        .removeCurrentEvaluationQueryParameter
+      removeCurrentEvaluationQueryParameter:
+        this.removeCurrentEvaluationQueryParameter,
     },
     guards: {
-      sidebarIsOpen: this._sidebarIsOpen
-    }
+      sidebarIsOpen: this._sidebarIsOpen,
+    },
   });
 
   queryParams = [
@@ -37,7 +37,7 @@ export default class EvaluationsController extends Controller {
     'status',
     { qpNamespace: 'namespace' },
     'type',
-    'searchTerm'
+    'searchTerm',
   ];
   @tracked currentEval = null;
 
@@ -57,7 +57,7 @@ export default class EvaluationsController extends Controller {
 
     return this.store.findRecord('evaluation', evaluationId, {
       reload: true,
-      adapterOptions: { related: true }
+      adapterOptions: { related: true },
     });
   }
 
@@ -105,7 +105,7 @@ export default class EvaluationsController extends Controller {
       { key: 'pending', label: 'Pending' },
       { key: 'complete', label: 'Complete' },
       { key: 'failed', label: 'Failed' },
-      { key: 'canceled', label: 'Canceled' }
+      { key: 'canceled', label: 'Canceled' },
     ];
   }
 
@@ -127,20 +127,20 @@ export default class EvaluationsController extends Controller {
       { key: 'alloc-failure', label: 'Allocation Failure' },
       { key: 'queued-allocs', label: 'Queued Allocations' },
       { key: 'preemption', label: 'Preemption' },
-      { key: 'job-scaling', label: 'Job Scalling' }
+      { key: 'job-scaling', label: 'Job Scalling' },
     ];
   }
 
   get optionsNamespaces() {
-    const namespaces = this.store.peekAll('namespace').map(namespace => ({
+    const namespaces = this.store.peekAll('namespace').map((namespace) => ({
       key: namespace.name,
-      label: namespace.name
+      label: namespace.name,
     }));
 
     // Create default namespace selection
     namespaces.unshift({
       key: ALL_NAMESPACE_WILDCARD,
-      label: 'All (*)'
+      label: 'All (*)',
     });
 
     return namespaces;
@@ -150,7 +150,7 @@ export default class EvaluationsController extends Controller {
     return [
       { key: null, label: 'All' },
       { key: 'client', label: 'Client' },
-      { key: 'no client', label: 'No Client' }
+      { key: 'no client', label: 'No Client' },
     ];
   }
 
@@ -186,7 +186,7 @@ export default class EvaluationsController extends Controller {
       qpNamespace: 'Namespace',
       type: 'Type',
       triggeredBy: 'Triggered By',
-      searchTerm: 'Search Term'
+      searchTerm: 'Search Term',
     };
     if (this.hasFiltersApplied) {
       for (let i = 0; i < this.currentFilters.length; i++) {
@@ -239,9 +239,7 @@ export default class EvaluationsController extends Controller {
   refresh() {
     const isDefaultParams = this.nextToken === null && this.status === null;
     if (isDefaultParams) {
-      getOwner(this)
-        .lookup('route:evaluations.index')
-        .refresh();
+      getOwner(this).lookup('route:evaluations.index').refresh();
       return;
     }
 

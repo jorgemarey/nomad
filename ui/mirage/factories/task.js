@@ -16,11 +16,11 @@ export default Factory.extend({
 
   JobID: '',
 
-  name: id => `task-${dasherize(faker.hacker.noun())}-${id}`,
+  name: (id) => `task-${dasherize(faker.hacker.noun())}-${id}`,
   driver: () => faker.helpers.randomize(DRIVERS),
 
   originalResources: generateResources,
-  resources: function() {
+  resources: function () {
     // Generate resources the usual way, but transform to the old
     // shape because that's what the job spec uses.
     const resources = this.originalResources;
@@ -28,11 +28,11 @@ export default Factory.extend({
       CPU: resources.Cpu.CpuShares,
       MemoryMB: resources.Memory.MemoryMB,
       MemoryMaxMB: resources.Memory.MemoryMaxMB,
-      DiskMB: resources.Disk.DiskMB
+      DiskMB: resources.Disk.DiskMB,
     };
   },
 
-  Lifecycle: i => {
+  Lifecycle: (i) => {
     const cycle = i % 6;
 
     if (cycle === 0) {
@@ -68,5 +68,5 @@ export default Factory.extend({
 
       task.save({ recommendationIds: recommendations.mapBy('id') });
     }
-  }
+  },
 });

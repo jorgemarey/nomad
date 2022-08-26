@@ -8,7 +8,7 @@ const ACCESS_MODES = ['multi-node-single-writer'];
 const ATTACHMENT_MODES = ['file-system'];
 
 export default Factory.extend({
-  id: i => `${dasherize(faker.hacker.noun())}-${i}`.toLowerCase(),
+  id: (i) => `${dasherize(faker.hacker.noun())}-${i}`.toLowerCase(),
   name() {
     return this.id;
   },
@@ -42,11 +42,11 @@ export default Factory.extend({
         : null;
       volume.update({
         namespace,
-        namespaceId: namespace
+        namespaceId: namespace,
       });
     } else {
       volume.update({
-        namespace: volume.namespaceId
+        namespace: volume.namespaceId,
       });
     }
 
@@ -55,12 +55,12 @@ export default Factory.extend({
         ? pickOne(server.db.csiPlugins)
         : null;
       volume.update({
-        PluginId: plugin && plugin.id
+        PluginId: plugin && plugin.id,
       });
     } else {
       volume.update({
-        PluginId: volume.plugin.id
+        PluginId: volume.plugin.id,
       });
     }
-  }
+  },
 });

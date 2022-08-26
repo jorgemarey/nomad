@@ -20,7 +20,7 @@ export default class JobPage extends Component {
   setError(err) {
     this.errorMessage = {
       title: 'Could Not Force Launch',
-      description: messageForError(err, 'submit jobs')
+      description: messageForError(err, 'submit jobs'),
     };
   }
 }

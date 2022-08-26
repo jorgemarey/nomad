@@ -19,8 +19,8 @@ export default class AllocationStatusBar extends DistributionBar {
     return {
       queryParams: {
         status: JSON.stringify([status]),
-        namespace: job.belongsTo('namespace').id()
-      }
+        namespace: job.belongsTo('namespace').id(),
+      },
     };
   }
 
@@ -47,46 +47,46 @@ export default class AllocationStatusBar extends DistributionBar {
         label: 'Queued',
         value: allocs.queuedAllocs,
         className: 'queued',
-        legendLink: this.generateLegendLink(this.job, 'queued')
+        legendLink: this.generateLegendLink(this.job, 'queued'),
       },
       {
         label: 'Starting',
         value: allocs.startingAllocs,
         className: 'starting',
         layers: 2,
-        legendLink: this.generateLegendLink(this.job, 'starting')
+        legendLink: this.generateLegendLink(this.job, 'starting'),
       },
       {
         label: 'Running',
         value: allocs.runningAllocs,
         className: 'running',
-        legendLink: this.generateLegendLink(this.job, 'running')
+        legendLink: this.generateLegendLink(this.job, 'running'),
       },
       {
         label: 'Complete',
         value: allocs.completeAllocs,
         className: 'complete',
-        legendLink: this.generateLegendLink(this.job, 'complete')
+        legendLink: this.generateLegendLink(this.job, 'complete'),
       },
       {
         label: 'Unknown',
         value: allocs.unknownAllocs,
         className: 'unknown',
         legendLink: this.generateLegendLink(this.job, 'unknown'),
-        help: 'Allocation is unknown since its node is disconnected.'
+        help: 'Allocation is unknown since its node is disconnected.',
       },
       {
         label: 'Failed',
         value: allocs.failedAllocs,
         className: 'failed',
-        legendLink: this.generateLegendLink(this.job, 'failed')
+        legendLink: this.generateLegendLink(this.job, 'failed'),
       },
       {
         label: 'Lost',
         value: allocs.lostAllocs,
         className: 'lost',
-        legendLink: this.generateLegendLink(this.job, 'lost')
-      }
+        legendLink: this.generateLegendLink(this.job, 'lost'),
+      },
     ];
   }
 }

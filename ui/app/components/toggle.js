@@ -3,7 +3,7 @@ import {
   classNames,
   classNameBindings,
   tagName,
-  attributeBindings
+  attributeBindings,
 } from '@ember-decorators/component';
 import classic from 'ember-classic-decorator';
 

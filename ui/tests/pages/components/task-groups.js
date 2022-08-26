@@ -1,7 +1,7 @@
 import { collection, clickable, text } from 'ember-cli-page-object';
 import { singularize } from 'ember-inflector';
 
-export default function(
+export default function (
   selector = '[data-test-task-group]',
   propKey = 'taskGroups'
 ) {
@@ -16,11 +16,11 @@ export default function(
       mem: text('[data-test-task-group-mem]'),
       disk: text('[data-test-task-group-disk]'),
       visit: clickable('[data-test-task-group-name] a'),
-      visitRow: clickable()
+      visitRow: clickable(),
     }),
 
-    [lookupKey]: function(name) {
-      return this[propKey].toArray().find(tg => tg.name === name);
-    }
+    [lookupKey]: function (name) {
+      return this[propKey].toArray().find((tg) => tg.name === name);
+    },
   };
 }

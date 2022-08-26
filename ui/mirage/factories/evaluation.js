@@ -15,7 +15,7 @@ const EVAL_TRIGGERED_BY = [
   'rolling-update',
   'deployment-watcher',
   'failed-follow-up',
-  'max-plan-attempts'
+  'max-plan-attempts',
 ];
 const REF_TIME = new Date();
 
@@ -40,14 +40,14 @@ const generateDimensionExhausted = generateCountMap(1, [
   'cpu',
   'mem',
   'disk',
-  'iops'
+  'iops',
 ]);
 const generateQuotaExhausted = generateDimensionExhausted;
 const generateScores = generateCountMap(1, ['binpack', 'job-anti-affinity']);
 const generateConstraintFiltered = generateCountMap(2, [
   'prop = val',
   'driver = docker',
-  'arch = x64'
+  'arch = x64',
 ]);
 
 export default Factory.extend({
@@ -79,13 +79,13 @@ export default Factory.extend({
     afterCreate(evaluation, server) {
       assignJob(evaluation, server);
       const taskGroups = server.db.taskGroups.where({
-        jobId: evaluation.jobId
+        jobId: evaluation.jobId,
       });
 
       const taskGroupNames = taskGroups.mapBy('name');
       const failedTaskGroupsCount = faker.random.number({
         min: 1,
-        max: taskGroupNames.length
+        max: taskGroupNames.length,
       });
       const failedTaskGroupNames = [];
       for (let i = 0; i < failedTaskGroupsCount; i++) {
@@ -103,16 +103,16 @@ export default Factory.extend({
       }, {});
 
       evaluation.update({
-        failedTGAllocs: placementFailures
+        failedTGAllocs: placementFailures,
       });
-    }
+    },
   }),
 
   afterCreate(evaluation, server) {
     if (!evaluation.nodeId) {
       assignJob(evaluation, server);
     }
-  }
+  },
 });
 
 function assignJob(evaluation, server) {
@@ -125,7 +125,7 @@ function assignJob(evaluation, server) {
     ? server.db.jobs.find(evaluation.jobId)
     : pickOne(server.db.jobs);
   evaluation.update({
-    jobId: job.id
+    jobId: job.id,
   });
 }
 
@@ -147,6 +147,6 @@ export function generateTaskGroupFailures() {
       faker.random.number(10) >= 7 ? generateDimensionExhausted() : null,
     QuotaExhausted:
       faker.random.number(10) >= 7 ? generateQuotaExhausted() : null,
-    Scores: faker.random.number(10) >= 7 ? generateScores() : null
+    Scores: faker.random.number(10) >= 7 ? generateScores() : null,
   };
 }

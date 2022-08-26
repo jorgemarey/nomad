@@ -4,7 +4,7 @@ import WithWatchers from 'nomad-ui/mixins/with-watchers';
 import {
   watchRecord,
   watchRelationship,
-  watchAll
+  watchAll,
 } from 'nomad-ui/utils/properties/watch';
 import { collect } from '@ember/object/computed';
 
@@ -30,7 +30,7 @@ export default class ClientsRoute extends Route.extend(WithWatchers) {
     controller.set('watchers', {
       model: this.watch.perform(model),
       allocations: this.watchAllocations.perform(model),
-      nodes: this.watchNodes.perform()
+      nodes: this.watchNodes.perform(),
     });
   }
 

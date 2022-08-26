@@ -32,172 +32,155 @@ export default class SystemService extends Service {
     }
     return null;
   }
+
+  @computed
+  get agent() {
+    const token = this.token;
+
+    if (token.secret || Ember.testing) {
+      return PromiseObject.create({
+        promise: token
+          .authorizedRawRequest(`/${namespace}/agent/self`)
+          .then(jsonWithDefault({}))
+          .then((agent) => {
+            if (agent?.config?.Version) {
+              const { Version, VersionPrerelease, VersionMetadata } =
+                agent.config.Version;
+              agent.version = Version;
+              if (VersionPrerelease)
+                agent.version = `${agent.version}-${VersionPrerelease}`;
+              if (VersionMetadata)
+                agent.version = `${agent.version}+${VersionMetadata}`;
+            }
+            return agent;
+          }),
+      });
+    }
     return null;
   }
-return null;
->>>>>>> v1.3.4
-  }
 
-@computed
-  get agent() {
-  const token = this.token;
-
-  if (token.secret || Ember.testing) {
-    return PromiseObject.create({
-      promise: token
-        .authorizedRawRequest(`/${namespace}/agent/self`)
-        .then(jsonWithDefault({}))
-        .then((agent) => {
-          if (agent?.config?.Version) {
-            const { Version, VersionPrerelease, VersionMetadata } =
-              agent.config.Version;
-            agent.version = Version;
-            if (VersionPrerelease)
-              agent.version = `${agent.version}-${VersionPrerelease}`;
-            if (VersionMetadata)
-              agent.version = `${agent.version}+${VersionMetadata}`;
-          }
-          return agent;
-        }),
-    });
-  }
-  return null;
-}
-return null;
-}
-return null;
->>>>>>> v1.3.4
-  }
-
-@computed
+  @computed
   get defaultRegion() {
-  const token = this.token;
+    const token = this.token;
 
-  if (token.secret || Ember.testing) {
-    return PromiseObject.create({
-      promise: token
-        .authorizedRawRequest(`/${namespace}/agent/members`)
-        .then(jsonWithDefault({}))
-        .then((json) => {
-          return { region: json.ServerRegion };
-        }),
-    });
+    if (token.secret || Ember.testing) {
+      return PromiseObject.create({
+        promise: token
+          .authorizedRawRequest(`/${namespace}/agent/members`)
+          .then(jsonWithDefault({}))
+          .then((json) => {
+            return { region: json.ServerRegion };
+          }),
+      });
+    }
+    return null;
   }
-  return null;
-}
 
-@computed
+  @computed
   get regions() {
-  const token = this.token;
+    const token = this.token;
 
-  if (token.secret || Ember.testing) {
-    return PromiseArray.create({
-      promise: token
-        .authorizedRawRequest(`/${namespace}/regions`)
-        .then(jsonWithDefault([])),
-    });
+    if (token.secret || Ember.testing) {
+      return PromiseArray.create({
+        promise: token
+          .authorizedRawRequest(`/${namespace}/regions`)
+          .then(jsonWithDefault([])),
+      });
+    }
+
+    return null;
   }
 
-  return null;
-}
-
-return null;
-}
-
-return null;
->>>>>>> v1.3.4
-  }
-
-@computed('regions.[]')
+  @computed('regions.[]')
   get activeRegion() {
-  const regions = this.regions;
-  const region = window.localStorage.nomadActiveRegion;
+    const regions = this.regions;
+    const region = window.localStorage.nomadActiveRegion;
 
-  if (regions.includes(region)) {
-    return region;
+    if (regions.includes(region)) {
+      return region;
+    }
+
+    return null;
   }
-
-  return null;
-}
 
   set activeRegion(value) {
-  if (value == null) {
-    window.localStorage.removeItem('nomadActiveRegion');
-    return;
-  } else {
-    // All localStorage values are strings. Stringify first so
-    // the return value is consistent with what is persisted.
-    const strValue = value + '';
-    window.localStorage.nomadActiveRegion = strValue;
+    if (value == null) {
+      window.localStorage.removeItem('nomadActiveRegion');
+      return;
+    } else {
+      // All localStorage values are strings. Stringify first so
+      // the return value is consistent with what is persisted.
+      const strValue = value + '';
+      window.localStorage.nomadActiveRegion = strValue;
+    }
   }
-}
 
-@computed('regions.[]')
+  @computed('regions.[]')
   get shouldShowRegions() {
-  return this.get('regions.length') > 1;
-}
+    return this.get('regions.length') > 1;
+  }
 
-@computed('activeRegion', 'defaultRegion.region', 'shouldShowRegions')
+  @computed('activeRegion', 'defaultRegion.region', 'shouldShowRegions')
   get shouldIncludeRegion() {
-  return (
-    this.shouldShowRegions &&
-    this.activeRegion !== this.get('defaultRegion.region')
-  );
-}
+    return (
+      this.shouldShowRegions &&
+      this.activeRegion !== this.get('defaultRegion.region')
+    );
+  }
 
-@computed('activeRegion')
+  @computed('activeRegion')
   get namespaces() {
-  return PromiseArray.create({
-    promise: this.store
-      .findAll('namespace')
-      .then(namespaces => namespaces.compact())
-  });
-}
-
-@computed('namespaces.[]')
-  get shouldShowNamespaces() {
-  const namespaces = this.namespaces.toArray();
-  return (
-    namespaces.length &&
-    namespaces.some(namespace => namespace.get('id') !== 'default')
-  );
-}
-
-@task(function* () {
-  const emptyLicense = { License: { Features: [] } };
-
-  try {
-    return yield this.token
-      .authorizedRawRequest(`/${namespace}/operator/license`)
-      .then(jsonWithDefault(emptyLicense));
-  } catch (e) {
-    return emptyLicense;
-  }
-})
-fetchLicense;
-
-@task(function* () {
-  try {
-    const request = yield this.token.authorizedRequest('/v1/search/fuzzy', {
-      method: 'POST',
-      body: JSON.stringify({
-        Text: 'feature-detection-query',
-        Context: 'namespaces'
-      })
+    return PromiseArray.create({
+      promise: this.store
+        .findAll('namespace')
+        .then((namespaces) => namespaces.compact()),
     });
-
-    return request.ok;
-  } catch (e) {
-    return false;
   }
-})
-checkFuzzySearchPresence;
 
-@alias('fetchLicense.lastSuccessful.value') license;
-@alias('checkFuzzySearchPresence.last.value') fuzzySearchEnabled;
+  @computed('namespaces.[]')
+  get shouldShowNamespaces() {
+    const namespaces = this.namespaces.toArray();
+    return (
+      namespaces.length &&
+      namespaces.some((namespace) => namespace.get('id') !== 'default')
+    );
+  }
 
-@computed('license.License.Features.[]')
+  @task(function* () {
+    const emptyLicense = { License: { Features: [] } };
+
+    try {
+      return yield this.token
+        .authorizedRawRequest(`/${namespace}/operator/license`)
+        .then(jsonWithDefault(emptyLicense));
+    } catch (e) {
+      return emptyLicense;
+    }
+  })
+  fetchLicense;
+
+  @task(function* () {
+    try {
+      const request = yield this.token.authorizedRequest('/v1/search/fuzzy', {
+        method: 'POST',
+        body: JSON.stringify({
+          Text: 'feature-detection-query',
+          Context: 'namespaces',
+        }),
+      });
+
+      return request.ok;
+    } catch (e) {
+      return false;
+    }
+  })
+  checkFuzzySearchPresence;
+
+  @alias('fetchLicense.lastSuccessful.value') license;
+  @alias('checkFuzzySearchPresence.last.value') fuzzySearchEnabled;
+
+  @computed('license.License.Features.[]')
   get features() {
-  return this.get('license.License.Features') || [];
-}
+    return this.get('license.License.Features') || [];
+  }
 }

@@ -23,7 +23,7 @@ export default class JobClientStatusBar extends DistributionBar {
       failed,
       lost,
       notScheduled,
-      unknown
+      unknown,
     } = this.jobClientStatus.byStatus;
 
     return [
@@ -34,9 +34,9 @@ export default class JobClientStatusBar extends DistributionBar {
         legendLink: {
           queryParams: {
             status: JSON.stringify(['queued']),
-            namespace: this.job.namespace.get('id')
-          }
-        }
+            namespace: this.job.namespace.get('id'),
+          },
+        },
       },
       {
         label: 'Starting',
@@ -45,10 +45,10 @@ export default class JobClientStatusBar extends DistributionBar {
         legendLink: {
           queryParams: {
             status: JSON.stringify(['starting']),
-            namespace: this.job.namespace.get('id')
-          }
+            namespace: this.job.namespace.get('id'),
+          },
         },
-        layers: 2
+        layers: 2,
       },
       {
         label: 'Running',
@@ -57,9 +57,9 @@ export default class JobClientStatusBar extends DistributionBar {
         legendLink: {
           queryParams: {
             status: JSON.stringify(['running']),
-            namespace: this.job.namespace.get('id')
-          }
-        }
+            namespace: this.job.namespace.get('id'),
+          },
+        },
       },
       {
         label: 'Complete',
@@ -68,9 +68,9 @@ export default class JobClientStatusBar extends DistributionBar {
         legendLink: {
           queryParams: {
             status: JSON.stringify(['complete']),
-            namespace: this.job.namespace.get('id')
-          }
-        }
+            namespace: this.job.namespace.get('id'),
+          },
+        },
       },
       {
         label: 'Unknown',
@@ -79,11 +79,10 @@ export default class JobClientStatusBar extends DistributionBar {
         legendLink: {
           queryParams: {
             status: JSON.stringify(['unknown']),
-            namespace: this.job.namespace.get('id')
-          }
+            namespace: this.job.namespace.get('id'),
+          },
         },
-        help:
-          'Some allocations for this job were degraded or lost connectivity.'
+        help: 'Some allocations for this job were degraded or lost connectivity.',
       },
       {
         label: 'Degraded',
@@ -92,11 +91,10 @@ export default class JobClientStatusBar extends DistributionBar {
         legendLink: {
           queryParams: {
             status: JSON.stringify(['degraded']),
-            namespace: this.job.namespace.get('id')
-          }
+            namespace: this.job.namespace.get('id'),
+          },
         },
-        help:
-          'Some allocations for this job were not successfull or did not run.'
+        help: 'Some allocations for this job were not successfull or did not run.',
       },
       {
         label: 'Failed',
@@ -105,9 +103,9 @@ export default class JobClientStatusBar extends DistributionBar {
         legendLink: {
           queryParams: {
             status: JSON.stringify(['failed']),
-            namespace: this.job.namespace.get('id')
-          }
-        }
+            namespace: this.job.namespace.get('id'),
+          },
+        },
       },
       {
         label: 'Lost',
@@ -116,9 +114,9 @@ export default class JobClientStatusBar extends DistributionBar {
         legendLink: {
           queryParams: {
             status: JSON.stringify(['lost']),
-            namespace: this.job.namespace.get('id')
-          }
-        }
+            namespace: this.job.namespace.get('id'),
+          },
+        },
       },
       {
         label: 'Not Scheduled',
@@ -127,11 +125,11 @@ export default class JobClientStatusBar extends DistributionBar {
         legendLink: {
           queryParams: {
             status: JSON.stringify(['notScheduled']),
-            namespace: this.job.namespace.get('id')
-          }
+            namespace: this.job.namespace.get('id'),
+          },
         },
-        help: 'No allocations for this job were scheduled into these clients.'
-      }
+        help: 'No allocations for this job were scheduled into these clients.',
+      },
     ];
   }
 }

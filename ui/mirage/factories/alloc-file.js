@@ -7,17 +7,14 @@ const REF_TIME = new Date();
 const TROUBLESOME_CHARACTERS = '🏆 💃 🤩 🙌🏿 🖨 ? ; %'.split(' ');
 const makeWord = () => (faker.random.number(10000000) + 50000).toString(36);
 const makeSentence = (count = 10) =>
-  new Array(count)
-    .fill(null)
-    .map(makeWord)
-    .join(' ');
+  new Array(count).fill(null).map(makeWord).join(' ');
 
 const fileTypeMapping = {
   svg: 'image/svg',
   txt: 'text/plain',
   json: 'application/json',
   app: 'application/octet-stream',
-  exe: 'application/octet-stream'
+  exe: 'application/octet-stream',
 };
 
 const fileBodyMapping = {
@@ -48,14 +45,14 @@ const fileBodyMapping = {
       array: [1, 'two', [3]],
       deep: {
         ly: {
-          nest: 'ed'
-        }
-      }
-    })
+          nest: 'ed',
+        },
+      },
+    }),
 };
 
 export default Factory.extend({
-  id: i => i,
+  id: (i) => i,
 
   isDir: faker.random.boolean,
 
@@ -104,7 +101,7 @@ export default Factory.extend({
       if (allocFile.depth > 0) {
         server.create('allocFile', 'dir', {
           parent: allocFile,
-          depth: allocFile.depth - 1
+          depth: allocFile.depth - 1,
         });
       }
 
@@ -113,13 +110,13 @@ export default Factory.extend({
         faker.random.number({ min: 1, max: 3 }),
         'file',
         {
-          parent: allocFile
+          parent: allocFile,
         }
       );
-    }
+    },
   }),
 
   file: trait({
-    isDir: false
-  })
+    isDir: false,
+  }),
 });

@@ -70,8 +70,8 @@ export default Factory.extend({
       ProhibitOverlap: true,
       Spec: '*/5 * * * * *',
       SpecType: 'cron',
-      TimeZone: 'UTC'
-    })
+      TimeZone: 'UTC',
+    }),
   }),
 
   periodicSysbatch: trait({
@@ -84,8 +84,8 @@ export default Factory.extend({
       ProhibitOverlap: true,
       Spec: '*/5 * * * * *',
       SpecType: 'cron',
-      TimeZone: 'UTC'
-    })
+      TimeZone: 'UTC',
+    }),
   }),
 
   parameterized: trait({
@@ -96,8 +96,8 @@ export default Factory.extend({
     parameterizedJob: () => ({
       MetaOptional: generateMetaFields(faker.random.number(10), 'optional'),
       MetaRequired: generateMetaFields(faker.random.number(10), 'required'),
-      Payload: faker.random.boolean() ? 'required' : null
-    })
+      Payload: faker.random.boolean() ? 'required' : null,
+    }),
   }),
 
   parameterizedSysbatch: trait({
@@ -108,22 +108,22 @@ export default Factory.extend({
     parameterizedJob: () => ({
       MetaOptional: generateMetaFields(faker.random.number(10), 'optional'),
       MetaRequired: generateMetaFields(faker.random.number(10), 'required'),
-      Payload: faker.random.boolean() ? 'required' : null
-    })
+      Payload: faker.random.boolean() ? 'required' : null,
+    }),
   }),
 
   periodicChild: trait({
     // Periodic children need a parent job,
     // It is the Periodic job's responsibility to create
     // periodicChild jobs and provide a parent job.
-    type: 'batch'
+    type: 'batch',
   }),
 
   periodicSysbatchChild: trait({
     // Periodic children need a parent job,
     // It is the Periodic job's responsibility to create
     // periodicChild jobs and provide a parent job.
-    type: 'sysbatch'
+    type: 'sysbatch',
   }),
 
   parameterizedChild: trait({
@@ -133,7 +133,7 @@ export default Factory.extend({
     type: 'batch',
     parameterized: true,
     dispatched: true,
-    payload: window.btoa(faker.lorem.sentence())
+    payload: window.btoa(faker.lorem.sentence()),
   }),
 
   parameterizedSysbatchChild: trait({
@@ -143,17 +143,17 @@ export default Factory.extend({
     type: 'sysbatch',
     parameterized: true,
     dispatched: true,
-    payload: window.btoa(faker.lorem.sentence())
+    payload: window.btoa(faker.lorem.sentence()),
   }),
 
   pack: trait({
     meta: () => ({
       'pack.name': faker.hacker.noun(),
-      'pack.version': faker.system.semver()
-    })
+      'pack.version': faker.system.semver(),
+    }),
   }),
 
-  createIndex: i => i,
+  createIndex: (i) => i,
   modifyIndex: () => faker.random.number({ min: 10, max: 2000 }),
 
   // Directive used to control sub-resources
@@ -198,11 +198,11 @@ export default Factory.extend({
         : null;
       job.update({
         namespace,
-        namespaceId: namespace
+        namespaceId: namespace,
       });
     } else {
       job.update({
-        namespace: job.namespaceId
+        namespace: job.namespaceId,
       });
     }
 
@@ -212,7 +212,7 @@ export default Factory.extend({
       withRescheduling: job.withRescheduling,
       withServices: job.withGroupServices,
       createRecommendations: job.createRecommendations,
-      shallow: job.shallow
+      shallow: job.shallow,
     };
 
     if (job.groupTaskCount) {
@@ -225,7 +225,9 @@ export default Factory.extend({
         server.create('task-group', 'noHostVolumes', {
           ...groupProps,
           resourceSpec:
-            job.resourceSpec && job.resourceSpec.length && job.resourceSpec[idx]
+            job.resourceSpec &&
+            job.resourceSpec.length &&
+            job.resourceSpec[idx],
         })
       );
     } else {
@@ -233,13 +235,15 @@ export default Factory.extend({
         server.create('task-group', {
           ...groupProps,
           resourceSpec:
-            job.resourceSpec && job.resourceSpec.length && job.resourceSpec[idx]
+            job.resourceSpec &&
+            job.resourceSpec.length &&
+            job.resourceSpec[idx],
         })
       );
     }
 
     job.update({
-      taskGroupIds: groups.mapBy('id')
+      taskGroupIds: groups.mapBy('id'),
     });
 
     const hasChildren = job.periodic || (job.parameterized && !job.parentId);
@@ -249,23 +253,23 @@ export default Factory.extend({
       {
         jobId: job.id,
         groupNames: groups.mapBy('name'),
-        namespace: job.namespace
+        namespace: job.namespace,
       }
     );
 
     job.update({
-      jobSummaryId: jobSummary.id
+      jobSummaryId: jobSummary.id,
     });
 
     const jobScale = server.create('job-scale', {
       groupNames: groups.mapBy('name'),
       jobId: job.id,
       namespace: job.namespace,
-      shallow: job.shallow
+      shallow: job.shallow,
     });
 
     job.update({
-      jobScaleId: jobScale.id
+      jobScaleId: jobScale.id,
     });
 
     if (!job.noDeployments) {
@@ -277,7 +281,7 @@ export default Factory.extend({
             namespace: job.namespace,
             version: index,
             noActiveDeployment: job.noActiveDeployment,
-            activeDeployment: job.activeDeployment
+            activeDeployment: job.activeDeployment,
           });
         });
     }
@@ -285,7 +289,7 @@ export default Factory.extend({
     if (!job.shallow) {
       const knownEvaluationProperties = {
         jobId: job.id,
-        namespace: job.namespace
+        namespace: job.namespace,
       };
       server.createList(
         'evaluation',
@@ -306,7 +310,7 @@ export default Factory.extend({
           'evaluation',
           'withPlacementFailures',
           assign(knownEvaluationProperties, {
-            modifyIndex: 4000
+            modifyIndex: 4000,
           })
         );
       }
@@ -330,7 +334,7 @@ export default Factory.extend({
         namespace: job.namespace,
         datacenters: job.datacenters,
         createAllocations: job.createAllocations,
-        shallow: job.shallow
+        shallow: job.shallow,
       });
     }
 
@@ -352,10 +356,10 @@ export default Factory.extend({
         namespace: job.namespace,
         datacenters: job.datacenters,
         createAllocations: job.createAllocations,
-        shallow: job.shallow
+        shallow: job.shallow,
       });
     }
-  }
+  },
 });
 
 function generateMetaFields(num, prefix = '') {

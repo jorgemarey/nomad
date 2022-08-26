@@ -3,7 +3,7 @@ import { computed } from '@ember/object';
 import {
   classNames,
   tagName,
-  attributeBindings
+  attributeBindings,
 } from '@ember-decorators/component';
 import classic from 'ember-classic-decorator';
 
@@ -32,7 +32,7 @@ export default class ImageFile extends Component {
     const img = event.target;
     this.setProperties({
       width: img.naturalWidth,
-      height: img.naturalHeight
+      height: img.naturalHeight,
     });
   }
 }

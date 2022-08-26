@@ -12,14 +12,14 @@ export default class IndexController extends Controller.extend(
 
   queryParams = [
     {
-      currentPage: 'page'
+      currentPage: 'page',
     },
     {
-      sortProperty: 'sort'
+      sortProperty: 'sort',
     },
     {
-      sortDescending: 'desc'
-    }
+      sortDescending: 'desc',
+    },
   ];
 
   currentPage = 1;

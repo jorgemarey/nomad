@@ -4,7 +4,7 @@ import { module, test } from 'qunit';
 import sinon from 'sinon';
 import Pretender from 'pretender';
 import AllocationStatsTracker, {
-  stats
+  stats,
 } from 'nomad-ui/utils/classes/allocation-stats-tracker';
 import fetch from 'nomad-ui/utils/fetch';
 import statsTrackerFrameMissingBehavior from './behaviors/stats-tracker-frame-missing';
@@ -13,9 +13,9 @@ import { settled } from '@ember/test-helpers';
 
 module('Unit | Util | AllocationStatsTracker', function () {
   const refDate = Date.now() * 1000000;
-  const makeDate = ts => new Date(ts / 1000000);
+  const makeDate = (ts) => new Date(ts / 1000000);
 
-  const MockAllocation = overrides =>
+  const MockAllocation = (overrides) =>
     assign(
       {
         id: 'some-identifier',
@@ -27,30 +27,30 @@ module('Unit | Util | AllocationStatsTracker', function () {
               name: 'log-shipper',
               reservedCPU: 50,
               reservedMemory: 128,
-              lifecycleName: 'poststop'
+              lifecycleName: 'poststop',
             },
             {
               name: 'service',
               reservedCPU: 100,
               reservedMemory: 256,
-              lifecycleName: 'main'
+              lifecycleName: 'main',
             },
             {
               name: 'sidecar',
               reservedCPU: 50,
               reservedMemory: 128,
-              lifecycleName: 'prestart-sidecar'
-            }
-          ]
-        }
+              lifecycleName: 'prestart-sidecar',
+            },
+          ],
+        },
       },
       overrides
     );
 
-  const mockFrame = step => ({
+  const mockFrame = (step) => ({
     ResourceUsage: {
       CpuStats: {
-        TotalTicks: step + 100
+        TotalTicks: step + 100,
       },
       MemoryStats: {
         RSS: (step + 400) * 1024 * 1024,
@@ -61,41 +61,41 @@ module('Unit | Util | AllocationStatsTracker', function () {
       service: {
         ResourceUsage: {
           CpuStats: {
-            TotalTicks: step + 50
+            TotalTicks: step + 50,
           },
           MemoryStats: {
             RSS: (step + 100) * 1024 * 1024,
             Usage: (step + 100) * 1024 * 1024,
           },
         },
-        Timestamp: refDate + step
+        Timestamp: refDate + step,
       },
       'log-shipper': {
         ResourceUsage: {
           CpuStats: {
-            TotalTicks: step + 25
+            TotalTicks: step + 25,
           },
           MemoryStats: {
             RSS: (step + 50) * 1024 * 1024,
             Usage: (step + 50) * 1024 * 1024,
           },
         },
-        Timestamp: refDate + step * 10
+        Timestamp: refDate + step * 10,
       },
       sidecar: {
         ResourceUsage: {
           CpuStats: {
-            TotalTicks: step + 26
+            TotalTicks: step + 26,
           },
           MemoryStats: {
             RSS: (step + 51) * 1024 * 1024,
             Usage: (step + 51) * 1024 * 1024,
           },
         },
-        Timestamp: refDate + step * 100
-      }
+        Timestamp: refDate + step * 100,
+      },
     },
-    Timestamp: refDate + step * 1000
+    Timestamp: refDate + step * 1000,
   });
 
   test('the AllocationStatsTracker constructor expects a fetch definition and an allocation', async function (assert) {
@@ -147,7 +147,7 @@ module('Unit | Util | AllocationStatsTracker', function () {
       allocation.taskGroup.tasks.length,
       'tasks matches lengths with the allocation task group'
     );
-    allocation.taskGroup.tasks.forEach(task => {
+    allocation.taskGroup.tasks.forEach((task) => {
       const trackerTask = tracker.get('tasks').findBy('task', task.name);
       assert.equal(
         trackerTask.reservedCPU,
@@ -167,20 +167,20 @@ module('Unit | Util | AllocationStatsTracker', function () {
     const tracker = AllocationStatsTracker.create({
       fetch,
       allocation,
-      append: sinon.spy()
+      append: sinon.spy(),
     });
     const mockFrame = {
       Some: {
         data: ['goes', 'here'],
-        twelve: 12
-      }
+        twelve: 12,
+      },
     };
 
     const server = new Pretender(function () {
       this.get('/v1/client/allocation/:id/stats', () => [
         200,
         {},
-        JSON.stringify(mockFrame)
+        JSON.stringify(mockFrame),
       ]);
     });
 
@@ -217,22 +217,22 @@ module('Unit | Util | AllocationStatsTracker', function () {
           reservedCPU: 100,
           reservedMemory: 256,
           cpu: [],
-          memory: []
+          memory: [],
         },
         {
           task: 'sidecar',
           reservedCPU: 50,
           reservedMemory: 128,
           cpu: [],
-          memory: []
+          memory: [],
         },
         {
           task: 'log-shipper',
           reservedCPU: 50,
           reservedMemory: 128,
           cpu: [],
-          memory: []
-        }
+          memory: [],
+        },
       ],
       'tasks represents the tasks for the allocation with no stats yet'
     );
@@ -250,8 +250,8 @@ module('Unit | Util | AllocationStatsTracker', function () {
         {
           timestamp: makeDate(refDate + 1000),
           used: 401 * 1024 * 1024,
-          percent: 401 / 512
-        }
+          percent: 401 / 512,
+        },
       ],
       'One frame of memory'
     );
@@ -268,8 +268,8 @@ module('Unit | Util | AllocationStatsTracker', function () {
               used: 51,
               percent: 51 / 100,
               percentStack: 51 / (100 + 50 + 50),
-              percentTotal: 51 / (100 + 50 + 50)
-            }
+              percentTotal: 51 / (100 + 50 + 50),
+            },
           ],
           memory: [
             {
@@ -277,9 +277,9 @@ module('Unit | Util | AllocationStatsTracker', function () {
               used: 101 * 1024 * 1024,
               percent: 101 / 256,
               percentStack: 101 / (256 + 128 + 128),
-              percentTotal: 101 / (256 + 128 + 128)
-            }
-          ]
+              percentTotal: 101 / (256 + 128 + 128),
+            },
+          ],
         },
         {
           task: 'sidecar',
@@ -291,8 +291,8 @@ module('Unit | Util | AllocationStatsTracker', function () {
               used: 27,
               percent: 27 / 50,
               percentStack: (27 + 51) / (100 + 50 + 50),
-              percentTotal: 27 / (100 + 50 + 50)
-            }
+              percentTotal: 27 / (100 + 50 + 50),
+            },
           ],
           memory: [
             {
@@ -300,9 +300,9 @@ module('Unit | Util | AllocationStatsTracker', function () {
               used: 52 * 1024 * 1024,
               percent: 52 / 128,
               percentStack: (52 + 101) / (256 + 128 + 128),
-              percentTotal: 52 / (256 + 128 + 128)
-            }
-          ]
+              percentTotal: 52 / (256 + 128 + 128),
+            },
+          ],
         },
         {
           task: 'log-shipper',
@@ -314,8 +314,8 @@ module('Unit | Util | AllocationStatsTracker', function () {
               used: 26,
               percent: 26 / 50,
               percentStack: (26 + 27 + 51) / (100 + 50 + 50),
-              percentTotal: 26 / (100 + 50 + 50)
-            }
+              percentTotal: 26 / (100 + 50 + 50),
+            },
           ],
           memory: [
             {
@@ -323,10 +323,10 @@ module('Unit | Util | AllocationStatsTracker', function () {
               used: 51 * 1024 * 1024,
               percent: 51 / 128,
               percentStack: (51 + 52 + 101) / (256 + 128 + 128),
-              percentTotal: 51 / (256 + 128 + 128)
-            }
-          ]
-        }
+              percentTotal: 51 / (256 + 128 + 128),
+            },
+          ],
+        },
       ],
       'tasks represents the tasks for the allocation, each with one frame of stats'
     );
@@ -337,7 +337,7 @@ module('Unit | Util | AllocationStatsTracker', function () {
       tracker.get('cpu'),
       [
         { timestamp: makeDate(refDate + 1000), used: 101, percent: 101 / 200 },
-        { timestamp: makeDate(refDate + 2000), used: 102, percent: 102 / 200 }
+        { timestamp: makeDate(refDate + 2000), used: 102, percent: 102 / 200 },
       ],
       'Two frames of cpu'
     );
@@ -347,13 +347,13 @@ module('Unit | Util | AllocationStatsTracker', function () {
         {
           timestamp: makeDate(refDate + 1000),
           used: 401 * 1024 * 1024,
-          percent: 401 / 512
+          percent: 401 / 512,
         },
         {
           timestamp: makeDate(refDate + 2000),
           used: 402 * 1024 * 1024,
-          percent: 402 / 512
-        }
+          percent: 402 / 512,
+        },
       ],
       'Two frames of memory'
     );
@@ -371,15 +371,15 @@ module('Unit | Util | AllocationStatsTracker', function () {
               used: 51,
               percent: 51 / 100,
               percentStack: 51 / (100 + 50 + 50),
-              percentTotal: 51 / (100 + 50 + 50)
+              percentTotal: 51 / (100 + 50 + 50),
             },
             {
               timestamp: makeDate(refDate + 2),
               used: 52,
               percent: 52 / 100,
               percentStack: 52 / (100 + 50 + 50),
-              percentTotal: 52 / (100 + 50 + 50)
-            }
+              percentTotal: 52 / (100 + 50 + 50),
+            },
           ],
           memory: [
             {
@@ -387,16 +387,16 @@ module('Unit | Util | AllocationStatsTracker', function () {
               used: 101 * 1024 * 1024,
               percent: 101 / 256,
               percentStack: 101 / (256 + 128 + 128),
-              percentTotal: 101 / (256 + 128 + 128)
+              percentTotal: 101 / (256 + 128 + 128),
             },
             {
               timestamp: makeDate(refDate + 2),
               used: 102 * 1024 * 1024,
               percent: 102 / 256,
               percentStack: 102 / (256 + 128 + 128),
-              percentTotal: 102 / (256 + 128 + 128)
-            }
-          ]
+              percentTotal: 102 / (256 + 128 + 128),
+            },
+          ],
         },
         {
           task: 'sidecar',
@@ -408,15 +408,15 @@ module('Unit | Util | AllocationStatsTracker', function () {
               used: 27,
               percent: 27 / 50,
               percentStack: (27 + 51) / (100 + 50 + 50),
-              percentTotal: 27 / (100 + 50 + 50)
+              percentTotal: 27 / (100 + 50 + 50),
             },
             {
               timestamp: makeDate(refDate + 200),
               used: 28,
               percent: 28 / 50,
               percentStack: (28 + 52) / (100 + 50 + 50),
-              percentTotal: 28 / (100 + 50 + 50)
-            }
+              percentTotal: 28 / (100 + 50 + 50),
+            },
           ],
           memory: [
             {
@@ -424,16 +424,16 @@ module('Unit | Util | AllocationStatsTracker', function () {
               used: 52 * 1024 * 1024,
               percent: 52 / 128,
               percentStack: (52 + 101) / (256 + 128 + 128),
-              percentTotal: 52 / (256 + 128 + 128)
+              percentTotal: 52 / (256 + 128 + 128),
             },
             {
               timestamp: makeDate(refDate + 200),
               used: 53 * 1024 * 1024,
               percent: 53 / 128,
               percentStack: (53 + 102) / (256 + 128 + 128),
-              percentTotal: 53 / (256 + 128 + 128)
-            }
-          ]
+              percentTotal: 53 / (256 + 128 + 128),
+            },
+          ],
         },
         {
           task: 'log-shipper',
@@ -445,15 +445,15 @@ module('Unit | Util | AllocationStatsTracker', function () {
               used: 26,
               percent: 26 / 50,
               percentStack: (26 + 27 + 51) / (100 + 50 + 50),
-              percentTotal: 26 / (100 + 50 + 50)
+              percentTotal: 26 / (100 + 50 + 50),
             },
             {
               timestamp: makeDate(refDate + 20),
               used: 27,
               percent: 27 / 50,
               percentStack: (27 + 28 + 52) / (100 + 50 + 50),
-              percentTotal: 27 / (100 + 50 + 50)
-            }
+              percentTotal: 27 / (100 + 50 + 50),
+            },
           ],
           memory: [
             {
@@ -461,17 +461,17 @@ module('Unit | Util | AllocationStatsTracker', function () {
               used: 51 * 1024 * 1024,
               percent: 51 / 128,
               percentStack: (51 + 52 + 101) / (256 + 128 + 128),
-              percentTotal: 51 / (256 + 128 + 128)
+              percentTotal: 51 / (256 + 128 + 128),
             },
             {
               timestamp: makeDate(refDate + 20),
               used: 52 * 1024 * 1024,
               percent: 52 / 128,
               percentStack: (52 + 53 + 102) / (256 + 128 + 128),
-              percentTotal: 52 / (256 + 128 + 128)
-            }
-          ]
-        }
+              percentTotal: 52 / (256 + 128 + 128),
+            },
+          ],
+        },
       ],
       'tasks represents the tasks for the allocation, each with two frames of stats'
     );
@@ -485,7 +485,7 @@ module('Unit | Util | AllocationStatsTracker', function () {
     const tracker = AllocationStatsTracker.create({
       fetch,
       allocation,
-      bufferSize
+      bufferSize,
     });
 
     for (let i = 1; i <= 20; i++) {
@@ -514,7 +514,7 @@ module('Unit | Util | AllocationStatsTracker', function () {
       'Old frames are removed in favor of newer ones'
     );
 
-    tracker.get('tasks').forEach(task => {
+    tracker.get('tasks').forEach((task) => {
       assert.equal(
         task.cpu.length,
         bufferSize,
@@ -568,10 +568,10 @@ module('Unit | Util | AllocationStatsTracker', function () {
     const SomeClass = EmberObject.extend({
       stats: stats('alloc', function () {
         return () => fetchSpy(this);
-      })
+      }),
     });
     const someObject = SomeClass.create({
-      alloc: allocation
+      alloc: allocation,
     });
 
     assert.equal(
@@ -592,11 +592,11 @@ module('Unit | Util | AllocationStatsTracker', function () {
     const alloc1 = MockAllocation();
     const alloc2 = MockAllocation();
     const SomeClass = EmberObject.extend({
-      stats: stats('alloc', () => fetch)
+      stats: stats('alloc', () => fetch),
     });
 
     const someObject = SomeClass.create({
-      alloc: alloc1
+      alloc: alloc1,
     });
 
     const stats1 = someObject.get('stats');
@@ -624,14 +624,14 @@ module('Unit | Util | AllocationStatsTracker', function () {
         {
           timestamp,
           used: cpu,
-          percent: cpu / 200
+          percent: cpu / 200,
         },
         {
           timestamp,
           used: memory,
-          percent: memory / 1024 / 1024 / 512
-        }
+          percent: memory / 1024 / 1024 / 512,
+        },
       ];
-    }
+    },
   });
 });

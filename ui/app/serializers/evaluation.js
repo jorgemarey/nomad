@@ -30,9 +30,9 @@ export default class Evaluation extends ApplicationSerializer {
     normalizedHash.data.relationships = normalizedHash.data.relationships || {};
 
     normalizedHash.data.relationships.relatedEvals = {
-      data: relatedEvals.map(evaluationStub => {
+      data: relatedEvals.map((evaluationStub) => {
         return { id: evaluationStub.ID, type: 'evaluation-stub' };
-      })
+      }),
     };
 
     normalizedHash.included = normalizedHash.included || [];

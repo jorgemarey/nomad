@@ -10,11 +10,11 @@ import percySnapshot from '@percy/ember';
 
 let managementToken, clientToken;
 
-module('Acceptance | jobs list', function(hooks) {
+module('Acceptance | jobs list', function (hooks) {
   setupApplicationTest(hooks);
   setupMirage(hooks);
 
-  hooks.beforeEach(function() {
+  hooks.beforeEach(function () {
     // Required for placing allocations (a result of creating jobs)
     server.create('node');
 
@@ -25,19 +25,19 @@ module('Acceptance | jobs list', function(hooks) {
     window.localStorage.nomadTokenSecret = managementToken.secretId;
   });
 
-  test('it passes an accessibility audit', async function(assert) {
+  test('it passes an accessibility audit', async function (assert) {
     await JobsList.visit();
     await a11yAudit(assert);
   });
 
-  test('visiting /jobs', async function(assert) {
+  test('visiting /jobs', async function (assert) {
     await JobsList.visit();
 
     assert.equal(currentURL(), '/jobs');
     assert.equal(document.title, 'Jobs - Nomad');
   });
 
-  test('/jobs should list the first page of jobs sorted by modify index', async function(assert) {
+  test('/jobs should list the first page of jobs sorted by modify index', async function (assert) {
     const jobsCount = JobsList.pageSize + 1;
     server.createList('job', jobsCount, { createAllocations: false });
 
@@ -52,7 +52,7 @@ module('Acceptance | jobs list', function(hooks) {
     });
   });
 
-  test('each job row should contain information about the job', async function(assert) {
+  test('each job row should contain information about the job', async function (assert) {
     server.createList('job', 2);
     const job = server.db.jobs.sortBy('modifyIndex').reverse()[0];
     const taskGroups = server.db.taskGroups.where({ jobId: job.id });
@@ -70,7 +70,7 @@ module('Acceptance | jobs list', function(hooks) {
     assert.equal(jobRow.taskGroups, taskGroups.length, '# Groups');
   });
 
-  test('each job row should link to the corresponding job', async function(assert) {
+  test('each job row should link to the corresponding job', async function (assert) {
     server.create('job');
     const job = server.db.jobs[0];
 
@@ -80,14 +80,14 @@ module('Acceptance | jobs list', function(hooks) {
     assert.equal(currentURL(), `/jobs/${job.id}@default`);
   });
 
-  test('the new job button transitions to the new job page', async function(assert) {
+  test('the new job button transitions to the new job page', async function (assert) {
     await JobsList.visit();
     await JobsList.runJobButton.click();
 
     assert.equal(currentURL(), '/jobs/run');
   });
 
-  test('the job run button is disabled when the token lacks permission', async function(assert) {
+  test('the job run button is disabled when the token lacks permission', async function (assert) {
     window.localStorage.nomadTokenSecret = clientToken.secretId;
 
     await JobsList.visit();
@@ -95,7 +95,7 @@ module('Acceptance | jobs list', function(hooks) {
     assert.ok(JobsList.runJobButton.isDisabled);
   });
 
-  test('the anonymous policy is fetched to check whether to show the job run button', async function(assert) {
+  test('the anonymous policy is fetched to check whether to show the job run button', async function (assert) {
     window.localStorage.removeItem('nomadTokenSecret');
 
     server.create('policy', {
@@ -105,17 +105,17 @@ module('Acceptance | jobs list', function(hooks) {
         Namespaces: [
           {
             Name: 'default',
-            Capabilities: ['list-jobs', 'submit-job']
-          }
-        ]
-      }
+            Capabilities: ['list-jobs', 'submit-job'],
+          },
+        ],
+      },
     });
 
     await JobsList.visit();
     assert.notOk(JobsList.runJobButton.isDisabled);
   });
 
-  test('when there are no jobs, there is an empty message', async function(assert) {
+  test('when there are no jobs, there is an empty message', async function (assert) {
     await JobsList.visit();
 
     await percySnapshot(assert);
@@ -128,7 +128,7 @@ module('Acceptance | jobs list', function(hooks) {
     );
   });
 
-  test('when there are jobs, but no matches for a search result, there is an empty message', async function(assert) {
+  test('when there are jobs, but no matches for a search result, there is an empty message', async function (assert) {
     server.create('job', { name: 'cat 1' });
     server.create('job', { name: 'cat 2' });
 
@@ -143,9 +143,9 @@ module('Acceptance | jobs list', function(hooks) {
     );
   });
 
-  test('searching resets the current page', async function(assert) {
+  test('searching resets the current page', async function (assert) {
     server.createList('job', JobsList.pageSize + 1, {
-      createAllocations: false
+      createAllocations: false,
     });
 
     await JobsList.visit();
@@ -162,7 +162,7 @@ module('Acceptance | jobs list', function(hooks) {
     assert.equal(currentURL(), '/jobs?search=foobar', 'No page query param');
   });
 
-  test('when a cluster has namespaces, each job row includes the job namespace', async function(assert) {
+  test('when a cluster has namespaces, each job row includes the job namespace', async function (assert) {
     server.createList('namespace', 2);
     server.createList('job', 2);
     const job = server.db.jobs.sortBy('modifyIndex').reverse()[0];
@@ -173,13 +173,13 @@ module('Acceptance | jobs list', function(hooks) {
     assert.equal(jobRow.namespace, job.namespaceId);
   });
 
-  test('when the namespace query param is set, only matching jobs are shown', async function(assert) {
+  test('when the namespace query param is set, only matching jobs are shown', async function (assert) {
     server.createList('namespace', 2);
     const job1 = server.create('job', {
-      namespaceId: server.db.namespaces[0].id
+      namespaceId: server.db.namespaces[0].id,
     });
     const job2 = server.create('job', {
-      namespaceId: server.db.namespaces[1].id
+      namespaceId: server.db.namespaces[1].id,
     });
 
     await JobsList.visit();
@@ -209,7 +209,7 @@ module('Acceptance | jobs list', function(hooks) {
     );
   });
 
-  test('when accessing jobs is forbidden, show a message with a link to the tokens page', async function(assert) {
+  test('when accessing jobs is forbidden, show a message with a link to the tokens page', async function (assert) {
     server.pretender.get('/v1/jobs', () => [403, {}, null]);
 
     await JobsList.visit();
@@ -227,7 +227,7 @@ module('Acceptance | jobs list', function(hooks) {
       : job.type;
   }
 
-  test('the jobs list page has appropriate faceted search options', async function(assert) {
+  test('the jobs list page has appropriate faceted search options', async function (assert) {
     await JobsList.visit();
 
     assert.ok(
@@ -254,7 +254,7 @@ module('Acceptance | jobs list', function(hooks) {
     },
     filter(job, selection) {
       return job.namespaceId === selection;
-    }
+    },
   });
 
   testFacet('Type', {
@@ -266,7 +266,7 @@ module('Acceptance | jobs list', function(hooks) {
       'Periodic',
       'Service',
       'System',
-      'System Batch'
+      'System Batch',
     ],
     async beforeEach() {
       server.createList('job', 2, { createAllocations: false, type: 'batch' });
@@ -274,17 +274,17 @@ module('Acceptance | jobs list', function(hooks) {
         createAllocations: false,
         type: 'batch',
         periodic: true,
-        childrenCount: 0
+        childrenCount: 0,
       });
       server.createList('job', 2, {
         createAllocations: false,
         type: 'batch',
         parameterized: true,
-        childrenCount: 0
+        childrenCount: 0,
       });
       server.createList('job', 2, {
         createAllocations: false,
-        type: 'service'
+        type: 'service',
       });
       await JobsList.visit();
     },
@@ -293,7 +293,7 @@ module('Acceptance | jobs list', function(hooks) {
       if (job.parameterized) displayType = 'parameterized';
       if (job.periodic) displayType = 'periodic';
       return selection.includes(displayType);
-    }
+    },
   });
 
   testFacet('Status', {
@@ -304,21 +304,21 @@ module('Acceptance | jobs list', function(hooks) {
       server.createList('job', 2, {
         status: 'pending',
         createAllocations: false,
-        childrenCount: 0
+        childrenCount: 0,
       });
       server.createList('job', 2, {
         status: 'running',
         createAllocations: false,
-        childrenCount: 0
+        childrenCount: 0,
       });
       server.createList('job', 2, {
         status: 'dead',
         createAllocations: false,
-        childrenCount: 0
+        childrenCount: 0,
       });
       await JobsList.visit();
     },
-    filter: (job, selection) => selection.includes(job.status)
+    filter: (job, selection) => selection.includes(job.status),
   });
 
   testFacet('Datacenter', {
@@ -334,32 +334,32 @@ module('Acceptance | jobs list', function(hooks) {
       server.create('job', {
         datacenters: ['pdx', 'lax'],
         createAllocations: false,
-        childrenCount: 0
+        childrenCount: 0,
       });
       server.create('job', {
         datacenters: ['pdx', 'ord'],
         createAllocations: false,
-        childrenCount: 0
+        childrenCount: 0,
       });
       server.create('job', {
         datacenters: ['lax', 'jfk'],
         createAllocations: false,
-        childrenCount: 0
+        childrenCount: 0,
       });
       server.create('job', {
         datacenters: ['jfk', 'dfw'],
         createAllocations: false,
-        childrenCount: 0
+        childrenCount: 0,
       });
       server.create('job', {
         datacenters: ['pdx'],
         createAllocations: false,
-        childrenCount: 0
+        childrenCount: 0,
       });
       await JobsList.visit();
     },
     filter: (job, selection) =>
-      job.datacenters.find(dc => selection.includes(dc))
+      job.datacenters.find((dc) => selection.includes(dc)),
   });
 
   testFacet('Prefix', {
@@ -376,25 +376,25 @@ module('Acceptance | jobs list', function(hooks) {
         'hashi.two',
         'hashi-three',
         'nmd_two',
-        'noprefix'
-      ].forEach(name => {
+        'noprefix',
+      ].forEach((name) => {
         server.create('job', {
           name,
           createAllocations: false,
-          childrenCount: 0
+          childrenCount: 0,
         });
       });
       await JobsList.visit();
     },
     filter: (job, selection) =>
-      selection.find(prefix => job.name.startsWith(prefix))
+      selection.find((prefix) => job.name.startsWith(prefix)),
   });
 
-  test('when the facet selections result in no matches, the empty state states why', async function(assert) {
+  test('when the facet selections result in no matches, the empty state states why', async function (assert) {
     server.createList('job', 2, {
       status: 'pending',
       createAllocations: false,
-      childrenCount: 0
+      childrenCount: 0,
     });
 
     await JobsList.visit();
@@ -409,7 +409,7 @@ module('Acceptance | jobs list', function(hooks) {
     );
   });
 
-  test('the jobs list is immediately filtered based on query params', async function(assert) {
+  test('the jobs list is immediately filtered based on query params', async function (assert) {
     server.create('job', { type: 'batch', createAllocations: false });
     server.create('job', { type: 'service', createAllocations: false });
 
@@ -422,7 +422,7 @@ module('Acceptance | jobs list', function(hooks) {
     );
   });
 
-  test('when the user has a client token that has a namespace with a policy to run a job', async function(assert) {
+  test('when the user has a client token that has a namespace with a policy to run a job', async function (assert) {
     const READ_AND_WRITE_NAMESPACE = 'read-and-write-namespace';
     const READ_ONLY_NAMESPACE = 'read-only-namespace';
 
@@ -436,14 +436,14 @@ module('Acceptance | jobs list', function(hooks) {
         Namespaces: [
           {
             Name: READ_AND_WRITE_NAMESPACE,
-            Capabilities: ['submit-job']
+            Capabilities: ['submit-job'],
           },
           {
             Name: READ_ONLY_NAMESPACE,
-            Capabilities: ['list-job']
-          }
-        ]
-      }
+            Capabilities: ['list-job'],
+          },
+        ],
+      },
     });
 
     clientToken.policyIds = [policy.id];
@@ -458,7 +458,7 @@ module('Acceptance | jobs list', function(hooks) {
     assert.notOk(JobsList.runJobButton.isDisabled);
   });
 
-  test('when the user has no client tokens that allow them to run a job', async function(assert) {
+  test('when the user has no client tokens that allow them to run a job', async function (assert) {
     const READ_AND_WRITE_NAMESPACE = 'read-and-write-namespace';
     const READ_ONLY_NAMESPACE = 'read-only-namespace';
 
@@ -471,10 +471,10 @@ module('Acceptance | jobs list', function(hooks) {
         Namespaces: [
           {
             Name: READ_ONLY_NAMESPACE,
-            Capabilities: ['list-job']
-          }
-        ]
-      }
+            Capabilities: ['list-job'],
+          },
+        ],
+      },
     });
 
     clientToken.policyIds = [policy.id];
@@ -496,10 +496,10 @@ module('Acceptance | jobs list', function(hooks) {
     async setup() {
       server.createList('job', JobsList.pageSize, {
         shallow: true,
-        createAllocations: false
+        createAllocations: false,
       });
       await JobsList.visit();
-    }
+    },
   });
 
   async function facetOptions(assert, beforeEach, facet, expectedOptions) {
@@ -514,7 +514,7 @@ module('Acceptance | jobs list', function(hooks) {
     }
 
     assert.deepEqual(
-      facet.options.map(option => option.label.trim()),
+      facet.options.map((option) => option.label.trim()),
       expectation,
       'Options for facet are as expected'
     );
@@ -524,11 +524,11 @@ module('Acceptance | jobs list', function(hooks) {
     label,
     { facet, paramName, beforeEach, filter, expectedOptions, optionToSelect }
   ) {
-    test(`the ${label} facet has the correct options`, async function(assert) {
+    test(`the ${label} facet has the correct options`, async function (assert) {
       await facetOptions(assert, beforeEach, facet, expectedOptions);
     });
 
-    test(`the ${label} facet filters the jobs list by ${label}`, async function(assert) {
+    test(`the ${label} facet filters the jobs list by ${label}`, async function (assert) {
       await beforeEach();
       await facet.toggle();
 
@@ -537,7 +537,7 @@ module('Acceptance | jobs list', function(hooks) {
       await option.select();
 
       const expectedJobs = server.db.jobs
-        .filter(job => filter(job, selection))
+        .filter((job) => filter(job, selection))
         .sortBy('modifyIndex')
         .reverse();
 
@@ -550,7 +550,7 @@ module('Acceptance | jobs list', function(hooks) {
       });
     });
 
-    test(`selecting an option in the ${label} facet updates the ${paramName} query param`, async function(assert) {
+    test(`selecting an option in the ${label} facet updates the ${paramName} query param`, async function (assert) {
       await beforeEach();
       await facet.toggle();
 
@@ -569,11 +569,11 @@ module('Acceptance | jobs list', function(hooks) {
     label,
     { facet, paramName, beforeEach, filter, expectedOptions }
   ) {
-    test(`the ${label} facet has the correct options`, async function(assert) {
+    test(`the ${label} facet has the correct options`, async function (assert) {
       await facetOptions(assert, beforeEach, facet, expectedOptions);
     });
 
-    test(`the ${label} facet filters the jobs list by ${label}`, async function(assert) {
+    test(`the ${label} facet filters the jobs list by ${label}`, async function (assert) {
       let option;
 
       await beforeEach();
@@ -584,7 +584,7 @@ module('Acceptance | jobs list', function(hooks) {
 
       const selection = [option.key];
       const expectedJobs = server.db.jobs
-        .filter(job => filter(job, selection))
+        .filter((job) => filter(job, selection))
         .sortBy('modifyIndex')
         .reverse();
 
@@ -597,7 +597,7 @@ module('Acceptance | jobs list', function(hooks) {
       });
     });
 
-    test(`selecting multiple options in the ${label} facet results in a broader search`, async function(assert) {
+    test(`selecting multiple options in the ${label} facet results in a broader search`, async function (assert) {
       const selection = [];
 
       await beforeEach();
@@ -611,7 +611,7 @@ module('Acceptance | jobs list', function(hooks) {
       selection.push(option2.key);
 
       const expectedJobs = server.db.jobs
-        .filter(job => filter(job, selection))
+        .filter((job) => filter(job, selection))
         .sortBy('modifyIndex')
         .reverse();
 
@@ -624,7 +624,7 @@ module('Acceptance | jobs list', function(hooks) {
       });
     });
 
-    test(`selecting options in the ${label} facet updates the ${paramName} query param`, async function(assert) {
+    test(`selecting options in the ${label} facet updates the ${paramName} query param`, async function (assert) {
       const selection = [];
 
       await beforeEach();
@@ -643,12 +643,12 @@ module('Acceptance | jobs list', function(hooks) {
       );
     });
 
-    test('the run job button works when filters are set', async function(assert) {
-      ['pre-one', 'pre-two', 'pre-three'].forEach(name => {
+    test('the run job button works when filters are set', async function (assert) {
+      ['pre-one', 'pre-two', 'pre-three'].forEach((name) => {
         server.create('job', {
           name,
           createAllocations: false,
-          childrenCount: 0
+          childrenCount: 0,
         });
       });
 

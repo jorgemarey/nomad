@@ -4,7 +4,7 @@ import classic from 'ember-classic-decorator';
 @classic
 export default class TaskEventSerializer extends ApplicationSerializer {
   attrs = {
-    message: 'DisplayMessage'
+    message: 'DisplayMessage',
   };
 
   separateNanos = ['Time'];

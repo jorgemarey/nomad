@@ -17,14 +17,14 @@ const allScenarios = {
   everyFeature,
   emptyCluster,
   ...topoScenarios,
-  ...sysbatchScenarios
+  ...sysbatchScenarios,
 };
 
 const scenario =
   getScenarioQueryParameter() ||
   getConfigValue('mirageScenario', 'emptyCluster');
 
-export default function(server) {
+export default function (server) {
   const activeScenario = allScenarios[scenario];
   if (!activeScenario) {
     throw new Error(
@@ -62,22 +62,22 @@ function smallCluster(server) {
         evaluation: server.create('evaluation', {
           id: `branching_${i}`,
           previousEval: i > 0 ? `branching_0` : '',
-          jobID: pickOne(server.db.jobs).id
+          jobID: pickOne(server.db.jobs).id,
         }),
 
         evaluationStub: server.create('evaluation-stub', {
           id: `branching_${i}`,
           previousEval: i > 0 ? `branching_0` : '',
-          status: 'failed'
-        })
+          status: 'failed',
+        }),
       };
     })
     .map((x, i, all) => {
       x.evaluation.update({
         relatedEvals:
           i === 0
-            ? all.filter((_, j) => j !== 0).map(e => e.evaluation)
-            : all.filter((_, j) => j !== i).map(e => e.evaluation)
+            ? all.filter((_, j) => j !== 0).map((e) => e.evaluation)
+            : all.filter((_, j) => j !== i).map((e) => e.evaluation),
       });
       return x;
     });
@@ -91,20 +91,20 @@ function smallCluster(server) {
         evaluation: server.create('evaluation', {
           id: `linear_${i}`,
           previousEval: i > 0 ? `linear_${i - 1}` : '',
-          jobID: pickOne(server.db.jobs).id
+          jobID: pickOne(server.db.jobs).id,
         }),
 
         evaluationStub: server.create('evaluation-stub', {
           id: `linear_${i}`,
           previousEval: i > 0 ? `linear_${i - 1}` : '',
           nextEval: `linear_${i + 1}`,
-          status: 'failed'
-        })
+          status: 'failed',
+        }),
       };
     })
     .map((x, i, all) => {
       x.evaluation.update({
-        relatedEvals: all.filter((_, j) => i !== j).map(e => e.evaluation)
+        relatedEvals: all.filter((_, j) => i !== j).map((e) => e.evaluation),
       });
       return x;
     });
@@ -113,7 +113,7 @@ function smallCluster(server) {
 
   const csiAllocations = server.createList('allocation', 5);
   const volumes = server.schema.csiVolumes.all().models;
-  csiAllocations.forEach(alloc => {
+  csiAllocations.forEach((alloc) => {
     const volume = pickOne(volumes);
     volume.writeAllocs.add(alloc);
     volume.readAllocs.add(alloc);
@@ -180,12 +180,12 @@ function everyFeature(server) {
     type: 'service',
     activeDeployment: true,
     namespaceId: 'default',
-    createAllocations: false
+    createAllocations: false,
   });
   server.create('job', {
     type: 'batch',
     failedPlacements: true,
-    namespaceId: 'default'
+    namespaceId: 'default',
   });
   server.create('job', { type: 'system', namespaceId: 'default' });
   server.create('job', 'periodic', { namespaceId: 'default' });
@@ -213,15 +213,17 @@ function createNamespaces(server) {
 }
 
 function createRegions(server) {
-  ['americas', 'europe', 'asia', 'some-long-name-just-to-test'].forEach(id => {
-    server.create('region', { id });
-  });
+  ['americas', 'europe', 'asia', 'some-long-name-just-to-test'].forEach(
+    (id) => {
+      server.create('region', { id });
+    }
+  );
 }
 
 /* eslint-disable */
 function logTokens(server) {
   console.log('TOKENS:');
-  server.db.tokens.forEach(token => {
+  server.db.tokens.forEach((token) => {
     console.log(`
 Name: ${token.name}
 Secret: ${token.secretId}

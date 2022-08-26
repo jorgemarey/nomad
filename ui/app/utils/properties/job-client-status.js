@@ -9,7 +9,7 @@ const STATUS = [
   'degraded',
   'failed',
   'lost',
-  'unknown'
+  'unknown',
 ];
 
 // An Ember.Computed property that computes the aggregated status of a job in a
@@ -20,12 +20,12 @@ export default function jobClientStatus(nodesKey, jobKey) {
   return computed(
     `${nodesKey}.[]`,
     `${jobKey}.{datacenters,status,allocations.@each.clientStatus,taskGroups}`,
-    function() {
+    function () {
       const job = this.get(jobKey);
       const nodes = this.get(nodesKey);
 
       // Filter nodes by the datacenters defined in the job.
-      const filteredNodes = nodes.filter(n => {
+      const filteredNodes = nodes.filter((n) => {
         return job.datacenters.indexOf(n.datacenter) >= 0;
       });
 
@@ -35,7 +35,7 @@ export default function jobClientStatus(nodesKey, jobKey) {
 
       // Group the job allocations by the ID of the client that is running them.
       const allocsByNodeID = {};
-      job.allocations.forEach(a => {
+      job.allocations.forEach((a) => {
         const nodeId = a.belongsTo('node').id();
         if (!allocsByNodeID[nodeId]) {
           allocsByNodeID[nodeId] = [];
@@ -46,9 +46,9 @@ export default function jobClientStatus(nodesKey, jobKey) {
       const result = {
         byNode: {},
         byStatus: {},
-        totalNodes: filteredNodes.length
+        totalNodes: filteredNodes.length,
       };
-      filteredNodes.forEach(n => {
+      filteredNodes.forEach((n) => {
         const status = jobStatus(allocsByNodeID[n.id], job.taskGroups.length);
         result.byNode[n.id] = status;
 
@@ -64,11 +64,11 @@ export default function jobClientStatus(nodesKey, jobKey) {
 }
 
 function allQueued(nodes) {
-  const nodeIDs = nodes.map(n => n.id);
+  const nodeIDs = nodes.map((n) => n.id);
   return {
-    byNode: Object.fromEntries(nodeIDs.map(id => [id, 'queued'])),
+    byNode: Object.fromEntries(nodeIDs.map((id) => [id, 'queued'])),
     byStatus: canonicalizeStatus({ queued: nodeIDs }),
-    totalNodes: nodes.length
+    totalNodes: nodes.length,
   };
 }
 
@@ -106,7 +106,7 @@ function jobStatus(allocs, expected) {
 
   // Count how many allocations are in each `clientStatus` value.
   const summary = allocs
-    .filter(a => !a.isOld)
+    .filter((a) => !a.isOld)
     .reduce((acc, a) => {
       const status = a.clientStatus;
       if (!acc[status]) {

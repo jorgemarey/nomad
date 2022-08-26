@@ -11,7 +11,7 @@ export default class IndexRoute extends Route.extend(WithWatchers) {
     if (!model) return;
 
     controller.set('watchers', {
-      model: this.watch.perform(model)
+      model: this.watch.perform(model),
     });
   }
 

@@ -6,7 +6,7 @@ import classic from 'ember-classic-decorator';
 @classic
 export default class JobAdapter extends WatchableNamespaceIDs {
   relationshipFallbackLinks = {
-    summary: '/summary'
+    summary: '/summary',
   };
 
   fetchRawDefinition(job) {
@@ -34,8 +34,8 @@ export default class JobAdapter extends WatchableNamespaceIDs {
     return this.ajax(url, 'POST', {
       data: {
         JobHCL: spec,
-        Canonicalize: true
-      }
+        Canonicalize: true,
+      },
     });
   }
 
@@ -47,9 +47,9 @@ export default class JobAdapter extends WatchableNamespaceIDs {
     return this.ajax(url, 'POST', {
       data: {
         Job: job.get('_newDefinitionJSON'),
-        Diff: true
-      }
-    }).then(json => {
+        Diff: true,
+      },
+    }).then((json) => {
       json.ID = jobId;
       store.pushPayload('job-plan', { jobPlans: [json] });
       return store.peekRecord('job-plan', jobId);
@@ -61,8 +61,8 @@ export default class JobAdapter extends WatchableNamespaceIDs {
   run(job) {
     return this.ajax(this.urlForCreateRecord('job'), 'POST', {
       data: {
-        Job: job.get('_newDefinitionJSON')
-      }
+        Job: job.get('_newDefinitionJSON'),
+      },
     });
   }
 
@@ -70,8 +70,8 @@ export default class JobAdapter extends WatchableNamespaceIDs {
     const jobId = job.get('id') || job.get('_idBeforeSaving');
     return this.ajax(this.urlForUpdateRecord(jobId, 'job'), 'POST', {
       data: {
-        Job: job.get('_newDefinitionJSON')
-      }
+        Job: job.get('_newDefinitionJSON'),
+      },
     });
   }
 
@@ -85,12 +85,12 @@ export default class JobAdapter extends WatchableNamespaceIDs {
         Count: count,
         Message: message,
         Target: {
-          Group: group
+          Group: group,
         },
         Meta: {
-          Source: 'nomad-ui'
-        }
-      }
+          Source: 'nomad-ui',
+        },
+      },
     });
   }
 
@@ -102,8 +102,8 @@ export default class JobAdapter extends WatchableNamespaceIDs {
     return this.ajax(url, 'POST', {
       data: {
         Payload: base64EncodeString(payload),
-        Meta: meta
-      }
+        Meta: meta,
+      },
     });
   }
 }

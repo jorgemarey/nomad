@@ -6,7 +6,7 @@ import { debounce } from '@ember/runloop';
 import {
   classNames,
   tagName,
-  attributeBindings
+  attributeBindings,
 } from '@ember-decorators/component';
 import classic from 'ember-classic-decorator';
 import { lazyClick } from '../helpers/lazy-click';

@@ -4,7 +4,7 @@ import {
   click,
   currentRouteName,
   currentURL,
-  visit
+  visit,
 } from '@ember/test-helpers';
 import { module, test } from 'qunit';
 import { setupApplicationTest } from 'ember-qunit';
@@ -24,10 +24,10 @@ export default function moduleForJob(
 ) {
   let job;
 
-  module(title, function(hooks) {
+  module(title, function (hooks) {
     setupApplicationTest(hooks);
     setupMirage(hooks);
-    hooks.before(function() {
+    hooks.before(function () {
       if (context !== 'allocations' && context !== 'children') {
         throw new Error(
           `Invalid context provided to moduleForJob, expected either "allocations" or "children", got ${context}`
@@ -35,7 +35,7 @@ export default function moduleForJob(
       }
     });
 
-    hooks.beforeEach(async function() {
+    hooks.beforeEach(async function () {
       server.create('node');
       job = jobFactory();
       if (!job.namespace || job.namespace === 'default') {
@@ -50,7 +50,7 @@ export default function moduleForJob(
       }
     });
 
-    test('visiting /jobs/:job_id', async function(assert) {
+    test('visiting /jobs/:job_id', async function (assert) {
       const expectedURL = job.namespace
         ? `/jobs/${job.name}@${job.namespace}`
         : `/jobs/${job.name}`;
@@ -59,7 +59,7 @@ export default function moduleForJob(
       assert.equal(document.title, `Job ${job.name} - Nomad`);
     });
 
-    test('the subnav links to overview', async function(assert) {
+    test('the subnav links to overview', async function (assert) {
       await JobDetail.tabFor('overview').visit();
 
       const expectedURL = job.namespace
@@ -69,7 +69,7 @@ export default function moduleForJob(
       assert.equal(decodeURIComponent(currentURL()), expectedURL);
     });
 
-    test('the subnav links to definition', async function(assert) {
+    test('the subnav links to definition', async function (assert) {
       await JobDetail.tabFor('definition').visit();
 
       const expectedURL = job.namespace
@@ -79,7 +79,7 @@ export default function moduleForJob(
       assert.equal(decodeURIComponent(currentURL()), expectedURL);
     });
 
-    test('the subnav links to versions', async function(assert) {
+    test('the subnav links to versions', async function (assert) {
       await JobDetail.tabFor('versions').visit();
 
       const expectedURL = job.namespace
@@ -89,7 +89,7 @@ export default function moduleForJob(
       assert.equal(decodeURIComponent(currentURL()), expectedURL);
     });
 
-    test('the subnav links to evaluations', async function(assert) {
+    test('the subnav links to evaluations', async function (assert) {
       await JobDetail.tabFor('evaluations').visit();
 
       const expectedURL = job.namespace
@@ -99,7 +99,7 @@ export default function moduleForJob(
       assert.equal(decodeURIComponent(currentURL()), expectedURL);
     });
 
-    test('the title buttons are dependent on job status', async function(assert) {
+    test('the title buttons are dependent on job status', async function (assert) {
       if (job.status === 'dead') {
         assert.ok(JobDetail.start.isPresent);
         assert.notOk(JobDetail.stop.isPresent);
@@ -112,7 +112,7 @@ export default function moduleForJob(
     });
 
     if (context === 'allocations') {
-      test('allocations for the job are shown in the overview', async function(assert) {
+      test('allocations for the job are shown in the overview', async function (assert) {
         assert.ok(
           JobDetail.allocationsSummary.isPresent,
           'Allocations are shown in the summary section'
@@ -123,7 +123,7 @@ export default function moduleForJob(
         );
       });
 
-      test('clicking in an allocation row navigates to that allocation', async function(assert) {
+      test('clicking in an allocation row navigates to that allocation', async function (assert) {
         const allocationRow = JobDetail.allocations[0];
         const allocationId = allocationRow.id;
 
@@ -136,7 +136,7 @@ export default function moduleForJob(
         );
       });
 
-      test('clicking in a task group row navigates to that task group', async function(assert) {
+      test('clicking in a task group row navigates to that task group', async function (assert) {
         const tgRow = JobDetail.taskGroups[0];
         const tgName = tgRow.name;
 
@@ -149,7 +149,7 @@ export default function moduleForJob(
         assert.equal(currentURL(), expectedURL);
       });
 
-      test('clicking legend item navigates to a pre-filtered allocations table', async function(assert) {
+      test('clicking legend item navigates to a pre-filtered allocations table', async function (assert) {
         const legendItem =
           JobDetail.allocationsSummary.legend.clickableItems[1];
         const status = legendItem.label;
@@ -168,7 +168,7 @@ export default function moduleForJob(
         assert.deepEqual(gotURL.searchParams, expectedURL.searchParams);
       });
 
-      test('clicking in a slice takes you to a pre-filtered allocations table', async function(assert) {
+      test('clicking in a slice takes you to a pre-filtered allocations table', async function (assert) {
         const slice = JobDetail.allocationsSummary.slices[1];
         const status = slice.label;
         await slice.click();
@@ -197,7 +197,7 @@ export default function moduleForJob(
     }
 
     if (context === 'children') {
-      test('children for the job are shown in the overview', async function(assert) {
+      test('children for the job are shown in the overview', async function (assert) {
         assert.ok(
           JobDetail.childrenSummary.isPresent,
           'Children are shown in the summary section'
@@ -210,7 +210,7 @@ export default function moduleForJob(
     }
 
     for (var testName in additionalTests) {
-      test(testName, async function(assert) {
+      test(testName, async function (assert) {
         await additionalTests[testName].call(this, job, assert);
       });
     }
@@ -228,38 +228,38 @@ export function moduleForJobWithClientStatus(
 ) {
   let job;
 
-  module(title, function(hooks) {
+  module(title, function (hooks) {
     setupApplicationTest(hooks);
     setupMirage(hooks);
 
-    hooks.beforeEach(async function() {
+    hooks.beforeEach(async function () {
       const clients = server.createList('node', 3, {
         datacenter: 'dc1',
-        status: 'ready'
+        status: 'ready',
       });
       job = jobFactory();
-      clients.forEach(c => {
+      clients.forEach((c) => {
         server.create('allocation', { jobId: job.id, nodeId: c.id });
       });
     });
 
-    module('with node:read permissions', function(hooks) {
-      hooks.beforeEach(async function() {
+    module('with node:read permissions', function (hooks) {
+      hooks.beforeEach(async function () {
         // Displaying the job status in client requires node:read permission.
         setPolicy({
           id: 'node-read',
           name: 'node-read',
           rulesJSON: {
             Node: {
-              Policy: 'read'
-            }
-          }
+              Policy: 'read',
+            },
+          },
         });
 
         await visitJobDetailPage(job);
       });
 
-      test('the subnav links to clients', async function(assert) {
+      test('the subnav links to clients', async function (assert) {
         await JobDetail.tabFor('clients').visit();
 
         const expectedURL = job.namespace
@@ -269,14 +269,14 @@ export function moduleForJobWithClientStatus(
         assert.equal(currentURL(), expectedURL);
       });
 
-      test('job status summary is shown in the overview', async function(assert) {
+      test('job status summary is shown in the overview', async function (assert) {
         assert.ok(
           JobDetail.jobClientStatusSummary.statusBar.isPresent,
           'Summary bar is displayed in the Job Status in Client summary section'
         );
       });
 
-      test('clicking legend item navigates to a pre-filtered clients table', async function(assert) {
+      test('clicking legend item navigates to a pre-filtered clients table', async function (assert) {
         const legendItem =
           JobDetail.jobClientStatusSummary.statusBar.legend.clickableItems[0];
         const status = legendItem.label;
@@ -295,7 +295,7 @@ export function moduleForJobWithClientStatus(
         assert.deepEqual(gotURL.searchParams, expectedURL.searchParams);
       });
 
-      test('clicking in a slice takes you to a pre-filtered clients table', async function(assert) {
+      test('clicking in a slice takes you to a pre-filtered clients table', async function (assert) {
         const slice = JobDetail.jobClientStatusSummary.statusBar.slices[0];
         const status = slice.label;
         await slice.click();
@@ -310,25 +310,25 @@ export function moduleForJobWithClientStatus(
       });
 
       for (var testName in additionalTests) {
-        test(testName, async function(assert) {
+        test(testName, async function (assert) {
           await additionalTests[testName].call(this, job, assert);
         });
       }
     });
 
-    module('without node:read permissions', function(hooks) {
-      hooks.beforeEach(async function() {
+    module('without node:read permissions', function (hooks) {
+      hooks.beforeEach(async function () {
         // Test blank Node policy to mock lack of permission.
         setPolicy({
           id: 'node',
           name: 'node',
-          rulesJSON: {}
+          rulesJSON: {},
         });
 
         await visitJobDetailPage(job);
       });
 
-      test('the page handles presentations concerns regarding the user not having node:read permissions', async function(assert) {
+      test('the page handles presentations concerns regarding the user not having node:read permissions', async function (assert) {
         assert
           .dom("[data-test-tab='clients']")
           .doesNotExist(
@@ -340,7 +340,7 @@ export function moduleForJobWithClientStatus(
           .exists('Renders Not Authorized message');
       });
 
-      test('/jobs/job/clients route is protected with authorization logic', async function(assert) {
+      test('/jobs/job/clients route is protected with authorization logic', async function (assert) {
         await visit(`/jobs/${job.id}/clients`);
 
         assert.equal(

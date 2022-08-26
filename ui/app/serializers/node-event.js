@@ -4,6 +4,6 @@ import classic from 'ember-classic-decorator';
 @classic
 export default class NodeEventSerializer extends ApplicationSerializer {
   attrs = {
-    time: 'Timestamp'
+    time: 'Timestamp',
   };
 }

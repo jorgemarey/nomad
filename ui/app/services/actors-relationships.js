@@ -29,7 +29,7 @@ function boxToArrow(ra, rb) {
     ex,
     ey,
     ae,
-    as
+    as,
   };
 }
 
@@ -54,7 +54,7 @@ export default class ActorRelationshipService extends Service {
 
   @action deregisterActor(actor) {
     schedule('actions', this, () => {
-      this.actors = this.actors.filter(a => a !== actor);
+      this.actors = this.actors.filter((a) => a !== actor);
     });
   }
 
@@ -62,8 +62,8 @@ export default class ActorRelationshipService extends Service {
     const { actors } = this;
 
     return actors
-      .filter(e => e.previousEval)
-      .map(e => {
+      .filter((e) => e.previousEval)
+      .map((e) => {
         const { previousEval: pid, id } = e;
 
         const eRectangle = document.querySelector(`[data-eval="${id}"]`);
@@ -87,7 +87,7 @@ export default class ActorRelationshipService extends Service {
         sx,
         sy,
         ex,
-        ey
+        ey,
       };
     });
   }

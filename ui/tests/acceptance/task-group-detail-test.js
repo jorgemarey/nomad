@@ -9,7 +9,7 @@ import {
   formatBytes,
   formatHertz,
   formatScheduledBytes,
-  formatScheduledHertz
+  formatScheduledHertz,
 } from 'nomad-ui/utils/units';
 import TaskGroup from 'nomad-ui/tests/pages/jobs/job/task-group';
 import Layout from 'nomad-ui/tests/pages/layout';
@@ -24,30 +24,30 @@ let managementToken;
 
 const sum = (total, n) => total + n;
 
-module('Acceptance | task group detail', function(hooks) {
+module('Acceptance | task group detail', function (hooks) {
   setupApplicationTest(hooks);
   setupMirage(hooks);
 
-  hooks.beforeEach(async function() {
+  hooks.beforeEach(async function () {
     server.create('agent');
     server.create('node', 'forceIPv4');
 
     job = server.create('job', {
       groupsCount: 2,
-      createAllocations: false
+      createAllocations: false,
     });
 
     const taskGroups = server.db.taskGroups.where({ jobId: job.id });
     taskGroup = taskGroups[0];
 
-    tasks = taskGroup.taskIds.map(id => server.db.tasks.find(id));
+    tasks = taskGroup.taskIds.map((id) => server.db.tasks.find(id));
 
     server.create('node', 'forceIPv4');
 
     allocations = server.createList('allocation', 2, {
       jobId: job.id,
       taskGroup: taskGroup.name,
-      clientStatus: 'running'
+      clientStatus: 'running',
     });
 
     // Allocations associated to a different task group on the job to
@@ -55,20 +55,20 @@ module('Acceptance | task group detail', function(hooks) {
     server.createList('allocation', 3, {
       jobId: job.id,
       taskGroup: taskGroups[1].name,
-      clientStatus: 'running'
+      clientStatus: 'running',
     });
 
     // Set a static name to make the search test deterministic
-    server.db.allocations.forEach(alloc => {
+    server.db.allocations.forEach((alloc) => {
       alloc.name = 'aaaaa';
     });
 
     // Mark the first alloc as rescheduled
     allocations[0].update({
-      nextAllocation: allocations[1].id
+      nextAllocation: allocations[1].id,
     });
     allocations[1].update({
-      previousAllocation: allocations[0].id
+      previousAllocation: allocations[0].id,
     });
 
     managementToken = server.create('token');
@@ -76,16 +76,16 @@ module('Acceptance | task group detail', function(hooks) {
     window.localStorage.clear();
   });
 
-  test('it passes an accessibility audit', async function(assert) {
+  test('it passes an accessibility audit', async function (assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
     await a11yAudit(assert);
   });
 
-  test('/jobs/:id/:task-group should list high-level metrics for the allocation', async function(assert) {
+  test('/jobs/:id/:task-group should list high-level metrics for the allocation', async function (assert) {
     const totalCPU = tasks.mapBy('resources.CPU').reduce(sum, 0);
     const totalMemory = tasks.mapBy('resources.MemoryMB').reduce(sum, 0);
     const totalMemoryMax = tasks
-      .map(t => t.resources.MemoryMaxMB || t.resources.MemoryMB)
+      .map((t) => t.resources.MemoryMaxMB || t.resources.MemoryMB)
       .reduce(sum, 0);
     const totalDisk = taskGroup.ephemeralDisk.SizeMB;
 
@@ -127,7 +127,7 @@ module('Acceptance | task group detail', function(hooks) {
     );
   });
 
-  test('/jobs/:id/:task-group should have breadcrumbs for job and jobs', async function(assert) {
+  test('/jobs/:id/:task-group should have breadcrumbs for job and jobs', async function (assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
 
     assert.equal(
@@ -147,14 +147,14 @@ module('Acceptance | task group detail', function(hooks) {
     );
   });
 
-  test('/jobs/:id/:task-group first breadcrumb should link to jobs', async function(assert) {
+  test('/jobs/:id/:task-group first breadcrumb should link to jobs', async function (assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
 
     await Layout.breadcrumbFor('jobs.index').visit();
     assert.equal(currentURL(), '/jobs', 'First breadcrumb links back to jobs');
   });
 
-  test('/jobs/:id/:task-group second breadcrumb should link to the job for the task group', async function(assert) {
+  test('/jobs/:id/:task-group second breadcrumb should link to the job for the task group', async function (assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
 
     await Layout.breadcrumbFor('jobs.job.index').visit();
@@ -165,7 +165,7 @@ module('Acceptance | task group detail', function(hooks) {
     );
   });
 
-  test('when the user has a client token that has a namespace with a policy to run and scale a job the autoscaler options should be available', async function(assert) {
+  test('when the user has a client token that has a namespace with a policy to run and scale a job the autoscaler options should be available', async function (assert) {
     window.localStorage.clear();
 
     const SCALE_AND_WRITE_NAMESPACE = 'scale-and-write-namespace';
@@ -174,7 +174,7 @@ module('Acceptance | task group detail', function(hooks) {
 
     server.create('namespace', { id: SCALE_AND_WRITE_NAMESPACE });
     const secondNamespace = server.create('namespace', {
-      id: READ_ONLY_NAMESPACE
+      id: READ_ONLY_NAMESPACE,
     });
 
     job = server.create('job', {
@@ -182,14 +182,14 @@ module('Acceptance | task group detail', function(hooks) {
       createAllocations: false,
       shallow: true,
       noActiveDeployment: true,
-      namespaceId: SCALE_AND_WRITE_NAMESPACE
+      namespaceId: SCALE_AND_WRITE_NAMESPACE,
     });
     const scalingGroup = server.create('task-group', {
       job,
       name: 'scaling',
       count: 1,
       shallow: true,
-      withScaling: true
+      withScaling: true,
     });
     job.update({ taskGroupIds: [scalingGroup.id] });
 
@@ -198,14 +198,14 @@ module('Acceptance | task group detail', function(hooks) {
       createAllocations: false,
       shallow: true,
       noActiveDeployment: true,
-      namespaceId: READ_ONLY_NAMESPACE
+      namespaceId: READ_ONLY_NAMESPACE,
     });
     const scalingGroup2 = server.create('task-group', {
       job: job2,
       name: 'scaling',
       count: 1,
       shallow: true,
-      withScaling: true
+      withScaling: true,
     });
     job2.update({ taskGroupIds: [scalingGroup2.id] });
 
@@ -216,14 +216,14 @@ module('Acceptance | task group detail', function(hooks) {
         Namespaces: [
           {
             Name: SCALE_AND_WRITE_NAMESPACE,
-            Capabilities: ['scale-job', 'submit-job', 'read-job', 'list-jobs']
+            Capabilities: ['scale-job', 'submit-job', 'read-job', 'list-jobs'],
           },
           {
             Name: READ_ONLY_NAMESPACE,
-            Capabilities: ['list-jobs', 'read-job']
-          }
-        ]
-      }
+            Capabilities: ['list-jobs', 'read-job'],
+          },
+        ],
+      },
     });
 
     clientToken.policyIds = [policy.id];
@@ -233,7 +233,7 @@ module('Acceptance | task group detail', function(hooks) {
 
     await TaskGroup.visit({
       id: `${job.id}@${SCALE_AND_WRITE_NAMESPACE}`,
-      name: scalingGroup.name
+      name: scalingGroup.name,
     });
 
     assert.equal(
@@ -244,7 +244,7 @@ module('Acceptance | task group detail', function(hooks) {
 
     await TaskGroup.visit({
       id: `${job2.id}@${secondNamespace.name}`,
-      name: scalingGroup2.name
+      name: scalingGroup2.name,
     });
     assert.equal(
       decodeURIComponent(currentURL()),
@@ -253,11 +253,11 @@ module('Acceptance | task group detail', function(hooks) {
     assert.ok(TaskGroup.countStepper.increment.isDisabled);
   });
 
-  test('/jobs/:id/:task-group should list one page of allocations for the task group', async function(assert) {
+  test('/jobs/:id/:task-group should list one page of allocations for the task group', async function (assert) {
     server.createList('allocation', TaskGroup.pageSize, {
       jobId: job.id,
       taskGroup: taskGroup.name,
-      clientStatus: 'running'
+      clientStatus: 'running',
     });
 
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
@@ -275,7 +275,7 @@ module('Acceptance | task group detail', function(hooks) {
     );
   });
 
-  test('each allocation should show basic information about the allocation', async function(assert) {
+  test('each allocation should show basic information about the allocation', async function (assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
 
     const allocation = allocations.sortBy('modifyIndex').reverse()[0];
@@ -326,14 +326,14 @@ module('Acceptance | task group detail', function(hooks) {
     );
   });
 
-  test('each allocation should show stats about the allocation', async function(assert) {
+  test('each allocation should show stats about the allocation', async function (assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
 
     const allocation = allocations.sortBy('name')[0];
     const allocationRow = TaskGroup.allocations.objectAt(0);
 
     const allocStats = server.db.clientAllocationStats.find(allocation.id);
-    const tasks = taskGroup.taskIds.map(id => server.db.tasks.find(id));
+    const tasks = taskGroup.taskIds.map((id) => server.db.tasks.find(id));
 
     const cpuUsed = tasks.reduce((sum, task) => sum + task.resources.CPU, 0);
     const memoryUsed = tasks.reduce(
@@ -372,7 +372,7 @@ module('Acceptance | task group detail', function(hooks) {
     );
   });
 
-  test('when the allocation search has no matches, there is an empty message', async function(assert) {
+  test('when the allocation search has no matches, there is an empty message', async function (assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
 
     await TaskGroup.search('zzzzzz');
@@ -385,7 +385,7 @@ module('Acceptance | task group detail', function(hooks) {
     );
   });
 
-  test('when the allocation has reschedule events, the allocation row is denoted with an icon', async function(assert) {
+  test('when the allocation has reschedule events, the allocation row is denoted with an icon', async function (assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
 
     const rescheduleRow = TaskGroup.allocationFor(allocations[0].id);
@@ -398,10 +398,10 @@ module('Acceptance | task group detail', function(hooks) {
     assert.notOk(normalRow.rescheduled, 'Normal row has no reschedule icon');
   });
 
-  test('/jobs/:id/:task-group should present task lifecycles', async function(assert) {
+  test('/jobs/:id/:task-group should present task lifecycles', async function (assert) {
     job = server.create('job', {
       groupsCount: 2,
-      groupTaskCount: 3
+      groupTaskCount: 3,
     });
 
     const taskGroups = server.db.taskGroups.where({ jobId: job.id });
@@ -415,21 +415,21 @@ module('Acceptance | task group detail', function(hooks) {
       'Task Lifecycle Configuration'
     );
 
-    tasks = taskGroup.taskIds.map(id => server.db.tasks.find(id));
+    tasks = taskGroup.taskIds.map((id) => server.db.tasks.find(id));
     const taskNames = tasks.mapBy('name');
 
     // This is thoroughly tested in allocation detail tests, so this mostly checks what’s different
 
     assert.equal(TaskGroup.lifecycleChart.tasks.length, 3);
 
-    TaskGroup.lifecycleChart.tasks.forEach(Task => {
+    TaskGroup.lifecycleChart.tasks.forEach((Task) => {
       assert.ok(taskNames.includes(Task.name));
       assert.notOk(Task.isActive);
       assert.notOk(Task.isFinished);
     });
   });
 
-  test('when the task group depends on volumes, the volumes table is shown', async function(assert) {
+  test('when the task group depends on volumes, the volumes table is shown', async function (assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
 
     assert.ok(TaskGroup.hasVolumes);
@@ -439,7 +439,7 @@ module('Acceptance | task group detail', function(hooks) {
     );
   });
 
-  test('when the task group does not depend on volumes, the volumes table is not shown', async function(assert) {
+  test('when the task group does not depend on volumes, the volumes table is not shown', async function (assert) {
     job = server.create('job', { noHostVolumes: true, shallow: true });
     taskGroup = server.db.taskGroups.where({ jobId: job.id })[0];
 
@@ -448,10 +448,10 @@ module('Acceptance | task group detail', function(hooks) {
     assert.notOk(TaskGroup.hasVolumes);
   });
 
-  test('each row in the volumes table lists information about the volume', async function(assert) {
+  test('each row in the volumes table lists information about the volume', async function (assert) {
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
 
-    TaskGroup.volumes[0].as(volumeRow => {
+    TaskGroup.volumes[0].as((volumeRow) => {
       const volume = taskGroup.volumes[volumeRow.name];
       assert.equal(volumeRow.name, volume.Name);
       assert.equal(volumeRow.type, volume.Type);
@@ -463,21 +463,21 @@ module('Acceptance | task group detail', function(hooks) {
     });
   });
 
-  test('the count stepper sends the appropriate POST request', async function(assert) {
+  test('the count stepper sends the appropriate POST request', async function (assert) {
     window.localStorage.nomadTokenSecret = managementToken.secretId;
 
     job = server.create('job', {
       groupCount: 0,
       createAllocations: false,
       shallow: true,
-      noActiveDeployment: true
+      noActiveDeployment: true,
     });
     const scalingGroup = server.create('task-group', {
       job,
       name: 'scaling',
       count: 1,
       shallow: true,
-      withScaling: true
+      withScaling: true,
     });
     job.update({ taskGroupIds: [scalingGroup.id] });
 
@@ -486,28 +486,28 @@ module('Acceptance | task group detail', function(hooks) {
     await settled();
 
     const scaleRequest = server.pretender.handledRequests.find(
-      req => req.method === 'POST' && req.url.endsWith('/scale')
+      (req) => req.method === 'POST' && req.url.endsWith('/scale')
     );
     const requestBody = JSON.parse(scaleRequest.requestBody);
     assert.equal(requestBody.Target.Group, scalingGroup.name);
     assert.equal(requestBody.Count, scalingGroup.count + 1);
   });
 
-  test('the count stepper is disabled when a deployment is running', async function(assert) {
+  test('the count stepper is disabled when a deployment is running', async function (assert) {
     window.localStorage.nomadTokenSecret = managementToken.secretId;
 
     job = server.create('job', {
       groupCount: 0,
       createAllocations: false,
       shallow: true,
-      activeDeployment: true
+      activeDeployment: true,
     });
     const scalingGroup = server.create('task-group', {
       job,
       name: 'scaling',
       count: 1,
       shallow: true,
-      withScaling: true
+      withScaling: true,
     });
     job.update({ taskGroupIds: [scalingGroup.id] });
 
@@ -518,15 +518,15 @@ module('Acceptance | task group detail', function(hooks) {
     assert.ok(TaskGroup.countStepper.decrement.isDisabled);
   });
 
-  test('when the job for the task group is not found, an error message is shown, but the URL persists', async function(assert) {
+  test('when the job for the task group is not found, an error message is shown, but the URL persists', async function (assert) {
     await TaskGroup.visit({
       id: 'not-a-real-job',
-      name: 'not-a-real-task-group'
+      name: 'not-a-real-task-group',
     });
 
     assert.equal(
       server.pretender.handledRequests
-        .filter(request => !request.url.includes('policy'))
+        .filter((request) => !request.url.includes('policy'))
         .findBy('status', 404).url,
       '/v1/job/not-a-real-job',
       'A request to the nonexistent job is made'
@@ -544,7 +544,7 @@ module('Acceptance | task group detail', function(hooks) {
     );
   });
 
-  test('when the task group is not found on the job, an error message is shown, but the URL persists', async function(assert) {
+  test('when the task group is not found on the job, an error message is shown, but the URL persists', async function (assert) {
     await TaskGroup.visit({ id: job.id, name: 'not-a-real-task-group' });
 
     assert.ok(
@@ -575,16 +575,16 @@ module('Acceptance | task group detail', function(hooks) {
       server.createList('allocation', TaskGroup.pageSize, {
         jobId: job.id,
         taskGroup: taskGroup.name,
-        clientStatus: 'running'
+        clientStatus: 'running',
       });
 
       await TaskGroup.visit({ id: job.id, name: taskGroup.name });
-    }
+    },
   });
 
-  test('when a task group has no scaling events, there is no recent scaling events section', async function(assert) {
+  test('when a task group has no scaling events, there is no recent scaling events section', async function (assert) {
     const taskGroupScale = job.jobScale.taskGroupScales.models.find(
-      m => m.name === taskGroup.name
+      (m) => m.name === taskGroup.name
     );
     taskGroupScale.update({ events: [] });
 
@@ -593,9 +593,9 @@ module('Acceptance | task group detail', function(hooks) {
     assert.notOk(TaskGroup.hasScaleEvents);
   });
 
-  test('the recent scaling events section shows all recent scaling events in reverse chronological order', async function(assert) {
+  test('the recent scaling events section shows all recent scaling events in reverse chronological order', async function (assert) {
     const taskGroupScale = job.jobScale.taskGroupScales.models.find(
-      m => m.name === taskGroup.name
+      (m) => m.name === taskGroup.name
     );
     taskGroupScale.update({
       events: [
@@ -604,8 +604,8 @@ module('Acceptance | task group detail', function(hooks) {
         server.create('scale-event', { error: true }),
         server.create('scale-event', { error: true }),
         server.create('scale-event', { count: 3, error: false }),
-        server.create('scale-event', { count: 1, error: false })
-      ]
+        server.create('scale-event', { count: 1, error: false }),
+      ],
     });
     const scaleEvents = taskGroupScale.events.models.sortBy('time').reverse();
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
@@ -637,9 +637,9 @@ module('Acceptance | task group detail', function(hooks) {
     });
   });
 
-  test('when a task group has at least two count scaling events and the count scaling events outnumber the non-count scaling events, a timeline is shown in addition to the accordion', async function(assert) {
+  test('when a task group has at least two count scaling events and the count scaling events outnumber the non-count scaling events, a timeline is shown in addition to the accordion', async function (assert) {
     const taskGroupScale = job.jobScale.taskGroupScales.models.find(
-      m => m.name === taskGroup.name
+      (m) => m.name === taskGroup.name
     );
     taskGroupScale.update({
       events: [
@@ -651,8 +651,8 @@ module('Acceptance | task group detail', function(hooks) {
         server.create('scale-event', { count: 3, error: false }),
         server.create('scale-event', { count: 2, error: false }),
         server.create('scale-event', { count: 9, error: false }),
-        server.create('scale-event', { count: 1, error: false })
-      ]
+        server.create('scale-event', { count: 1, error: false }),
+      ],
     });
     const scaleEvents = taskGroupScale.events.models.sortBy('time').reverse();
     await TaskGroup.visit({ id: job.id, name: taskGroup.name });
@@ -662,7 +662,7 @@ module('Acceptance | task group detail', function(hooks) {
 
     assert.equal(
       TaskGroup.scalingAnnotations.length,
-      scaleEvents.filter(ev => ev.count == null).length
+      scaleEvents.filter((ev) => ev.count == null).length
     );
   });
 
@@ -675,11 +675,11 @@ module('Acceptance | task group detail', function(hooks) {
       'Complete',
       'Failed',
       'Lost',
-      'Unknown'
+      'Unknown',
     ],
     async beforeEach() {
       ['pending', 'running', 'complete', 'failed', 'lost', 'unknown'].forEach(
-        s => {
+        (s) => {
           server.createList('allocation', 5, { clientStatus: s });
         }
       );
@@ -688,7 +688,7 @@ module('Acceptance | task group detail', function(hooks) {
     filter: (alloc, selection) =>
       alloc.jobId == job.id &&
       alloc.taskGroup == taskGroup.name &&
-      selection.includes(alloc.clientStatus)
+      selection.includes(alloc.clientStatus),
   });
 
   testFacet('Client', {
@@ -699,21 +699,21 @@ module('Acceptance | task group detail', function(hooks) {
         new Set(
           allocs
             .filter(
-              alloc =>
+              (alloc) =>
                 alloc.jobId == job.id && alloc.taskGroup == taskGroup.name
             )
             .mapBy('nodeId')
-            .map(id => id.split('-')[0])
+            .map((id) => id.split('-')[0])
         )
       ).sort();
     },
     async beforeEach() {
       const nodes = server.createList('node', 3, 'forceIPv4');
-      nodes.forEach(node =>
+      nodes.forEach((node) =>
         server.createList('allocation', 5, {
           nodeId: node.id,
           jobId: job.id,
-          taskGroup: taskGroup.name
+          taskGroup: taskGroup.name,
         })
       );
       await TaskGroup.visit({ id: job.id, name: taskGroup.name });
@@ -721,7 +721,7 @@ module('Acceptance | task group detail', function(hooks) {
     filter: (alloc, selection) =>
       alloc.jobId == job.id &&
       alloc.taskGroup == taskGroup.name &&
-      selection.includes(alloc.nodeId.split('-')[0])
+      selection.includes(alloc.nodeId.split('-')[0]),
   });
 });
 
@@ -729,7 +729,7 @@ function testFacet(
   label,
   { facet, paramName, beforeEach, filter, expectedOptions }
 ) {
-  test(`facet ${label} | the ${label} facet has the correct options`, async function(assert) {
+  test(`facet ${label} | the ${label} facet has the correct options`, async function (assert) {
     await beforeEach();
     await facet.toggle();
 
@@ -741,13 +741,13 @@ function testFacet(
     }
 
     assert.deepEqual(
-      facet.options.map(option => option.label.trim()),
+      facet.options.map((option) => option.label.trim()),
       expectation,
       'Options for facet are as expected'
     );
   });
 
-  test(`facet ${label} | the ${label} facet filters the allocations list by ${label}`, async function(assert) {
+  test(`facet ${label} | the ${label} facet filters the allocations list by ${label}`, async function (assert) {
     let option;
 
     await beforeEach();
@@ -758,7 +758,7 @@ function testFacet(
 
     const selection = [option.key];
     const expectedAllocs = server.db.allocations
-      .filter(alloc => filter(alloc, selection))
+      .filter((alloc) => filter(alloc, selection))
       .sortBy('modifyIndex')
       .reverse();
 
@@ -771,7 +771,7 @@ function testFacet(
     });
   });
 
-  test(`facet ${label} | selecting multiple options in the ${label} facet results in a broader search`, async function(assert) {
+  test(`facet ${label} | selecting multiple options in the ${label} facet results in a broader search`, async function (assert) {
     const selection = [];
 
     await beforeEach();
@@ -785,7 +785,7 @@ function testFacet(
     selection.push(option2.key);
 
     const expectedAllocs = server.db.allocations
-      .filter(alloc => filter(alloc, selection))
+      .filter((alloc) => filter(alloc, selection))
       .sortBy('modifyIndex')
       .reverse();
 
@@ -798,7 +798,7 @@ function testFacet(
     });
   });
 
-  test(`facet ${label} | selecting options in the ${label} facet updates the ${paramName} query param`, async function(assert) {
+  test(`facet ${label} | selecting options in the ${label} facet updates the ${paramName} query param`, async function (assert) {
     const selection = [];
 
     await beforeEach();

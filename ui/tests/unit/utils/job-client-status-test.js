@@ -46,24 +46,24 @@ class AllocationMock {
     return {
       id() {
         return self.node.id;
-      }
+      },
     };
   }
 }
 
-module('Unit | Util | JobClientStatus', function() {
-  test('it handles the case where all nodes are running', async function(assert) {
+module('Unit | Util | JobClientStatus', function () {
+  test('it handles the case where all nodes are running', async function (assert) {
     const node = new NodeMock('node-1', 'dc1');
     const nodes = [node];
     const job = {
       datacenters: ['dc1'],
       status: 'running',
       allocations: [new AllocationMock(node, 'running')],
-      taskGroups: [{}]
+      taskGroups: [{}],
     };
     const expected = {
       byNode: {
-        'node-1': 'running'
+        'node-1': 'running',
       },
       byStatus: {
         running: ['node-1'],
@@ -74,9 +74,9 @@ module('Unit | Util | JobClientStatus', function() {
         notScheduled: [],
         queued: [],
         starting: [],
-        unknown: []
+        unknown: [],
       },
-      totalNodes: 1
+      totalNodes: 1,
     };
 
     const mock = new JobClientStatusMock(job, nodes);
@@ -85,7 +85,7 @@ module('Unit | Util | JobClientStatus', function() {
     assert.deepEqual(result, expected);
   });
 
-  test('it handles the degraded case where a node has a failing allocation', async function(assert) {
+  test('it handles the degraded case where a node has a failing allocation', async function (assert) {
     const node = new NodeMock('node-2', 'dc1');
     const nodes = [node];
     const job = {
@@ -94,13 +94,13 @@ module('Unit | Util | JobClientStatus', function() {
       allocations: [
         new AllocationMock(node, 'running'),
         new AllocationMock(node, 'failed'),
-        new AllocationMock(node, 'running')
+        new AllocationMock(node, 'running'),
       ],
-      taskGroups: [{}, {}, {}]
+      taskGroups: [{}, {}, {}],
     };
     const expected = {
       byNode: {
-        'node-2': 'degraded'
+        'node-2': 'degraded',
       },
       byStatus: {
         running: [],
@@ -111,9 +111,9 @@ module('Unit | Util | JobClientStatus', function() {
         notScheduled: [],
         queued: [],
         starting: [],
-        unknown: []
+        unknown: [],
       },
-      totalNodes: 1
+      totalNodes: 1,
     };
 
     const mock = new JobClientStatusMock(job, nodes);
@@ -122,7 +122,7 @@ module('Unit | Util | JobClientStatus', function() {
     assert.deepEqual(result, expected);
   });
 
-  test('it handles the case where a node has all lost allocations', async function(assert) {
+  test('it handles the case where a node has all lost allocations', async function (assert) {
     const node = new NodeMock('node-1', 'dc1');
     const nodes = [node];
     const job = {
@@ -131,13 +131,13 @@ module('Unit | Util | JobClientStatus', function() {
       allocations: [
         new AllocationMock(node, 'lost'),
         new AllocationMock(node, 'lost'),
-        new AllocationMock(node, 'lost')
+        new AllocationMock(node, 'lost'),
       ],
-      taskGroups: [{}, {}, {}]
+      taskGroups: [{}, {}, {}],
     };
     const expected = {
       byNode: {
-        'node-1': 'lost'
+        'node-1': 'lost',
       },
       byStatus: {
         running: [],
@@ -148,9 +148,9 @@ module('Unit | Util | JobClientStatus', function() {
         notScheduled: [],
         queued: [],
         starting: [],
-        unknown: []
+        unknown: [],
       },
-      totalNodes: 1
+      totalNodes: 1,
     };
 
     const mock = new JobClientStatusMock(job, nodes);
@@ -159,7 +159,7 @@ module('Unit | Util | JobClientStatus', function() {
     assert.deepEqual(result, expected);
   });
 
-  test('it handles the case where a node has all failed allocations', async function(assert) {
+  test('it handles the case where a node has all failed allocations', async function (assert) {
     const node = new NodeMock('node-1', 'dc1');
     const nodes = [node];
     const job = {
@@ -168,13 +168,13 @@ module('Unit | Util | JobClientStatus', function() {
       allocations: [
         new AllocationMock(node, 'failed'),
         new AllocationMock(node, 'failed'),
-        new AllocationMock(node, 'failed')
+        new AllocationMock(node, 'failed'),
       ],
-      taskGroups: [{}, {}, {}]
+      taskGroups: [{}, {}, {}],
     };
     const expected = {
       byNode: {
-        'node-1': 'failed'
+        'node-1': 'failed',
       },
       byStatus: {
         running: [],
@@ -185,9 +185,9 @@ module('Unit | Util | JobClientStatus', function() {
         notScheduled: [],
         queued: [],
         starting: [],
-        unknown: []
+        unknown: [],
       },
-      totalNodes: 1
+      totalNodes: 1,
     };
 
     const mock = new JobClientStatusMock(job, nodes);
@@ -196,7 +196,7 @@ module('Unit | Util | JobClientStatus', function() {
     assert.deepEqual(result, expected);
   });
 
-  test('it handles the degraded case where the expected number of allocations doesnt match the actual number of allocations', async function(assert) {
+  test('it handles the degraded case where the expected number of allocations doesnt match the actual number of allocations', async function (assert) {
     const node = new NodeMock('node-1', 'dc1');
     const nodes = [node];
     const job = {
@@ -205,13 +205,13 @@ module('Unit | Util | JobClientStatus', function() {
       allocations: [
         new AllocationMock(node, 'running'),
         new AllocationMock(node, 'running'),
-        new AllocationMock(node, 'running')
+        new AllocationMock(node, 'running'),
       ],
-      taskGroups: [{}, {}, {}, {}]
+      taskGroups: [{}, {}, {}, {}],
     };
     const expected = {
       byNode: {
-        'node-1': 'degraded'
+        'node-1': 'degraded',
       },
       byStatus: {
         running: [],
@@ -222,9 +222,9 @@ module('Unit | Util | JobClientStatus', function() {
         notScheduled: [],
         queued: [],
         starting: [],
-        unknown: []
+        unknown: [],
       },
-      totalNodes: 1
+      totalNodes: 1,
     };
 
     const mock = new JobClientStatusMock(job, nodes);
@@ -233,18 +233,18 @@ module('Unit | Util | JobClientStatus', function() {
     assert.deepEqual(result, expected);
   });
 
-  test('it handles the not scheduled case where a node has no allocations', async function(assert) {
+  test('it handles the not scheduled case where a node has no allocations', async function (assert) {
     const node = new NodeMock('node-1', 'dc1');
     const nodes = [node];
     const job = {
       datacenters: ['dc1'],
       status: 'running',
       allocations: [],
-      taskGroups: []
+      taskGroups: [],
     };
     const expected = {
       byNode: {
-        'node-1': 'notScheduled'
+        'node-1': 'notScheduled',
       },
       byStatus: {
         running: [],
@@ -255,9 +255,9 @@ module('Unit | Util | JobClientStatus', function() {
         notScheduled: ['node-1'],
         queued: [],
         starting: [],
-        unknown: []
+        unknown: [],
       },
-      totalNodes: 1
+      totalNodes: 1,
     };
 
     const mock = new JobClientStatusMock(job, nodes);
@@ -266,7 +266,7 @@ module('Unit | Util | JobClientStatus', function() {
     assert.deepEqual(result, expected);
   });
 
-  test('it handles the queued case where the job is pending', async function(assert) {
+  test('it handles the queued case where the job is pending', async function (assert) {
     const node = new NodeMock('node-1', 'dc1');
     const nodes = [node];
     const job = {
@@ -275,13 +275,13 @@ module('Unit | Util | JobClientStatus', function() {
       allocations: [
         new AllocationMock(node, 'starting'),
         new AllocationMock(node, 'starting'),
-        new AllocationMock(node, 'starting')
+        new AllocationMock(node, 'starting'),
       ],
-      taskGroups: [{}, {}, {}, {}]
+      taskGroups: [{}, {}, {}, {}],
     };
     const expected = {
       byNode: {
-        'node-1': 'queued'
+        'node-1': 'queued',
       },
       byStatus: {
         running: [],
@@ -292,9 +292,9 @@ module('Unit | Util | JobClientStatus', function() {
         notScheduled: [],
         queued: ['node-1'],
         starting: [],
-        unknown: []
+        unknown: [],
       },
-      totalNodes: 1
+      totalNodes: 1,
     };
 
     const mock = new JobClientStatusMock(job, nodes);
@@ -303,7 +303,7 @@ module('Unit | Util | JobClientStatus', function() {
     assert.deepEqual(result, expected);
   });
 
-  test('it filters nodes by the datacenter of the job', async function(assert) {
+  test('it filters nodes by the datacenter of the job', async function (assert) {
     const node1 = new NodeMock('node-1', 'dc1');
     const node2 = new NodeMock('node-2', 'dc2');
     const nodes = [node1, node2];
@@ -313,13 +313,13 @@ module('Unit | Util | JobClientStatus', function() {
       allocations: [
         new AllocationMock(node1, 'running'),
         new AllocationMock(node2, 'failed'),
-        new AllocationMock(node1, 'running')
+        new AllocationMock(node1, 'running'),
       ],
-      taskGroups: [{}, {}]
+      taskGroups: [{}, {}],
     };
     const expected = {
       byNode: {
-        'node-1': 'running'
+        'node-1': 'running',
       },
       byStatus: {
         running: ['node-1'],
@@ -330,9 +330,9 @@ module('Unit | Util | JobClientStatus', function() {
         notScheduled: [],
         queued: [],
         starting: [],
-        unknown: []
+        unknown: [],
       },
-      totalNodes: 1
+      totalNodes: 1,
     };
 
     const mock = new JobClientStatusMock(job, nodes);

@@ -11,7 +11,7 @@ const DESIRED_STATUSES = ['run', 'stop', 'evict'];
 const REF_TIME = new Date();
 
 export default Factory.extend({
-  id: i => (i >= 100 ? `${UUIDS[i % 100]}-${i}` : UUIDS[i]),
+  id: (i) => (i >= 100 ? `${UUIDS[i % 100]}-${i}` : UUIDS[i]),
 
   jobVersion: 1,
 
@@ -44,9 +44,9 @@ export default Factory.extend({
   withTaskWithPorts: trait({
     afterCreate(allocation, server) {
       const taskGroup = server.db.taskGroups.findBy({
-        name: allocation.taskGroup
+        name: allocation.taskGroup,
       });
-      const resources = taskGroup.taskIds.map(id => {
+      const resources = taskGroup.taskIds.map((id) => {
         const task = server.db.tasks.find(id);
         return server.create('task-resource', {
           allocation,
@@ -55,21 +55,21 @@ export default Factory.extend({
             CPU: task.resources.CPU,
             MemoryMB: task.resources.MemoryMB,
             DiskMB: task.resources.DiskMB,
-            networks: { minPorts: 1 }
-          })
+            networks: { minPorts: 1 },
+          }),
         });
       });
 
       allocation.update({ taskResourceIds: resources.mapBy('id') });
-    }
+    },
   }),
 
   withoutTaskWithPorts: trait({
     afterCreate(allocation, server) {
       const taskGroup = server.db.taskGroups.findBy({
-        name: allocation.taskGroup
+        name: allocation.taskGroup,
       });
-      const resources = taskGroup.taskIds.map(id => {
+      const resources = taskGroup.taskIds.map((id) => {
         const task = server.db.tasks.find(id);
         return server.create('task-resource', {
           allocation,
@@ -78,13 +78,13 @@ export default Factory.extend({
             CPU: task.resources.CPU,
             MemoryMB: task.resources.MemoryMB,
             DiskMB: task.resources.DiskMB,
-            networks: { minPorts: 0, maxPorts: 0 }
-          })
+            networks: { minPorts: 0, maxPorts: 0 },
+          }),
         });
       });
 
       allocation.update({ taskResourceIds: resources.mapBy('id') });
-    }
+    },
   }),
 
   rescheduleAttempts: 0,
@@ -119,9 +119,9 @@ export default Factory.extend({
           {
             PrevAllocID: allocation.id,
             PrevNodeID: null, //allocation.node.id,
-            RescheduleTime: rescheduleTime
-          }
-        ])
+            RescheduleTime: rescheduleTime,
+          },
+        ]),
       };
 
       let nextAllocation;
@@ -134,41 +134,41 @@ export default Factory.extend({
           clientStatus: 'failed',
           rescheduleTracker,
           followupEvalId: server.create('evaluation', {
-            waitUntil: rescheduleTime
-          }).id
+            waitUntil: rescheduleTime,
+          }).id,
         });
       } else {
         nextAllocation = server.create('allocation', {
           previousAllocation: allocation.id,
           clientStatus: allocation.rescheduleSuccess ? 'running' : 'failed',
           shallow: allocation.shallow,
-          rescheduleTracker
+          rescheduleTracker,
         });
       }
 
       allocation.update({
         nextAllocation: nextAllocation.id,
-        clientStatus: 'failed'
+        clientStatus: 'failed',
       });
-    }
+    },
   }),
 
   preempted: trait({
     afterCreate(allocation, server) {
       const preempter = server.create('allocation', {
-        preemptedAllocations: [allocation.id]
+        preemptedAllocations: [allocation.id],
       });
       allocation.update({ preemptedByAllocation: preempter.id });
-    }
+    },
   }),
 
   preempter: trait({
     afterCreate(allocation, server) {
       const preempted = server.create('allocation', {
-        preemptedByAllocation: allocation.id
+        preemptedByAllocation: allocation.id,
       });
       allocation.update({ preemptedAllocations: [preempted.id] });
-    }
+    },
   }),
 
   afterCreate(allocation, server) {
@@ -199,38 +199,38 @@ export default Factory.extend({
       taskStateIds: [],
       taskResourceIds: [],
       taskGroup: taskGroup.name,
-      name: allocation.name || `${taskGroup.name}.[${faker.random.number(10)}]`
+      name: allocation.name || `${taskGroup.name}.[${faker.random.number(10)}]`,
     });
 
     if (!allocation.shallow) {
-      const states = taskGroup.taskIds.map(id =>
+      const states = taskGroup.taskIds.map((id) =>
         server.create('task-state', {
           allocation,
-          name: server.db.tasks.find(id).name
+          name: server.db.tasks.find(id).name,
         })
       );
 
-      const resources = taskGroup.taskIds.map(id => {
+      const resources = taskGroup.taskIds.map((id) => {
         const task = server.db.tasks.find(id);
         return server.create('task-resource', {
           allocation,
           name: task.name,
-          resources: task.originalResources
+          resources: task.originalResources,
         });
       });
 
       allocation.update({
         taskStateIds:
           allocation.clientStatus === 'pending' ? [] : states.mapBy('id'),
-        taskResourceIds: resources.mapBy('id')
+        taskResourceIds: resources.mapBy('id'),
       });
 
       // Each allocation has a corresponding allocation stats running on some client.
       // Create that record, even though it's not a relationship.
       server.create('client-allocation-stat', {
         id: allocation.id,
-        _taskNames: states.mapBy('name')
+        _taskNames: states.mapBy('name'),
       });
     }
-  }
+  },
 });

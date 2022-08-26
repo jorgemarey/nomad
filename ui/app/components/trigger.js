@@ -28,7 +28,7 @@ export default class Trigger extends Component {
 
   get fns() {
     return {
-      do: this.onTrigger
+      do: this.onTrigger,
     };
   }
 
@@ -50,7 +50,7 @@ export default class Trigger extends Component {
     this.error = null;
   }
 
-  @task(function*() {
+  @task(function* () {
     this._reset();
     try {
       this.result = yield this.args.do();

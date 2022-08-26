@@ -47,20 +47,20 @@ module('Integration | Component | job-page/parts/body', function (hooks) {
       </JobPage::Parts::Body>
     `);
 
-    const subnavLabels = findAll('[data-test-tab]').map(anchor =>
+    const subnavLabels = findAll('[data-test-tab]').map((anchor) =>
       anchor.textContent.trim()
     );
     assert.ok(
-      subnavLabels.some(label => label === 'Definition'),
+      subnavLabels.some((label) => label === 'Definition'),
       'Definition link'
     );
     assert.ok(
-      subnavLabels.some(label => label === 'Versions'),
+      subnavLabels.some((label) => label === 'Versions'),
       'Versions link'
     );
 
     assert.ok(
-      subnavLabels.some(label => label === 'Deployments'),
+      subnavLabels.some((label) => label === 'Deployments'),
       'Deployments link'
     );
 
@@ -82,19 +82,19 @@ module('Integration | Component | job-page/parts/body', function (hooks) {
       </JobPage::Parts::Body>
     `);
 
-    const subnavLabels = findAll('[data-test-tab]').map(anchor =>
+    const subnavLabels = findAll('[data-test-tab]').map((anchor) =>
       anchor.textContent.trim()
     );
     assert.ok(
-      subnavLabels.some(label => label === 'Definition'),
+      subnavLabels.some((label) => label === 'Definition'),
       'Definition link'
     );
     assert.ok(
-      subnavLabels.some(label => label === 'Versions'),
+      subnavLabels.some((label) => label === 'Versions'),
       'Versions link'
     );
     assert.notOk(
-      subnavLabels.some(label => label === 'Deployments'),
+      subnavLabels.some((label) => label === 'Deployments'),
       'Deployments link'
     );
   });

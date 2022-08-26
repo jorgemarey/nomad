@@ -4,7 +4,7 @@ import { isEmpty } from '@ember/utils';
 import {
   classNames,
   tagName,
-  attributeBindings
+  attributeBindings,
 } from '@ember-decorators/component';
 import classic from 'ember-classic-decorator';
 
@@ -36,7 +36,7 @@ export default class Breadcrumbs extends Component {
 
         breadcrumbs.push({
           name: pathSegment,
-          path: breadcrumbPath
+          path: breadcrumbPath,
         });
 
         return breadcrumbs;

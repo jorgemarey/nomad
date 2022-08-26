@@ -26,10 +26,10 @@ module('Acceptance | allocation detail', function (hooks) {
     job = server.create('job', {
       groupsCount: 1,
       withGroupServices: true,
-      createAllocations: false
+      createAllocations: false,
     });
     allocation = server.create('allocation', 'withTaskWithPorts', {
-      clientStatus: 'running'
+      clientStatus: 'running',
     });
 
     // Make sure the node has an unhealthy driver
@@ -37,14 +37,14 @@ module('Acceptance | allocation detail', function (hooks) {
       driver: assign(node.drivers, {
         docker: {
           detected: true,
-          healthy: false
-        }
-      })
+          healthy: false,
+        },
+      }),
     });
 
     // Make sure a task for the allocation depends on the unhealthy driver
     server.schema.tasks.first().update({
-      driver: 'docker'
+      driver: 'docker',
     });
 
     await Allocation.visit({ id: allocation.id });
@@ -113,12 +113,12 @@ module('Acceptance | allocation detail', function (hooks) {
       groupsCount: 1,
       groupTaskCount: 6,
       withGroupServices: true,
-      createAllocations: false
+      createAllocations: false,
     });
 
     const allocation = server.create('allocation', 'withTaskWithPorts', {
       clientStatus: 'running',
-      jobId: job.id
+      jobId: job.id,
     });
 
     await Allocation.visit({ id: allocation.id });
@@ -133,7 +133,7 @@ module('Acceptance | allocation detail', function (hooks) {
     const prestartEphemeralTask = server.db.taskStates
       .where({ allocationId: allocation.id })
       .sortBy('name')
-      .find(taskState => {
+      .find((taskState) => {
         const task = server.db.tasks.findBy({ name: taskState.name });
         return (
           task.Lifecycle &&
@@ -172,7 +172,7 @@ module('Acceptance | allocation detail', function (hooks) {
 
     const taskGroup = server.schema.taskGroups.where({
       jobId: allocation.jobId,
-      name: allocation.taskGroup
+      name: allocation.taskGroup,
     }).models[0];
 
     // Set the expected task states.
@@ -213,7 +213,7 @@ module('Acceptance | allocation detail', function (hooks) {
       assert.equal(taskRow.hasMemoryMetrics, expectStats, 'Memory metrics');
 
       const volumesText = taskRow.volumes;
-      volumes.forEach(volume => {
+      volumes.forEach((volume) => {
         assert.ok(
           volumesText.includes(volume.name),
           `Found label ${volume.name}`
@@ -262,12 +262,12 @@ module('Acceptance | allocation detail', function (hooks) {
     job = server.create('job', {
       groupsCount: 1,
       withGroupServices: true,
-      createAllocations: false
+      createAllocations: false,
     });
 
     allocation = server.create('allocation', 'withTaskWithPorts', {
       clientStatus: 'running',
-      jobId: job.id
+      jobId: job.id,
     });
 
     const taskState = allocation.taskStates.models.sortBy('name')[0];
@@ -283,7 +283,7 @@ module('Acceptance | allocation detail', function (hooks) {
   test('when there are no tasks, an empty state is shown', async function (assert) {
     // Make sure the allocation is pending in order to ensure there are no tasks
     allocation = server.create('allocation', 'withTaskWithPorts', {
-      clientStatus: 'pending'
+      clientStatus: 'pending',
     });
     await Allocation.visit({ id: allocation.id });
 
@@ -314,7 +314,7 @@ module('Acceptance | allocation detail', function (hooks) {
 
   test('services are listed', async function (assert) {
     const taskGroup = server.schema.taskGroups.findBy({
-      name: allocation.taskGroup
+      name: allocation.taskGroup,
     });
 
     assert.equal(Allocation.services.length, taskGroup.services.length);
@@ -335,7 +335,7 @@ module('Acceptance | allocation detail', function (hooks) {
       const upstreams = serverService.Connect.SidecarService.Proxy.Upstreams;
       const serverUpstreamsString = upstreams
         .map(
-          upstream => `${upstream.DestinationName}:${upstream.LocalBindPort}`
+          (upstream) => `${upstream.DestinationName}:${upstream.LocalBindPort}`
         )
         .join(' ');
 
@@ -348,7 +348,7 @@ module('Acceptance | allocation detail', function (hooks) {
 
     assert.equal(
       server.pretender.handledRequests
-        .filter(request => !request.url.includes('policy'))
+        .filter((request) => !request.url.includes('policy'))
         .findBy('status', 404).url,
       '/v1/allocation/not-a-real-allocation',
       'A request to the nonexistent allocation is made'
@@ -372,7 +372,7 @@ module('Acceptance | allocation detail', function (hooks) {
 
     assert.equal(
       server.pretender.handledRequests
-        .reject(request => request.url.includes('fuzzy'))
+        .reject((request) => request.url.includes('fuzzy'))
         .findBy('method', 'POST').url,
       `/v1/allocation/${allocation.id}/stop`,
       'Stop request is made for the allocation'
@@ -572,7 +572,7 @@ module('Acceptance | allocation detail (preemptions)', function (hooks) {
     await Allocation.visit({ id: allocation.id });
 
     const preemption = allocation.preemptedAllocations
-      .map(id => server.schema.find('allocation', id))
+      .map((id) => server.schema.find('allocation', id))
       .sortBy('modifyIndex')
       .reverse()[0];
     const preemptionRow = Allocation.preemptions.objectAt(0);

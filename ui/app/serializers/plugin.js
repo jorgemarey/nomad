@@ -9,7 +9,7 @@ import classic from 'ember-classic-decorator';
 const unmap = (hash, propKey) =>
   Object.keys(hash)
     .sort()
-    .map(key => {
+    .map((key) => {
       const record = hash[key];
       record[propKey] = key;
       return record;

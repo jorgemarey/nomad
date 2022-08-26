@@ -14,7 +14,7 @@ const STATUS_ORDER = {
   complete: 3,
   unknown: 4,
   failed: 5,
-  lost: 6
+  lost: 6,
 };
 
 @classic
@@ -84,7 +84,7 @@ export default class Allocation extends Model {
       complete: 'is-complete',
       failed: 'is-error',
       lost: 'is-light',
-      unknown: 'is-unknown'
+      unknown: 'is-unknown',
     };
 
     return classMap[this.clientStatus] || 'is-dark';

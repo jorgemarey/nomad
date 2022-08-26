@@ -6,26 +6,26 @@ export default class EvaluationsIndexRoute extends Route {
 
   queryParams = {
     pageSize: {
-      refreshModel: true
+      refreshModel: true,
     },
     nextToken: {
-      refreshModel: true
+      refreshModel: true,
     },
     status: {
-      refreshModel: true
+      refreshModel: true,
     },
     triggeredBy: {
-      refreshModel: true
+      refreshModel: true,
     },
     qpNamespace: {
-      refreshModel: true
+      refreshModel: true,
     },
     searchTerm: {
-      refreshModel: true
+      refreshModel: true,
     },
     type: {
-      refreshModel: true
-    }
+      refreshModel: true,
+    },
   };
 
   model({
@@ -35,7 +35,7 @@ export default class EvaluationsIndexRoute extends Route {
     status,
     triggeredBy,
     type,
-    qpNamespace: namespace
+    qpNamespace: namespace,
   }) {
     /*
     We use our own DSL for filter expressions. This function takes our query parameters and builds a query that matches our DSL.
@@ -72,7 +72,7 @@ export default class EvaluationsIndexRoute extends Route {
         const lookup = {
           [type]: typeFilter,
           [status]: statusFilter,
-          [triggeredBy]: triggeredByFilter
+          [triggeredBy]: triggeredByFilter,
         };
 
         filterExp = [type, status, triggeredBy].reduce((result, filter) => {
@@ -97,7 +97,7 @@ export default class EvaluationsIndexRoute extends Route {
       reverse: true,
       per_page: pageSize,
       next_token: nextToken,
-      filter: generateFilterExpression()
+      filter: generateFilterExpression(),
     });
   }
 }

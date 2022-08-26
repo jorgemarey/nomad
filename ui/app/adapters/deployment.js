@@ -8,8 +8,8 @@ export default class DeploymentAdapter extends Watchable {
     const url = urlForAction(this.urlForFindRecord(id, 'deployment'), '/fail');
     return this.ajax(url, 'POST', {
       data: {
-        DeploymentId: id
-      }
+        DeploymentId: id,
+      },
     });
   }
 
@@ -22,8 +22,8 @@ export default class DeploymentAdapter extends Watchable {
     return this.ajax(url, 'POST', {
       data: {
         DeploymentId: id,
-        All: true
-      }
+        All: true,
+      },
     });
   }
 }

@@ -16,7 +16,7 @@ export default class IndexController extends Controller.extend(
     'schedulable',
     'controllersHealthyProportion',
     'nodesHealthyProportion',
-    'provider'
+    'provider',
   ]),
   Searchable
 ) {
@@ -30,20 +30,20 @@ export default class IndexController extends Controller.extend(
 
   queryParams = [
     {
-      currentPage: 'page'
+      currentPage: 'page',
     },
     {
-      searchTerm: 'search'
+      searchTerm: 'search',
     },
     {
-      sortProperty: 'sort'
+      sortProperty: 'sort',
     },
     {
-      sortDescending: 'desc'
+      sortDescending: 'desc',
     },
     {
-      qpNamespace: 'namespace'
-    }
+      qpNamespace: 'namespace',
+    },
   ];
 
   currentPage = 1;
@@ -66,14 +66,14 @@ export default class IndexController extends Controller.extend(
 
   @computed('qpNamespace', 'model.namespaces.[]')
   get optionsNamespaces() {
-    const availableNamespaces = this.model.namespaces.map(namespace => ({
+    const availableNamespaces = this.model.namespaces.map((namespace) => ({
       key: namespace.name,
-      label: namespace.name
+      label: namespace.name,
     }));
 
     availableNamespaces.unshift({
       key: '*',
-      label: 'All (*)'
+      label: 'All (*)',
     });
 
     // Unset the namespace selection if it was server-side deleted
@@ -113,7 +113,7 @@ export default class IndexController extends Controller.extend(
           'csi.volumes.volume',
           volume.get('idWithNamespace')
         ),
-      event
+      event,
     ]);
   }
 }

@@ -11,7 +11,7 @@ export default class AllocationsRoute extends Route.extend(WithWatchers) {
     if (!model) return;
 
     controller.set('watchers', {
-      model: this.watch.perform(model)
+      model: this.watch.perform(model),
     });
   }
 
@@ -20,7 +20,7 @@ export default class AllocationsRoute extends Route.extend(WithWatchers) {
       controller.setProperties({
         currentPage: 1,
         qpType: '',
-        qpHealth: ''
+        qpHealth: '',
       });
     }
   }

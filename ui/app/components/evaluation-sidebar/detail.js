@@ -42,12 +42,12 @@ export default class Detail extends Component {
       if (data) {
         return d3
           .stratify()
-          .id(d => {
+          .id((d) => {
             return d.id;
           })
-          .parentId(d => d.previousEval)([
+          .parentId((d) => d.previousEval)([
           ...data.toArray(),
-          this.currentEvalDetail
+          this.currentEvalDetail,
         ]);
       }
     } catch (e) {
@@ -59,7 +59,7 @@ export default class Detail extends Component {
   get descendentsMap() {
     return this.hierarchy
       ?.descendants()
-      .map(d => d.children)
+      .map((d) => d.children)
       .compact();
   }
 

@@ -11,24 +11,24 @@ export default createMachine(
         initial: 'unknown',
         on: {
           NEXT: {
-            actions: ['requestNextPage', send('MODAL_CLOSE')]
+            actions: ['requestNextPage', send('MODAL_CLOSE')],
           },
           PREV: {
-            actions: ['requestPrevPage', send('MODAL_CLOSE')]
+            actions: ['requestPrevPage', send('MODAL_CLOSE')],
           },
           CHANGE_PAGES_SIZE: {
-            actions: ['changePageSize', send('MODAL_CLOSE')]
+            actions: ['changePageSize', send('MODAL_CLOSE')],
           },
-          MODEL_UPDATED: '#unknown'
+          MODEL_UPDATED: '#unknown',
         },
         states: {
           unknown: {
             id: 'unknown',
-            always: [{ target: 'data', cond: 'hasData' }, { target: 'empty' }]
+            always: [{ target: 'data', cond: 'hasData' }, { target: 'empty' }],
           },
           data: {},
-          empty: {}
-        }
+          empty: {},
+        },
       },
       sidebar: {
         initial: 'unknown',
@@ -36,8 +36,8 @@ export default createMachine(
           unknown: {
             always: [
               { target: 'open', cond: 'sidebarIsOpen' },
-              { target: 'close' }
-            ]
+              { target: 'close' },
+            ],
           },
           open: {
             initial: 'busy',
@@ -47,57 +47,57 @@ export default createMachine(
                 invoke: {
                   src: 'loadEvaluation',
                   onDone: 'success',
-                  onError: 'error'
-                }
+                  onError: 'error',
+                },
               },
               success: {
                 entry: assign({
                   evaluation: (context, event) => {
                     return event.data;
-                  }
+                  },
                 }),
                 on: {
                   LOAD_EVALUATION: {
                     target: 'busy',
-                    actions: ['updateEvaluationQueryParameter']
-                  }
-                }
+                    actions: ['updateEvaluationQueryParameter'],
+                  },
+                },
               },
               error: {
                 entry: assign({ error: (_ctx, event) => event.data }),
                 on: {
-                  RETRY: 'busy'
-                }
-              }
+                  RETRY: 'busy',
+                },
+              },
             },
             on: {
               MODAL_CLOSE: 'close',
-              CHANGE_EVAL: [{ target: 'close', cond: 'hasNoCurrentEval' }]
-            }
+              CHANGE_EVAL: [{ target: 'close', cond: 'hasNoCurrentEval' }],
+            },
           },
           close: {
             on: {
               LOAD_EVALUATION: {
                 target: 'open',
-                actions: ['updateEvaluationQueryParameter']
+                actions: ['updateEvaluationQueryParameter'],
               },
               CHANGE_EVAL: [
                 {
                   target: 'open',
-                  cond: 'hasCurrentEval'
-                }
-              ]
-            }
-          }
-        }
-      }
-    }
+                  cond: 'hasCurrentEval',
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
   },
   {
     services: {
       // Overridden in the controller
       async loadEvaluations() {},
-      async loadEvaluation() {}
+      async loadEvaluation() {},
     },
     guards: {
       sidebarIsOpen() {
@@ -114,11 +114,11 @@ export default createMachine(
       },
       notBusy(_ctx, _event, meta) {
         return !meta.state.matches({ sidebar: { open: 'busy' } });
-      }
+      },
     },
     actions: {
       updateEvaluationQueryParameter() {},
-      removeCurrentEvaluationQueryParameter() {}
-    }
+      removeCurrentEvaluationQueryParameter() {},
+    },
   }
 );

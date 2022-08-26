@@ -1,4 +1,4 @@
-export default function(string) {
+export default function (string) {
   return string
     .replace(/[\t\r\n]/g, ' ')
     .replace(/ +/g, ' ')

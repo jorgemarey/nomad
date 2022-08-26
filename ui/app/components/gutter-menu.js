@@ -55,7 +55,7 @@ export default class GutterMenu extends Component {
       : 'jobs';
 
     this.router.transitionTo(destination, {
-      queryParams: { namespace: namespace.get('id') }
+      queryParams: { namespace: namespace.get('id') },
     });
   }
 }

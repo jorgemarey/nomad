@@ -4,9 +4,7 @@ export function provide(count, provider) {
   if (typeof count === 'function') {
     count = count();
   }
-  return Array(count)
-    .fill(null)
-    .map(provider);
+  return Array(count).fill(null).map(provider);
 }
 
 export function provider() {
@@ -27,7 +25,8 @@ export function arrToObj(prop, alias = '') {
   };
 }
 
-export const generateAcceptanceTestEvalMock = id => {
+export const generateAcceptanceTestEvalMock = (id) => {
+
   return {
     CreateIndex: 20,
     CreateTime: 1647899150314738000,
@@ -59,7 +58,7 @@ export const generateAcceptanceTestEvalMock = id => {
         StatusDescription: 'evaluation reached delivery limit (3)',
         TriggeredBy: 'failed-follow-up',
         Type: 'service',
-        WaitUntil: null
+        WaitUntil: null,
       },
       {
         BlockedEval: '',
@@ -79,7 +78,7 @@ export const generateAcceptanceTestEvalMock = id => {
         StatusDescription: 'evaluation reached delivery limit (3)',
         TriggeredBy: 'failed-follow-up',
         Type: 'service',
-        WaitUntil: null
+        WaitUntil: null,
       },
       {
         BlockedEval: '',
@@ -99,7 +98,7 @@ export const generateAcceptanceTestEvalMock = id => {
         StatusDescription: 'evaluation reached delivery limit (3)',
         TriggeredBy: 'job-register',
         Type: 'service',
-        WaitUntil: null
+        WaitUntil: null,
       },
       {
         BlockedEval: '',
@@ -119,7 +118,7 @@ export const generateAcceptanceTestEvalMock = id => {
         StatusDescription: 'evaluation reached delivery limit (3)',
         TriggeredBy: 'failed-follow-up',
         Type: 'service',
-        WaitUntil: null
+        WaitUntil: null,
       },
       {
         BlockedEval: '',
@@ -139,7 +138,7 @@ export const generateAcceptanceTestEvalMock = id => {
         StatusDescription: 'evaluation reached delivery limit (3)',
         TriggeredBy: 'failed-follow-up',
         Type: 'service',
-        WaitUntil: null
+        WaitUntil: null,
       },
       {
         BlockedEval: '',
@@ -159,7 +158,7 @@ export const generateAcceptanceTestEvalMock = id => {
         StatusDescription: 'evaluation reached delivery limit (3)',
         TriggeredBy: 'failed-follow-up',
         Type: 'service',
-        WaitUntil: null
+        WaitUntil: null,
       },
       {
         BlockedEval: '',
@@ -179,7 +178,7 @@ export const generateAcceptanceTestEvalMock = id => {
         StatusDescription: 'evaluation reached delivery limit (3)',
         TriggeredBy: 'failed-follow-up',
         Type: 'service',
-        WaitUntil: null
+        WaitUntil: null,
       },
       {
         BlockedEval: '',
@@ -199,7 +198,7 @@ export const generateAcceptanceTestEvalMock = id => {
         StatusDescription: 'evaluation reached delivery limit (3)',
         TriggeredBy: 'failed-follow-up',
         Type: 'service',
-        WaitUntil: null
+        WaitUntil: null,
       },
       {
         BlockedEval: '',
@@ -219,7 +218,7 @@ export const generateAcceptanceTestEvalMock = id => {
         StatusDescription: 'evaluation reached delivery limit (3)',
         TriggeredBy: 'failed-follow-up',
         Type: 'service',
-        WaitUntil: null
+        WaitUntil: null,
       },
       {
         BlockedEval: '',
@@ -239,7 +238,7 @@ export const generateAcceptanceTestEvalMock = id => {
         StatusDescription: 'evaluation reached delivery limit (3)',
         TriggeredBy: 'failed-follow-up',
         Type: 'service',
-        WaitUntil: null
+        WaitUntil: null,
       },
       {
         BlockedEval: '',
@@ -259,13 +258,13 @@ export const generateAcceptanceTestEvalMock = id => {
         StatusDescription: '',
         TriggeredBy: 'failed-follow-up',
         Type: 'service',
-        WaitUntil: null
-      }
+        WaitUntil: null,
+      },
     ],
     Status: 'failed',
     StatusDescription: 'evaluation reached delivery limit (3)',
     TriggeredBy: 'failed-follow-up',
     Type: 'service',
-    Wait: 20000000000
+    Wait: 20000000000,
   };
 };

@@ -7,7 +7,7 @@ export default class TokenSerializer extends ApplicationSerializer {
   primaryKey = 'AccessorID';
 
   attrs = {
-    secret: 'SecretID'
+    secret: 'SecretID',
   };
 
   normalize(typeHash, hash) {

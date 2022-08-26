@@ -24,8 +24,8 @@ export default class JobClientStatusSummary extends Component {
   gotoClients(statusFilter) {
     this.router.transitionTo('jobs.job.clients', this.job, {
       queryParams: {
-        status: JSON.stringify(statusFilter)
-      }
+        status: JSON.stringify(statusFilter),
+      },
     });
   }
 

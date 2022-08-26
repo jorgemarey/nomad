@@ -5,6 +5,6 @@ import classic from 'ember-classic-decorator';
 export default class VolumeAdapter extends WatchableNamespaceIDs {
   queryParamsToAttrs = {
     type: 'type',
-    plugin_id: 'plugin.id'
+    plugin_id: 'plugin.id',
   };
 }

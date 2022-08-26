@@ -5,7 +5,7 @@ import classic from 'ember-classic-decorator';
 @classic
 export default class PortSerializer extends ApplicationSerializer {
   attrs = {
-    hostIp: 'HostIP'
+    hostIp: 'HostIP',
   };
 
   normalize(typeHash, hash) {

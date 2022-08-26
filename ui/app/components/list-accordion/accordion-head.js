@@ -2,7 +2,7 @@ import Component from '@ember/component';
 import {
   classNames,
   classNameBindings,
-  attributeBindings
+  attributeBindings,
 } from '@ember-decorators/component';
 import classic from 'ember-classic-decorator';
 

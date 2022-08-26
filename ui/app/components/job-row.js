@@ -5,7 +5,7 @@ import { lazyClick } from '../helpers/lazy-click';
 import {
   classNames,
   tagName,
-  attributeBindings
+  attributeBindings,
 } from '@ember-decorators/component';
 import classic from 'ember-classic-decorator';
 

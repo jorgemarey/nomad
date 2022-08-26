@@ -30,11 +30,11 @@ export default class ApplicationController extends Controller {
 
   queryParams = [
     {
-      region: 'region'
+      region: 'region',
     },
     {
-      oneTimeToken: 'ott'
-    }
+      oneTimeToken: 'ott',
+    },
   ];
 
   region = null;

@@ -13,7 +13,7 @@ const newJobNamespace = 'default';
 
 let managementToken, clientToken;
 
-const jsonJob = overrides => {
+const jsonJob = (overrides) => {
   return JSON.stringify(
     assign(
       {},
@@ -28,11 +28,11 @@ const jsonJob = overrides => {
             Tasks: [
               {
                 Name: 'redis',
-                Driver: 'docker'
-              }
-            ]
-          }
-        ]
+                Driver: 'docker',
+              },
+            ],
+          },
+        ],
       },
       overrides
     ),
@@ -41,12 +41,12 @@ const jsonJob = overrides => {
   );
 };
 
-module('Acceptance | job run', function(hooks) {
+module('Acceptance | job run', function (hooks) {
   setupApplicationTest(hooks);
   setupMirage(hooks);
   setupCodeMirror(hooks);
 
-  hooks.beforeEach(function() {
+  hooks.beforeEach(function () {
     // Required for placing allocations (a result of creating jobs)
     server.create('node');
 
@@ -56,21 +56,21 @@ module('Acceptance | job run', function(hooks) {
     window.localStorage.nomadTokenSecret = managementToken.secretId;
   });
 
-  test('it passes an accessibility audit', async function(assert) {
+  test('it passes an accessibility audit', async function (assert) {
     assert.expect(1);
 
     await JobRun.visit();
     await a11yAudit(assert);
   });
 
-  test('visiting /jobs/run', async function(assert) {
+  test('visiting /jobs/run', async function (assert) {
     await JobRun.visit();
 
     assert.equal(currentURL(), '/jobs/run');
     assert.equal(document.title, 'Run a job - Nomad');
   });
 
-  test('when submitting a job, the site redirects to the new job overview page', async function(assert) {
+  test('when submitting a job, the site redirects to the new job overview page', async function (assert) {
     const spec = jsonJob();
 
     await JobRun.visit();
@@ -85,7 +85,7 @@ module('Acceptance | job run', function(hooks) {
     );
   });
 
-  test('when submitting a job to a different namespace, the redirect to the job overview page takes namespace into account', async function(assert) {
+  test('when submitting a job to a different namespace, the redirect to the job overview page takes namespace into account', async function (assert) {
     const newNamespace = 'second-namespace';
 
     server.create('namespace', { id: newNamespace });
@@ -103,14 +103,14 @@ module('Acceptance | job run', function(hooks) {
     );
   });
 
-  test('when the user doesn’t have permission to run a job, redirects to the job overview page', async function(assert) {
+  test('when the user doesn’t have permission to run a job, redirects to the job overview page', async function (assert) {
     window.localStorage.nomadTokenSecret = clientToken.secretId;
 
     await JobRun.visit();
     assert.equal(currentURL(), '/jobs');
   });
 
-  test('when using client token user can still go to job page if they have correct permissions', async function(assert) {
+  test('when using client token user can still go to job page if they have correct permissions', async function (assert) {
     const clientTokenWithPolicy = server.create('token');
     const newNamespace = 'second-namespace';
 
@@ -120,7 +120,7 @@ module('Acceptance | job run', function(hooks) {
       createAllocations: false,
       shallow: true,
       noActiveDeployment: true,
-      namespaceId: newNamespace
+      namespaceId: newNamespace,
     });
 
     const policy = server.create('policy', {
@@ -130,10 +130,10 @@ module('Acceptance | job run', function(hooks) {
         Namespaces: [
           {
             Name: newNamespace,
-            Capabilities: ['scale-job', 'submit-job', 'read-job', 'list-jobs']
-          }
-        ]
-      }
+            Capabilities: ['scale-job', 'submit-job', 'read-job', 'list-jobs'],
+          },
+        ],
+      },
     });
 
     clientTokenWithPolicy.policyIds = [policy.id];

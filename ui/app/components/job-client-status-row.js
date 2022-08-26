@@ -48,7 +48,7 @@ export default class ClientRow extends Component {
       runningAllocs: 0,
       startingAllocs: 0,
       lostAllocs: 0,
-      unknownAllocs: 0
+      unknownAllocs: 0,
     };
 
     switch (this.args.row.model.jobStatus) {
@@ -86,7 +86,7 @@ export default class ClientRow extends Component {
     }
 
     const Allocations = EmberObject.extend({
-      ...statusSummary
+      ...statusSummary,
     });
     return Allocations.create();
   }

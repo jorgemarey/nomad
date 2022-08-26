@@ -7,17 +7,17 @@ import { dasherize } from '@ember/string';
 const DISK_RESERVATIONS = [200, 500, 1000, 2000, 5000, 10000, 100000];
 
 export default Factory.extend({
-  name: id => `${dasherize(faker.hacker.noun())}-g-${id}`,
+  name: (id) => `${dasherize(faker.hacker.noun())}-g-${id}`,
   count: () => faker.random.number({ min: 1, max: 2 }),
 
   ephemeralDisk: () => ({
     Sticky: faker.random.boolean(),
     SizeMB: faker.helpers.randomize(DISK_RESERVATIONS),
-    Migrate: faker.random.boolean()
+    Migrate: faker.random.boolean(),
   }),
 
   noHostVolumes: trait({
-    volumes: () => ({})
+    volumes: () => ({}),
   }),
 
   withScaling: faker.random.boolean,
@@ -64,13 +64,13 @@ export default Factory.extend({
                   'scalar(avg((haproxy_server_current_sessions{backend="http_back"}) and (haproxy_server_up{backend="http_back"} == 1)))',
                 Strategy: {
                   'target-value': {
-                    target: 20
-                  }
-                }
-              }
-            }
-          }
-        }
+                    target: 20,
+                  },
+                },
+              },
+            },
+          },
+        },
       });
     }
 
@@ -90,20 +90,20 @@ export default Factory.extend({
         return server.create('task', {
           taskGroup: group,
           ...maybeResources,
-          volumeMounts: mounts.map(mount => ({
+          volumeMounts: mounts.map((mount) => ({
             Volume: mount,
             Destination: `/${faker.internet.userName()}/${faker.internet.domainWord()}/${faker.internet.color()}`,
             PropagationMode: '',
-            ReadOnly: faker.random.boolean()
+            ReadOnly: faker.random.boolean(),
           })),
-          createRecommendations: group.createRecommendations
+          createRecommendations: group.createRecommendations,
         });
       });
       taskIds = tasks.mapBy('id');
     }
 
     group.update({
-      taskIds: taskIds
+      taskIds: taskIds,
     });
 
     if (group.createAllocations) {
@@ -120,7 +120,7 @@ export default Factory.extend({
               : null,
             rescheduleAttempts: group.withRescheduling
               ? faker.random.number({ min: 1, max: 5 })
-              : 0
+              : 0,
           };
 
           if (group.withRescheduling) {
@@ -136,11 +136,11 @@ export default Factory.extend({
         .fill(null)
         .forEach(() => {
           server.create('service', {
-            taskGroup: group
+            taskGroup: group,
           });
         });
     }
-  }
+  },
 });
 
 function makeHostVolumes() {
@@ -148,7 +148,7 @@ function makeHostVolumes() {
     Name: faker.internet.domainWord(),
     Type: 'host',
     Source: faker.internet.domainWord(),
-    ReadOnly: faker.random.boolean()
+    ReadOnly: faker.random.boolean(),
   });
 
   const volumes = provide(faker.random.number({ min: 1, max: 5 }), generate);
@@ -163,14 +163,14 @@ function parseResourceSpec(spec) {
     M: 'MemoryMB',
     C: 'CPU',
     D: 'DiskMB',
-    I: 'IOPS'
+    I: 'IOPS',
   };
 
-  const terms = spec.split(',').map(t => {
+  const terms = spec.split(',').map((t) => {
     const [k, v] = t
       .trim()
       .split(':')
-      .map(kv => kv.trim());
+      .map((kv) => kv.trim());
     return [k, +v];
   });
 

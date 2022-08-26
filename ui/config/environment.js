@@ -25,8 +25,8 @@ module.exports = function (environment) {
       },
       EXTEND_PROTOTYPES: {
         // Prevent Ember Data from overriding Date.parse.
-        Date: false
-      }
+        Date: false,
+      },
     },
 
     APP: {
@@ -52,7 +52,7 @@ module.exports = function (environment) {
 
     ENV['ember-cli-mirage'] = {
       enabled: USE_MIRAGE,
-      excludeFilesFromBuild: !USE_MIRAGE
+      excludeFilesFromBuild: !USE_MIRAGE,
     };
 
     if (process.env.STORYBOOK === 'true') {
@@ -73,11 +73,11 @@ module.exports = function (environment) {
     ENV.APP.autoboot = false;
 
     ENV.browserify = {
-      tests: true
+      tests: true,
     };
 
     ENV['ember-cli-mirage'] = {
-      trackRequests: true
+      trackRequests: true,
     };
   }
 
