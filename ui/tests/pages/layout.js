@@ -101,6 +101,10 @@ export default create({
     dismiss: clickable('[data-test-inline-error-close]'),
 
     isDanger: hasClass('is-danger', '[data-test-inline-error]'),
-    isWarning: hasClass('is-warning', '[data-test-inline-error]')
-  }
+    isWarning: hasClass('is-warning', '[data-test-inline-error]'),
+  },
+
+  keyboard: {
+    modalShown: isPresent('.keyboard-shortcuts'),
+  },
 });

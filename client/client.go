@@ -8,7 +8,6 @@ import (
 	"net/rpc"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,6 +45,7 @@ import (
 	"github.com/hashicorp/nomad/command/agent/consul"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/envoy"
+	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/pool"
 	hstats "github.com/hashicorp/nomad/helper/stats"
 	"github.com/hashicorp/nomad/helper/tlsutil"
@@ -135,7 +135,7 @@ type ClientStatsReporter interface {
 }
 
 // AllocRunner is the interface implemented by the core alloc runner.
-//TODO Create via factory to allow testing Client with mock AllocRunners.
+// TODO Create via factory to allow testing Client with mock AllocRunners.
 type AllocRunner interface {
 	Alloc() *structs.Allocation
 	AllocState() *arstate.State
@@ -158,6 +158,7 @@ type AllocRunner interface {
 	PersistState() error
 
 	RestartTask(taskName string, taskEvent *structs.TaskEvent) error
+	RestartRunning(taskEvent *structs.TaskEvent) error
 	RestartAll(taskEvent *structs.TaskEvent) error
 	Reconnect(update *structs.Allocation) error
 
@@ -381,7 +382,7 @@ func NewClient(cfg *config.Config, consulCatalog consul.CatalogAPI, consulProxie
 		invalidAllocs:        make(map[string]struct{}),
 		serversContactedCh:   make(chan struct{}),
 		serversContactedOnce: sync.Once{},
-		cpusetManager:        cgutil.CreateCPUSetManager(cfg.CgroupParent, logger),
+		cpusetManager:        cgutil.CreateCPUSetManager(cfg.CgroupParent, cfg.ReservableCores, logger),
 		getter:               getter.NewGetter(cfg.Artifact),
 		EnterpriseClient:     newEnterpriseClient(logger),
 	}
@@ -678,21 +679,9 @@ func (c *Client) init() error {
 		"reserved", reserved,
 	)
 
-	// Ensure cgroups are created on linux platform
-	if runtime.GOOS == "linux" && c.cpusetManager != nil {
-		// use the client configuration for reservable_cores if set
-		cores := c.config.ReservableCores
-		if len(cores) == 0 {
-			// otherwise lookup the effective cores from the parent cgroup
-			cores, _ = cgutil.GetCPUsFromCgroup(c.config.CgroupParent)
-		}
-		if cpuErr := c.cpusetManager.Init(cores); cpuErr != nil {
-			// If the client cannot initialize the cgroup then reserved cores will not be reported and the cpuset manager
-			// will be disabled. this is common when running in dev mode under a non-root user for example.
-			c.logger.Warn("failed to initialize cpuset cgroup subsystem, cpuset management disabled", "error", cpuErr)
-			c.cpusetManager = new(cgutil.NoopCpusetManager)
-		}
-	}
+	// startup the CPUSet manager
+	c.cpusetManager.Init()
+
 	return nil
 }
 
@@ -887,20 +876,31 @@ func (c *Client) CollectAllAllocs() {
 	c.garbageCollector.CollectAll()
 }
 
-func (c *Client) RestartAllocation(allocID, taskName string) error {
+func (c *Client) RestartAllocation(allocID, taskName string, allTasks bool) error {
+	if allTasks && taskName != "" {
+		return fmt.Errorf("task name cannot be set when restarting all tasks")
+	}
+
 	ar, err := c.getAllocRunner(allocID)
 	if err != nil {
 		return err
 	}
 
-	event := structs.NewTaskEvent(structs.TaskRestartSignal).
-		SetRestartReason("User requested restart")
-
 	if taskName != "" {
+		event := structs.NewTaskEvent(structs.TaskRestartSignal).
+			SetRestartReason("User requested task to restart")
 		return ar.RestartTask(taskName, event)
 	}
 
-	return ar.RestartAll(event)
+	if allTasks {
+		event := structs.NewTaskEvent(structs.TaskRestartSignal).
+			SetRestartReason("User requested all tasks to restart")
+		return ar.RestartAll(event)
+	}
+
+	event := structs.NewTaskEvent(structs.TaskRestartSignal).
+		SetRestartReason("User requested running tasks to restart")
+	return ar.RestartRunning(event)
 }
 
 // Node returns the locally registered node
@@ -1238,8 +1238,8 @@ func (c *Client) restoreState() error {
 // wait until it gets allocs from server to launch them.
 //
 // See:
-//  * https://github.com/hashicorp/nomad/pull/6207
-//  * https://github.com/hashicorp/nomad/issues/5984
+//   - https://github.com/hashicorp/nomad/pull/6207
+//   - https://github.com/hashicorp/nomad/issues/5984
 //
 // COMPAT(0.12): remove once upgrading from 0.9.5 is no longer supported
 func (c *Client) hasLocalState(alloc *structs.Allocation) bool {
@@ -2372,7 +2372,7 @@ func makeFailedAlloc(add *structs.Allocation, err error) *structs.Allocation {
 		stripped.DeploymentStatus = add.DeploymentStatus.Copy()
 	} else {
 		stripped.DeploymentStatus = &structs.AllocDeploymentStatus{
-			Healthy:   helper.BoolToPtr(false),
+			Healthy:   pointer.Of(false),
 			Timestamp: failTime,
 		}
 	}

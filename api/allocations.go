@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"sort"
 	"strings"
@@ -12,7 +12,7 @@ import (
 var (
 	// NodeDownErr marks an operation as not able to complete since the node is
 	// down.
-	NodeDownErr = fmt.Errorf("node down")
+	NodeDownErr = errors.New("node down")
 )
 
 const (
@@ -106,8 +106,7 @@ func (a *Allocations) Exec(ctx context.Context,
 
 func (a *Allocations) Stats(alloc *Allocation, q *QueryOptions) (*AllocResourceUsage, error) {
 	var resp AllocResourceUsage
-	path := fmt.Sprintf("/v1/client/allocation/%s/stats", alloc.ID)
-	_, err := a.client.query(path, &resp, q)
+	_, err := a.client.query("/v1/client/allocation/"+alloc.ID+"/stats", &resp, q)
 	return &resp, err
 }
 
@@ -117,9 +116,24 @@ func (a *Allocations) GC(alloc *Allocation, q *QueryOptions) error {
 	return err
 }
 
+// Restart restarts the tasks that are currently running or a specific task if
+// taskName is provided. An error is returned if the task to be restarted is
+// not running.
 func (a *Allocations) Restart(alloc *Allocation, taskName string, q *QueryOptions) error {
 	req := AllocationRestartRequest{
 		TaskName: taskName,
+	}
+
+	var resp struct{}
+	_, err := a.client.putQuery("/v1/client/allocation/"+alloc.ID+"/restart", &req, &resp, q)
+	return err
+}
+
+// RestartAllTasks restarts all tasks in the allocation, regardless of
+// lifecycle type or state. Tasks will restart following their lifecycle order.
+func (a *Allocations) RestartAllTasks(alloc *Allocation, q *QueryOptions) error {
+	req := AllocationRestartRequest{
+		AllTasks: true,
 	}
 
 	var resp struct{}
@@ -408,6 +422,7 @@ func (a Allocation) RescheduleInfo(t time.Time) (int, int) {
 
 type AllocationRestartRequest struct {
 	TaskName string
+	AllTasks bool
 }
 
 type AllocSignalRequest struct {

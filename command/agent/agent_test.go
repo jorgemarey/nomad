@@ -11,10 +11,11 @@ import (
 
 	"github.com/hashicorp/nomad/ci"
 	cstructs "github.com/hashicorp/nomad/client/structs"
-	"github.com/hashicorp/nomad/helper"
+	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/testlog"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
+	"github.com/shoenig/test/must"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -256,7 +257,7 @@ func TestAgent_ServerConfig_Limits_Error(t *testing.T) {
 			expectedErr: "rpc_handshake_timeout must be >= 0",
 			limits: config.Limits{
 				RPCHandshakeTimeout:  "-5s",
-				RPCMaxConnsPerClient: helper.IntToPtr(100),
+				RPCMaxConnsPerClient: pointer.Of(100),
 			},
 		},
 		{
@@ -264,7 +265,7 @@ func TestAgent_ServerConfig_Limits_Error(t *testing.T) {
 			expectedErr: "error parsing rpc_handshake_timeout",
 			limits: config.Limits{
 				RPCHandshakeTimeout:  "s",
-				RPCMaxConnsPerClient: helper.IntToPtr(100),
+				RPCMaxConnsPerClient: pointer.Of(100),
 			},
 		},
 		{
@@ -272,7 +273,7 @@ func TestAgent_ServerConfig_Limits_Error(t *testing.T) {
 			expectedErr: "error parsing rpc_handshake_timeout",
 			limits: config.Limits{
 				RPCHandshakeTimeout:  "",
-				RPCMaxConnsPerClient: helper.IntToPtr(100),
+				RPCMaxConnsPerClient: pointer.Of(100),
 			},
 		},
 		{
@@ -280,7 +281,7 @@ func TestAgent_ServerConfig_Limits_Error(t *testing.T) {
 			expectedErr: "rpc_max_conns_per_client must be > 25; found: -100",
 			limits: config.Limits{
 				RPCHandshakeTimeout:  "5s",
-				RPCMaxConnsPerClient: helper.IntToPtr(-100),
+				RPCMaxConnsPerClient: pointer.Of(-100),
 			},
 		},
 		{
@@ -288,7 +289,7 @@ func TestAgent_ServerConfig_Limits_Error(t *testing.T) {
 			expectedErr: "rpc_max_conns_per_client must be > 25; found: 20",
 			limits: config.Limits{
 				RPCHandshakeTimeout:  "5s",
-				RPCMaxConnsPerClient: helper.IntToPtr(config.LimitsNonStreamingConnsPerClient),
+				RPCMaxConnsPerClient: pointer.Of(config.LimitsNonStreamingConnsPerClient),
 			},
 		},
 	}
@@ -332,21 +333,21 @@ func TestAgent_ServerConfig_Limits_OK(t *testing.T) {
 			name: "Zeros are valid",
 			limits: config.Limits{
 				RPCHandshakeTimeout:  "0s",
-				RPCMaxConnsPerClient: helper.IntToPtr(0),
+				RPCMaxConnsPerClient: pointer.Of(0),
 			},
 		},
 		{
 			name: "Low limits are valid",
 			limits: config.Limits{
 				RPCHandshakeTimeout:  "1ms",
-				RPCMaxConnsPerClient: helper.IntToPtr(26),
+				RPCMaxConnsPerClient: pointer.Of(26),
 			},
 		},
 		{
 			name: "High limits are valid",
 			limits: config.Limits{
 				RPCHandshakeTimeout:  "5h",
-				RPCMaxConnsPerClient: helper.IntToPtr(100000),
+				RPCMaxConnsPerClient: pointer.Of(100000),
 			},
 		},
 	}
@@ -386,12 +387,12 @@ func TestAgent_ServerConfig_PlanRejectionTracker(t *testing.T) {
 		{
 			name: "valid config",
 			trackerConfig: &PlanRejectionTracker{
-				Enabled:       helper.BoolToPtr(true),
+				Enabled:       pointer.Of(true),
 				NodeThreshold: 123,
 				NodeWindow:    17 * time.Minute,
 			},
 			expectedConfig: &PlanRejectionTracker{
-				Enabled:       helper.BoolToPtr(true),
+				Enabled:       pointer.Of(true),
 				NodeThreshold: 123,
 				NodeWindow:    17 * time.Minute,
 			},
@@ -463,7 +464,7 @@ func TestAgent_ServerConfig_RaftMultiplier_Ok(t *testing.T) {
 		},
 
 		{
-			multiplier: helper.IntToPtr(0),
+			multiplier: pointer.Of(0),
 
 			electionTimout:     1 * time.Second,
 			heartbeatTimeout:   1 * time.Second,
@@ -471,7 +472,7 @@ func TestAgent_ServerConfig_RaftMultiplier_Ok(t *testing.T) {
 			commitTimeout:      50 * time.Millisecond,
 		},
 		{
-			multiplier: helper.IntToPtr(1),
+			multiplier: pointer.Of(1),
 
 			electionTimout:     1 * time.Second,
 			heartbeatTimeout:   1 * time.Second,
@@ -479,7 +480,7 @@ func TestAgent_ServerConfig_RaftMultiplier_Ok(t *testing.T) {
 			commitTimeout:      50 * time.Millisecond,
 		},
 		{
-			multiplier: helper.IntToPtr(5),
+			multiplier: pointer.Of(5),
 
 			electionTimout:     5 * time.Second,
 			heartbeatTimeout:   5 * time.Second,
@@ -487,7 +488,7 @@ func TestAgent_ServerConfig_RaftMultiplier_Ok(t *testing.T) {
 			commitTimeout:      250 * time.Millisecond,
 		},
 		{
-			multiplier: helper.IntToPtr(6),
+			multiplier: pointer.Of(6),
 
 			electionTimout:     6 * time.Second,
 			heartbeatTimeout:   6 * time.Second,
@@ -495,7 +496,7 @@ func TestAgent_ServerConfig_RaftMultiplier_Ok(t *testing.T) {
 			commitTimeout:      300 * time.Millisecond,
 		},
 		{
-			multiplier: helper.IntToPtr(10),
+			multiplier: pointer.Of(10),
 
 			electionTimout:     10 * time.Second,
 			heartbeatTimeout:   10 * time.Second,
@@ -594,7 +595,7 @@ func TestAgent_ClientConfig(t *testing.T) {
 	// Test the default, and then custom setting of the client service
 	// discovery boolean.
 	require.True(t, c.NomadServiceDiscovery)
-	conf.Client.NomadServiceDiscovery = helper.BoolToPtr(false)
+	conf.Client.NomadServiceDiscovery = pointer.Of(false)
 	c, err = a.clientConfig()
 	require.NoError(t, err)
 	require.False(t, c.NomadServiceDiscovery)
@@ -646,7 +647,7 @@ func TestAgent_HTTPCheck(t *testing.T) {
 				AdvertiseAddrs:  &AdvertiseAddrs{HTTP: "advertise:4646"},
 				normalizedAddrs: &NormalizedAddrs{HTTP: []string{"normalized:4646"}},
 				Consul: &config.ConsulConfig{
-					ChecksUseAdvertise: helper.BoolToPtr(false),
+					ChecksUseAdvertise: pointer.Of(false),
 				},
 				TLSConfig: &config.TLSConfig{EnableHTTP: false},
 			},
@@ -675,7 +676,7 @@ func TestAgent_HTTPCheck(t *testing.T) {
 
 	t.Run("Plain HTTP + ChecksUseAdvertise", func(t *testing.T) {
 		a := agent()
-		a.config.Consul.ChecksUseAdvertise = helper.BoolToPtr(true)
+		a.config.Consul.ChecksUseAdvertise = pointer.Of(true)
 		check := a.agentHTTPCheck(false)
 		if check == nil {
 			t.Fatalf("expected non-nil check")
@@ -1055,6 +1056,39 @@ func TestServer_Reload_TLS_DowngradeFromTLS(t *testing.T) {
 	assert.Nil(err)
 
 	assert.True(agentConfig.TLSConfig.IsEmpty())
+}
+
+func TestServer_Reload_VaultConfig(t *testing.T) {
+	ci.Parallel(t)
+
+	agent := NewTestAgent(t, t.Name(), func(c *Config) {
+		c.Server.NumSchedulers = pointer.Of(0)
+		c.Vault = &config.VaultConfig{
+			Enabled:   pointer.Of(true),
+			Token:     "vault-token",
+			Namespace: "vault-namespace",
+			Addr:      "https://vault.consul:8200",
+		}
+	})
+	defer agent.Shutdown()
+
+	newConfig := agent.GetConfig()
+	newConfig.Vault = &config.VaultConfig{
+		Enabled:   pointer.Of(true),
+		Token:     "vault-token",
+		Namespace: "another-namespace",
+		Addr:      "https://vault.consul:8200",
+	}
+
+	sconf, err := convertServerConfig(newConfig)
+	must.NoError(t, err)
+	agent.finalizeServerConfig(sconf)
+
+	// TODO: the vault client isn't accessible here, and we don't actually
+	// overwrite the agent's server config on reload. We probably should? See
+	// tests in nomad/server_test.go for verification of this code path's
+	// behavior on the VaultClient
+	must.NoError(t, agent.server.Reload(sconf))
 }
 
 func TestServer_ShouldReload_ReturnFalseForNoChanges(t *testing.T) {

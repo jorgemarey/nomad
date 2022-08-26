@@ -15,11 +15,11 @@ let job;
 let node;
 let allocation;
 
-module('Acceptance | allocation detail', function(hooks) {
+module('Acceptance | allocation detail', function (hooks) {
   setupApplicationTest(hooks);
   setupMirage(hooks);
 
-  hooks.beforeEach(async function() {
+  hooks.beforeEach(async function () {
     server.create('agent');
 
     node = server.create('node');
@@ -50,11 +50,11 @@ module('Acceptance | allocation detail', function(hooks) {
     await Allocation.visit({ id: allocation.id });
   });
 
-  test('it passes an accessibility audit', async function(assert) {
+  test('it passes an accessibility audit', async function (assert) {
     await a11yAudit(assert);
   });
 
-  test('/allocation/:id should name the allocation and link to the corresponding job and node', async function(assert) {
+  test('/allocation/:id should name the allocation and link to the corresponding job and node', async function (assert) {
     assert.ok(
       Allocation.title.includes(allocation.name),
       'Allocation name is in the heading'
@@ -90,7 +90,7 @@ module('Acceptance | allocation detail', function(hooks) {
     );
   });
 
-  test('/allocation/:id should include resource utilization graphs', async function(assert) {
+  test('/allocation/:id should include resource utilization graphs', async function (assert) {
     assert.equal(
       Allocation.resourceCharts.length,
       2,
@@ -108,7 +108,7 @@ module('Acceptance | allocation detail', function(hooks) {
     );
   });
 
-  test('/allocation/:id should present task lifecycles', async function(assert) {
+  test('/allocation/:id should present task lifecycles', async function (assert) {
     const job = server.create('job', {
       groupsCount: 1,
       groupTaskCount: 6,
@@ -148,7 +148,7 @@ module('Acceptance | allocation detail', function(hooks) {
     );
   });
 
-  test('/allocation/:id should list all tasks for the allocation', async function(assert) {
+  test('/allocation/:id should list all tasks for the allocation', async function (assert) {
     assert.equal(
       Allocation.tasks.length,
       server.db.taskStates.where({ allocationId: allocation.id }).length,
@@ -157,25 +157,48 @@ module('Acceptance | allocation detail', function(hooks) {
     assert.notOk(Allocation.isEmpty, 'Task table empty state is not shown');
   });
 
-  test('each task row should list high-level information for the task', async function(assert) {
-    const task = server.db.taskStates
-      .where({ allocationId: allocation.id })
-      .sortBy('name')[0];
-    const events = server.db.taskEvents.where({ taskStateId: task.id });
-    const event = events[events.length - 1];
+  test('each task row should list high-level information for the task', async function (assert) {
+    const job = server.create('job', {
+      groupsCount: 1,
+      groupTaskCount: 3,
+      withGroupServices: true,
+      createAllocations: false,
+    });
+
+    const allocation = server.create('allocation', 'withTaskWithPorts', {
+      clientStatus: 'running',
+      jobId: job.id,
+    });
 
     const taskGroup = server.schema.taskGroups.where({
       jobId: allocation.jobId,
       name: allocation.taskGroup
     }).models[0];
 
-    const jobTask = taskGroup.tasks.models.find(m => m.name === task.name);
-    const volumes = jobTask.volumeMounts.map(volume => ({
-      name: volume.Volume,
-      source: taskGroup.volumes[volume.Volume].Source
-    }));
+    // Set the expected task states.
+    const states = ['running', 'pending', 'dead'];
+    server.db.taskStates
+      .where({ allocationId: allocation.id })
+      .sortBy('name')
+      .forEach((task, i) => {
+        server.db.taskStates.update(task.id, { state: states[i] });
+      });
 
-    Allocation.tasks[0].as(taskRow => {
+    await Allocation.visit({ id: allocation.id });
+
+    Allocation.tasks.forEach((taskRow, i) => {
+      const task = server.db.taskStates
+        .where({ allocationId: allocation.id })
+        .sortBy('name')[i];
+      const events = server.db.taskEvents.where({ taskStateId: task.id });
+      const event = events[events.length - 1];
+
+      const jobTask = taskGroup.tasks.models.find((m) => m.name === task.name);
+      const volumes = jobTask.volumeMounts.map((volume) => ({
+        name: volume.Volume,
+        source: taskGroup.volumes[volume.Volume].Source,
+      }));
+
       assert.equal(taskRow.name, task.name, 'Name');
       assert.equal(taskRow.state, task.state, 'State');
       assert.equal(taskRow.message, event.displayMessage, 'Event Message');
@@ -184,6 +207,10 @@ module('Acceptance | allocation detail', function(hooks) {
         moment(event.time / 1000000).format("MMM DD, 'YY HH:mm:ss ZZ"),
         'Event Time'
       );
+
+      const expectStats = task.state === 'running';
+      assert.equal(taskRow.hasCpuMetrics, expectStats, 'CPU metrics');
+      assert.equal(taskRow.hasMemoryMetrics, expectStats, 'Memory metrics');
 
       const volumesText = taskRow.volumes;
       volumes.forEach(volume => {
@@ -199,7 +226,7 @@ module('Acceptance | allocation detail', function(hooks) {
     });
   });
 
-  test('each task row should link to the task detail page', async function(assert) {
+  test('each task row should link to the task detail page', async function (assert) {
     const task = server.db.taskStates
       .where({ allocationId: allocation.id })
       .sortBy('name')[0];
@@ -223,14 +250,14 @@ module('Acceptance | allocation detail', function(hooks) {
     );
   });
 
-  test('tasks with an unhealthy driver have a warning icon', async function(assert) {
+  test('tasks with an unhealthy driver have a warning icon', async function (assert) {
     assert.ok(
       Allocation.firstUnhealthyTask().hasUnhealthyDriver,
       'Warning is shown'
     );
   });
 
-  test('proxy task has a proxy tag', async function(assert) {
+  test('proxy task has a proxy tag', async function (assert) {
     // Must create a new job as existing one has loaded and it contains the tasks
     job = server.create('job', {
       groupsCount: 1,
@@ -253,7 +280,7 @@ module('Acceptance | allocation detail', function(hooks) {
     assert.ok(Allocation.tasks[0].hasProxyTag);
   });
 
-  test('when there are no tasks, an empty state is shown', async function(assert) {
+  test('when there are no tasks, an empty state is shown', async function (assert) {
     // Make sure the allocation is pending in order to ensure there are no tasks
     allocation = server.create('allocation', 'withTaskWithPorts', {
       clientStatus: 'pending'
@@ -263,14 +290,14 @@ module('Acceptance | allocation detail', function(hooks) {
     assert.ok(Allocation.isEmpty, 'Task table empty state is shown');
   });
 
-  test('when the allocation has not been rescheduled, the reschedule events section is not rendered', async function(assert) {
+  test('when the allocation has not been rescheduled, the reschedule events section is not rendered', async function (assert) {
     assert.notOk(
       Allocation.hasRescheduleEvents,
       'Reschedule Events section exists'
     );
   });
 
-  test('ports are listed', async function(assert) {
+  test('ports are listed', async function (assert) {
     const allServerPorts = allocation.taskResources.models[0].resources.Ports;
 
     allServerPorts.sortBy('Label').forEach((serverPort, index) => {
@@ -285,7 +312,7 @@ module('Acceptance | allocation detail', function(hooks) {
     });
   });
 
-  test('services are listed', async function(assert) {
+  test('services are listed', async function (assert) {
     const taskGroup = server.schema.taskGroups.findBy({
       name: allocation.taskGroup
     });
@@ -316,7 +343,7 @@ module('Acceptance | allocation detail', function(hooks) {
     });
   });
 
-  test('when the allocation is not found, an error message is shown, but the URL persists', async function(assert) {
+  test('when the allocation is not found, an error message is shown, but the URL persists', async function (assert) {
     await Allocation.visit({ id: 'not-a-real-allocation' });
 
     assert.equal(
@@ -339,7 +366,7 @@ module('Acceptance | allocation detail', function(hooks) {
     );
   });
 
-  test('allocation can be stopped', async function(assert) {
+  test('allocation can be stopped', async function (assert) {
     await Allocation.stop.idle();
     await Allocation.stop.confirm();
 
@@ -352,7 +379,8 @@ module('Acceptance | allocation detail', function(hooks) {
     );
   });
 
-  test('allocation can be restarted', async function(assert) {
+  test('allocation can be restarted', async function (assert) {
+    await Allocation.restartAll.idle();
     await Allocation.restart.idle();
     await Allocation.restart.confirm();
 
@@ -361,9 +389,21 @@ module('Acceptance | allocation detail', function(hooks) {
       `/v1/client/allocation/${allocation.id}/restart`,
       'Restart request is made for the allocation'
     );
+
+    await Allocation.restart.idle();
+    await Allocation.restartAll.idle();
+    await Allocation.restartAll.confirm();
+
+    assert.ok(
+      server.pretender.handledRequests.filterBy(
+        'requestBody',
+        JSON.stringify({ AllTasks: true })
+      ),
+      'Restart all tasks request is made for the allocation'
+    );
   });
 
-  test('while an allocation is being restarted, the stop button is disabled', async function(assert) {
+  test('while an allocation is being restarted, the stop button is disabled', async function (assert) {
     server.pretender.post('/v1/allocation/:id/stop', () => [204, {}, ''], true);
 
     await Allocation.stop.idle();
@@ -371,13 +411,14 @@ module('Acceptance | allocation detail', function(hooks) {
     run.later(() => {
       assert.ok(Allocation.stop.isRunning, 'Stop is loading');
       assert.ok(Allocation.restart.isDisabled, 'Restart is disabled');
+      assert.ok(Allocation.restartAll.isDisabled, 'Restart All is disabled');
       server.pretender.resolve(server.pretender.requestReferences[0].request);
     }, 500);
 
     await Allocation.stop.confirm();
   });
 
-  test('if stopping or restarting fails, an error message is shown', async function(assert) {
+  test('if stopping or restarting fails, an error message is shown', async function (assert) {
     server.pretender.post('/v1/allocation/:id/stop', () => [403, {}, '']);
 
     await Allocation.stop.idle();
@@ -402,11 +443,11 @@ module('Acceptance | allocation detail', function(hooks) {
   });
 });
 
-module('Acceptance | allocation detail (rescheduled)', function(hooks) {
+module('Acceptance | allocation detail (rescheduled)', function (hooks) {
   setupApplicationTest(hooks);
   setupMirage(hooks);
 
-  hooks.beforeEach(async function() {
+  hooks.beforeEach(async function () {
     server.create('agent');
 
     node = server.create('node');
@@ -416,7 +457,7 @@ module('Acceptance | allocation detail (rescheduled)', function(hooks) {
     await Allocation.visit({ id: allocation.id });
   });
 
-  test('when the allocation has been rescheduled, the reschedule events section is rendered', async function(assert) {
+  test('when the allocation has been rescheduled, the reschedule events section is rendered', async function (assert) {
     assert.ok(
       Allocation.hasRescheduleEvents,
       'Reschedule Events section exists'
@@ -424,11 +465,11 @@ module('Acceptance | allocation detail (rescheduled)', function(hooks) {
   });
 });
 
-module('Acceptance | allocation detail (not running)', function(hooks) {
+module('Acceptance | allocation detail (not running)', function (hooks) {
   setupApplicationTest(hooks);
   setupMirage(hooks);
 
-  hooks.beforeEach(async function() {
+  hooks.beforeEach(async function () {
     server.create('agent');
 
     node = server.create('node');
@@ -438,7 +479,7 @@ module('Acceptance | allocation detail (not running)', function(hooks) {
     await Allocation.visit({ id: allocation.id });
   });
 
-  test('when the allocation is not running, the utilization graphs are replaced by an empty message', async function(assert) {
+  test('when the allocation is not running, the utilization graphs are replaced by an empty message', async function (assert) {
     assert.equal(Allocation.resourceCharts.length, 0, 'No resource charts');
     assert.equal(
       Allocation.resourceEmptyMessage,
@@ -447,24 +488,25 @@ module('Acceptance | allocation detail (not running)', function(hooks) {
     );
   });
 
-  test('the exec and stop/restart buttons are absent', async function(assert) {
+  test('the exec and stop/restart buttons are absent', async function (assert) {
     assert.notOk(Allocation.execButton.isPresent);
     assert.notOk(Allocation.stop.isPresent);
     assert.notOk(Allocation.restart.isPresent);
+    assert.notOk(Allocation.restartAll.isPresent);
   });
 });
 
-module('Acceptance | allocation detail (preemptions)', function(hooks) {
+module('Acceptance | allocation detail (preemptions)', function (hooks) {
   setupApplicationTest(hooks);
   setupMirage(hooks);
 
-  hooks.beforeEach(async function() {
+  hooks.beforeEach(async function () {
     server.create('agent');
     node = server.create('node');
     job = server.create('job', { createAllocations: false });
   });
 
-  test('shows a dedicated section to the allocation that preempted this allocation', async function(assert) {
+  test('shows a dedicated section to the allocation that preempted this allocation', async function (assert) {
     allocation = server.create('allocation', 'preempted');
     const preempter = server.schema.find(
       'allocation',
@@ -516,7 +558,7 @@ module('Acceptance | allocation detail (preemptions)', function(hooks) {
     );
   });
 
-  test('shows a dedicated section to the allocations this allocation preempted', async function(assert) {
+  test('shows a dedicated section to the allocations this allocation preempted', async function (assert) {
     allocation = server.create('allocation', 'preempter');
     await Allocation.visit({ id: allocation.id });
     assert.ok(
@@ -525,7 +567,7 @@ module('Acceptance | allocation detail (preemptions)', function(hooks) {
     );
   });
 
-  test('each preempted allocation in the table lists basic allocation information', async function(assert) {
+  test('each preempted allocation in the table lists basic allocation information', async function (assert) {
     allocation = server.create('allocation', 'preempter');
     await Allocation.visit({ id: allocation.id });
 
@@ -580,7 +622,7 @@ module('Acceptance | allocation detail (preemptions)', function(hooks) {
     );
   });
 
-  test('when an allocation both preempted allocations and was preempted itself, both preemptions sections are shown', async function(assert) {
+  test('when an allocation both preempted allocations and was preempted itself, both preemptions sections are shown', async function (assert) {
     allocation = server.create('allocation', 'preempter', 'preempted');
     await Allocation.visit({ id: allocation.id });
     assert.ok(

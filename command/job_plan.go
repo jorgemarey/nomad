@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/nomad/api"
-	"github.com/hashicorp/nomad/helper"
+	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/scheduler"
 	"github.com/posener/complete"
 )
@@ -219,12 +219,14 @@ func (c *JobPlanCommand) Run(args []string) int {
 		vaultToken = os.Getenv("VAULT_TOKEN")
 	}
 
+	// Set the vault token.
 	if vaultToken != "" {
-		job.VaultToken = helper.StringToPtr(vaultToken)
+		job.VaultToken = pointer.Of(vaultToken)
 	}
 
+	//  Set the vault namespace.
 	if vaultNamespace != "" {
-		job.VaultNamespace = helper.StringToPtr(vaultNamespace)
+		job.VaultNamespace = pointer.Of(vaultNamespace)
 	}
 
 	// Setup the options
