@@ -244,6 +244,10 @@ func connectProxyConfig(cfg map[string]interface{}, port int, ci connectInformat
 	cfg["bind_address"] = "0.0.0.0"
 	cfg["bind_port"] = port
 
+	if ci.Namespace == "" {
+		ci.Namespace = "default"
+	}
+
 	tags := map[string]string{
 		"nomad.group=":     ci.Group,
 		"nomad.job=":       ci.JobID,
