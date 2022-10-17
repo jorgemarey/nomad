@@ -143,6 +143,7 @@ func (h *groupServiceHook) Update(req *interfaces.RunnerUpdateRequest) error {
 
 	// MEIGAS: If we already run the PreKill don't do this (Is this OK?)
 	if h.deregistered {
+		// TODO: log this
 		return nil
 	}
 
