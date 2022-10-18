@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	jwt "github.com/golang-jwt/jwt/v4"
 	"github.com/hashicorp/cronexpr"
 	"github.com/hashicorp/go-msgpack/codec"
 	"github.com/hashicorp/go-multierror"
@@ -44,6 +45,8 @@ import (
 	"github.com/miekg/dns"
 	"github.com/mitchellh/copystructure"
 	"golang.org/x/crypto/blake2b"
+	"golang.org/x/exp/maps"
+	"golang.org/x/exp/slices"
 )
 
 var (
@@ -109,6 +112,11 @@ const (
 	ServiceRegistrationUpsertRequestType         MessageType = 47
 	ServiceRegistrationDeleteByIDRequestType     MessageType = 48
 	ServiceRegistrationDeleteByNodeIDRequestType MessageType = 49
+	VarApplyStateRequestType                     MessageType = 50
+	RootKeyMetaUpsertRequestType                 MessageType = 51
+	RootKeyMetaDeleteRequestType                 MessageType = 52
+	ACLRolesUpsertRequestType                    MessageType = 53
+	ACLRolesDeleteByIDRequestType                MessageType = 54
 
 	// Namespace types were moved from enterprise and therefore start at 64
 	// MEIGAS: When we made the initial code we set them at 24 and 25
@@ -1366,6 +1374,10 @@ type NodeUpdateResponse struct {
 	// region.
 	Servers []*NodeServerInfo
 
+	// SchedulingEligibility is used to inform clients what the server-side
+	// has for their scheduling status during heartbeats.
+	SchedulingEligibility string
+
 	QueryMeta
 }
 
@@ -1692,7 +1704,7 @@ func (ne *NodeEvent) String() string {
 func (ne *NodeEvent) Copy() *NodeEvent {
 	c := new(NodeEvent)
 	*c = *ne
-	c.Details = helper.CopyMapStringString(ne.Details)
+	c.Details = maps.Clone(ne.Details)
 	return c
 }
 
@@ -1879,7 +1891,7 @@ func (m *DrainMetadata) Copy() *DrainMetadata {
 	}
 	c := new(DrainMetadata)
 	*c = *m
-	c.Meta = helper.CopyMapStringString(m.Meta)
+	c.Meta = maps.Clone(m.Meta)
 	return c
 }
 
@@ -2068,97 +2080,23 @@ func (n *Node) Copy() *Node {
 	if n == nil {
 		return nil
 	}
-	nn := new(Node)
-	*nn = *n
-	nn.Attributes = helper.CopyMapStringString(nn.Attributes)
+	nn := *n
+	nn.Attributes = maps.Clone(nn.Attributes)
 	nn.NodeResources = nn.NodeResources.Copy()
 	nn.ReservedResources = nn.ReservedResources.Copy()
 	nn.Resources = nn.Resources.Copy()
 	nn.Reserved = nn.Reserved.Copy()
-	nn.Links = helper.CopyMapStringString(nn.Links)
-	nn.Meta = helper.CopyMapStringString(nn.Meta)
+	nn.Links = maps.Clone(nn.Links)
+	nn.Meta = maps.Clone(nn.Meta)
 	nn.DrainStrategy = nn.DrainStrategy.Copy()
-	nn.Events = copyNodeEvents(n.Events)
-	nn.Drivers = copyNodeDrivers(n.Drivers)
-	nn.CSIControllerPlugins = copyNodeCSI(nn.CSIControllerPlugins)
-	nn.CSINodePlugins = copyNodeCSI(nn.CSINodePlugins)
-	nn.HostVolumes = copyNodeHostVolumes(n.HostVolumes)
-	nn.HostNetworks = copyNodeHostNetworks(n.HostNetworks)
+	nn.Events = helper.CopySlice(n.Events)
+	nn.Drivers = helper.DeepCopyMap(n.Drivers)
+	nn.CSIControllerPlugins = helper.DeepCopyMap(nn.CSIControllerPlugins)
+	nn.CSINodePlugins = helper.DeepCopyMap(nn.CSINodePlugins)
+	nn.HostVolumes = helper.DeepCopyMap(n.HostVolumes)
+	nn.HostNetworks = helper.DeepCopyMap(n.HostNetworks)
 	nn.LastDrain = nn.LastDrain.Copy()
-	return nn
-}
-
-// copyNodeEvents is a helper to copy a list of NodeEvent's
-func copyNodeEvents(events []*NodeEvent) []*NodeEvent {
-	l := len(events)
-	if l == 0 {
-		return nil
-	}
-
-	c := make([]*NodeEvent, l)
-	for i, event := range events {
-		c[i] = event.Copy()
-	}
-	return c
-}
-
-// copyNodeCSI is a helper to copy a map of CSIInfo
-func copyNodeCSI(plugins map[string]*CSIInfo) map[string]*CSIInfo {
-	l := len(plugins)
-	if l == 0 {
-		return nil
-	}
-
-	c := make(map[string]*CSIInfo, l)
-	for plugin, info := range plugins {
-		c[plugin] = info.Copy()
-	}
-
-	return c
-}
-
-// copyNodeDrivers is a helper to copy a map of DriverInfo
-func copyNodeDrivers(drivers map[string]*DriverInfo) map[string]*DriverInfo {
-	l := len(drivers)
-	if l == 0 {
-		return nil
-	}
-
-	c := make(map[string]*DriverInfo, l)
-	for driver, info := range drivers {
-		c[driver] = info.Copy()
-	}
-	return c
-}
-
-// copyNodeHostVolumes is a helper to copy a map of string to Volume
-func copyNodeHostVolumes(volumes map[string]*ClientHostVolumeConfig) map[string]*ClientHostVolumeConfig {
-	l := len(volumes)
-	if l == 0 {
-		return nil
-	}
-
-	c := make(map[string]*ClientHostVolumeConfig, l)
-	for volume, v := range volumes {
-		c[volume] = v.Copy()
-	}
-
-	return c
-}
-
-// copyNodeHostVolumes is a helper to copy a map of string to HostNetwork
-func copyNodeHostNetworks(networks map[string]*ClientHostNetworkConfig) map[string]*ClientHostNetworkConfig {
-	l := len(networks)
-	if l == 0 {
-		return nil
-	}
-
-	c := make(map[string]*ClientHostNetworkConfig, l)
-	for network, v := range networks {
-		c[network] = v.Copy()
-	}
-
-	return c
+	return &nn
 }
 
 // TerminalStatus returns if the current status is terminal and
@@ -4327,7 +4265,7 @@ func (j *Job) Copy() *Job {
 	}
 	nj := new(Job)
 	*nj = *j
-	nj.Datacenters = helper.CopySliceString(nj.Datacenters)
+	nj.Datacenters = slices.Clone(nj.Datacenters)
 	nj.Constraints = CopySliceConstraints(nj.Constraints)
 	nj.Affinities = CopySliceAffinities(nj.Affinities)
 	nj.Multiregion = nj.Multiregion.Copy()
@@ -4341,7 +4279,7 @@ func (j *Job) Copy() *Job {
 	}
 
 	nj.Periodic = nj.Periodic.Copy()
-	nj.Meta = helper.CopyMapStringString(nj.Meta)
+	nj.Meta = maps.Clone(nj.Meta)
 	nj.ParameterizedJob = nj.ParameterizedJob.Copy()
 	return nj
 }
@@ -4549,7 +4487,7 @@ func (j *Job) CombinedTaskMeta(groupName, taskName string) map[string]string {
 
 	task := group.LookupTask(taskName)
 	if task != nil {
-		meta = helper.CopyMapStringString(task.Meta)
+		meta = maps.Clone(task.Meta)
 	}
 
 	if meta == nil {
@@ -4868,7 +4806,7 @@ func (jc *JobChildrenSummary) Copy() *JobChildrenSummary {
 	return njc
 }
 
-// TaskGroup summarizes the state of all the allocations of a particular
+// TaskGroupSummary summarizes the state of all the allocations of a particular
 // TaskGroup
 type TaskGroupSummary struct {
 	Queued   int
@@ -4959,9 +4897,9 @@ func (u *UpdateStrategy) Copy() *UpdateStrategy {
 		return nil
 	}
 
-	copy := new(UpdateStrategy)
-	*copy = *u
-	return copy
+	c := new(UpdateStrategy)
+	*c = *u
+	return c
 }
 
 func (u *UpdateStrategy) Validate() error {
@@ -5177,8 +5115,8 @@ func (n *Namespace) Copy() *Namespace {
 	if n.Capabilities != nil {
 		c := new(NamespaceCapabilities)
 		*c = *n.Capabilities
-		c.EnabledTaskDrivers = helper.CopySliceString(n.Capabilities.EnabledTaskDrivers)
-		c.DisabledTaskDrivers = helper.CopySliceString(n.Capabilities.DisabledTaskDrivers)
+		c.EnabledTaskDrivers = slices.Clone(n.Capabilities.EnabledTaskDrivers)
+		c.DisabledTaskDrivers = slices.Clone(n.Capabilities.DisabledTaskDrivers)
 		nc.Capabilities = c
 	}
 	if n.Meta != nil {
@@ -5443,7 +5381,7 @@ func (d *ParameterizedJobConfig) Validate() error {
 	}
 
 	// Check that the meta configurations are disjoint sets
-	disjoint, offending := helper.SliceSetDisjoint(d.MetaRequired, d.MetaOptional)
+	disjoint, offending := helper.IsDisjoint(d.MetaRequired, d.MetaOptional)
 	if !disjoint {
 		_ = multierror.Append(&mErr, fmt.Errorf("Required and optional meta keys should be disjoint. Following keys exist in both: %v", offending))
 	}
@@ -5463,8 +5401,8 @@ func (d *ParameterizedJobConfig) Copy() *ParameterizedJobConfig {
 	}
 	nd := new(ParameterizedJobConfig)
 	*nd = *d
-	nd.MetaOptional = helper.CopySliceString(nd.MetaOptional)
-	nd.MetaRequired = helper.CopySliceString(nd.MetaRequired)
+	nd.MetaOptional = slices.Clone(nd.MetaOptional)
+	nd.MetaRequired = slices.Clone(nd.MetaRequired)
 	return nd
 }
 
@@ -5848,6 +5786,17 @@ func (j *Job) GetScalingPolicies() []*ScalingPolicy {
 	ret = append(ret, j.GetEntScalingPolicies()...)
 
 	return ret
+}
+
+// UsesDeployments returns a boolean indicating whether the job configuration
+// results in a deployment during scheduling.
+func (j *Job) UsesDeployments() bool {
+	switch j.Type {
+	case JobTypeService:
+		return true
+	default:
+		return false
+	}
 }
 
 // ScalingPolicyListStub is used to return a subset of scaling policy information
@@ -6299,7 +6248,7 @@ func (tg *TaskGroup) Copy() *TaskGroup {
 		ntg.Tasks = tasks
 	}
 
-	ntg.Meta = helper.CopyMapStringString(ntg.Meta)
+	ntg.Meta = maps.Clone(ntg.Meta)
 
 	if tg.EphemeralDisk != nil {
 		ntg.EphemeralDisk = tg.EphemeralDisk.Copy()
@@ -6369,6 +6318,25 @@ func (tg *TaskGroup) Canonicalize(job *Job) {
 	for _, task := range tg.Tasks {
 		task.Canonicalize(job, tg)
 	}
+}
+
+// NomadServices returns a list of all group and task - level services in tg that
+// are making use of the nomad service provider.
+func (tg *TaskGroup) NomadServices() []*Service {
+	var services []*Service
+	for _, service := range tg.Services {
+		if service.Provider == ServiceProviderNomad {
+			services = append(services, service)
+		}
+	}
+	for _, task := range tg.Tasks {
+		for _, service := range task.Services {
+			if service.Provider == ServiceProviderNomad {
+				services = append(services, service)
+			}
+		}
+	}
+	return services
 }
 
 // Validate is used to check a task group for reasonable configuration
@@ -6694,10 +6662,19 @@ func (tg *TaskGroup) validateServices() error {
 
 		for _, service := range task.Services {
 
-			// Ensure no task-level checks specify a task
+			// Ensure no task-level service can only specify the task it belongs to.
+			if service.TaskName != "" && service.TaskName != task.Name {
+				mErr.Errors = append(mErr.Errors,
+					fmt.Errorf("Service %s is invalid: may only specify task the service belongs to, got %q", service.Name, service.TaskName),
+				)
+			}
+
+			// Ensure no task-level checks can only specify the task they belong to.
 			for _, check := range service.Checks {
-				if check.TaskName != "" {
-					mErr.Errors = append(mErr.Errors, fmt.Errorf("Check %s is invalid: only task group service checks can be assigned tasks", check.Name))
+				if check.TaskName != "" && check.TaskName != task.Name {
+					mErr.Errors = append(mErr.Errors,
+						fmt.Errorf("Check %s is invalid: may only specify task the check belongs to, got %q", check.Name, check.TaskName),
+					)
 				}
 			}
 
@@ -6843,7 +6820,7 @@ func (tg *TaskGroup) Warnings(j *Job) error {
 	// Validate the update strategy
 	if u := tg.Update; u != nil {
 		// Check the counts are appropriate
-		if u.MaxParallel > tg.Count && !(j.IsMultiregion() && tg.Count == 0) {
+		if tg.Count > 1 && u.MaxParallel > tg.Count && !(j.IsMultiregion() && tg.Count == 0) {
 			mErr.Errors = append(mErr.Errors,
 				fmt.Errorf("Update max parallel count is greater than task group count (%d > %d). "+
 					"A destructive change would result in the simultaneous replacement of all allocations.", u.MaxParallel, tg.Count))
@@ -7148,7 +7125,7 @@ func (t *Task) Copy() *Task {
 	}
 	nt := new(Task)
 	*nt = *t
-	nt.Env = helper.CopyMapStringString(nt.Env)
+	nt.Env = maps.Clone(nt.Env)
 
 	if t.Services != nil {
 		services := make([]*Service, len(nt.Services))
@@ -7166,7 +7143,7 @@ func (t *Task) Copy() *Task {
 	nt.Vault = nt.Vault.Copy()
 	nt.Resources = nt.Resources.Copy()
 	nt.LogConfig = nt.LogConfig.Copy()
-	nt.Meta = helper.CopyMapStringString(nt.Meta)
+	nt.Meta = maps.Clone(nt.Meta)
 	nt.DispatchPayload = nt.DispatchPayload.Copy()
 	nt.Lifecycle = nt.Lifecycle.Copy()
 
@@ -7817,9 +7794,8 @@ func (t *Template) Copy() *Template {
 	nt := new(Template)
 	*nt = *t
 
-	if t.Wait != nil {
-		nt.Wait = t.Wait.Copy()
-	}
+	nt.ChangeScript = t.ChangeScript.Copy()
+	nt.Wait = t.Wait.Copy()
 
 	return nt
 }
@@ -7862,8 +7838,12 @@ func (t *Template) Validate() error {
 			_ = multierror.Append(&mErr, fmt.Errorf("cannot use signals with env var templates"))
 		}
 	case TemplateChangeModeScript:
-		if t.ChangeScript.Command == "" {
-			_ = multierror.Append(&mErr, fmt.Errorf("must specify script path value when change mode is script"))
+		if t.ChangeScript == nil {
+			_ = multierror.Append(&mErr, fmt.Errorf("must specify change script configuration value when change mode is script"))
+		}
+
+		if err = t.ChangeScript.Validate(); err != nil {
+			_ = multierror.Append(&mErr, err)
 		}
 	default:
 		_ = multierror.Append(&mErr, TemplateChangeModeInvalidError)
@@ -7904,6 +7884,47 @@ func (t *Template) DiffID() string {
 	return t.DestPath
 }
 
+// ChangeScript holds the configuration for the script that is executed if
+// change mode is set to script
+type ChangeScript struct {
+	// Command is the full path to the script
+	Command string
+	// Args is a slice of arguments passed to the script
+	Args []string
+	// Timeout is the amount of seconds we wait for the script to finish
+	Timeout time.Duration
+	// FailOnError indicates whether a task should fail in case script execution
+	// fails or log script failure and don't interrupt the task
+	FailOnError bool
+}
+
+func (cs *ChangeScript) Copy() *ChangeScript {
+	if cs == nil {
+		return nil
+	}
+
+	ncs := new(ChangeScript)
+	*ncs = *cs
+
+	// args is a slice!
+	ncs.Args = slices.Clone(cs.Args)
+
+	return ncs
+}
+
+// Validate makes sure all the required fields of ChangeScript are present
+func (cs *ChangeScript) Validate() error {
+	if cs == nil {
+		return nil
+	}
+
+	if cs.Command == "" {
+		return fmt.Errorf("must specify script path value when change mode is script")
+	}
+
+	return nil
+}
+
 // WaitConfig is the Min/Max duration used by the Consul Template Watcher. Consul
 // Template relies on pointer based business logic. This struct uses pointers so
 // that we tell the different between zero values and unset values.
@@ -7921,11 +7942,11 @@ func (wc *WaitConfig) Copy() *WaitConfig {
 	nwc := new(WaitConfig)
 
 	if wc.Min != nil {
-		nwc.Min = &*wc.Min
+		nwc.Min = wc.Min
 	}
 
 	if wc.Max != nil {
-		nwc.Max = &*wc.Max
+		nwc.Max = wc.Max
 	}
 
 	return nwc
@@ -7969,7 +7990,7 @@ func (wc *WaitConfig) Validate() error {
 	return nil
 }
 
-// AllocState records a single event that changes the state of the whole allocation
+// AllocStateField records a single event that changes the state of the whole allocation
 type AllocStateField uint8
 
 const (
@@ -8547,13 +8568,9 @@ func (e *TaskEvent) SetValidationError(err error) *TaskEvent {
 }
 
 func (e *TaskEvent) SetKillTimeout(timeout, maxTimeout time.Duration) *TaskEvent {
-	lower := timeout
-	if maxTimeout < lower {
-		lower = maxTimeout
-	}
-
-	e.KillTimeout = lower
-	e.Details["kill_timeout"] = lower.String()
+	actual := helper.Min(timeout, maxTimeout)
+	e.KillTimeout = actual
+	e.Details["kill_timeout"] = actual.String()
 	return e
 }
 
@@ -8616,8 +8633,8 @@ func (ta *TaskArtifact) Copy() *TaskArtifact {
 	}
 	return &TaskArtifact{
 		GetterSource:  ta.GetterSource,
-		GetterOptions: helper.CopyMapStringString(ta.GetterOptions),
-		GetterHeaders: helper.CopyMapStringString(ta.GetterHeaders),
+		GetterOptions: maps.Clone(ta.GetterOptions),
+		GetterHeaders: maps.Clone(ta.GetterHeaders),
 		GetterMode:    ta.GetterMode,
 		RelativeDest:  ta.RelativeDest,
 	}
@@ -9490,7 +9507,7 @@ func (d *DeploymentState) GoString() string {
 func (d *DeploymentState) Copy() *DeploymentState {
 	c := &DeploymentState{}
 	*c = *d
-	c.PlacedCanaries = helper.CopySliceString(d.PlacedCanaries)
+	c.PlacedCanaries = slices.Clone(d.PlacedCanaries)
 	return c
 }
 
@@ -9757,6 +9774,11 @@ type Allocation struct {
 	// to stop running because it got preempted
 	PreemptedByAllocation string
 
+	// SignedIdentities is a map of task names to signed
+	// identity/capability claim tokens for those tasks. If needed, it
+	// is populated in the plan applier
+	SignedIdentities map[string]string `json:"-"`
+
 	// Raft Indexes
 	CreateIndex uint64
 	ModifyIndex uint64
@@ -9899,7 +9921,7 @@ func (a *Allocation) copyImpl(job bool) *Allocation {
 	}
 
 	na.RescheduleTracker = a.RescheduleTracker.Copy()
-	na.PreemptedAllocations = helper.CopySliceString(a.PreemptedAllocations)
+	na.PreemptedAllocations = slices.Clone(a.PreemptedAllocations)
 	return na
 }
 
@@ -10451,6 +10473,46 @@ func (a *Allocation) Reconnected() (bool, bool) {
 	return true, a.Expired(lastReconnect)
 }
 
+func (a *Allocation) ToIdentityClaims(job *Job) *IdentityClaims {
+	now := jwt.NewNumericDate(time.Now().UTC())
+	claims := &IdentityClaims{
+		Namespace:    a.Namespace,
+		JobID:        a.JobID,
+		AllocationID: a.ID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			// TODO: in Nomad 1.5.0 we'll have a refresh loop to
+			// prevent allocation identities from expiring before the
+			// allocation is terminal. Once that's implemented, add an
+			// ExpiresAt here ExpiresAt: &jwt.NumericDate{},
+			NotBefore: now,
+			IssuedAt:  now,
+		},
+	}
+	if job != nil && job.ParentID != "" {
+		claims.JobID = job.ParentID
+	}
+	return claims
+}
+
+func (a *Allocation) ToTaskIdentityClaims(job *Job, taskName string) *IdentityClaims {
+	claims := a.ToIdentityClaims(job)
+	if claims != nil {
+		claims.TaskName = taskName
+	}
+	return claims
+}
+
+// IdentityClaims are the input to a JWT identifying a workload. It
+// should never be serialized to msgpack unsigned.
+type IdentityClaims struct {
+	Namespace    string `json:"nomad_namespace"`
+	JobID        string `json:"nomad_job_id"`
+	AllocationID string `json:"nomad_allocation_id"`
+	TaskName     string `json:"nomad_task"`
+
+	jwt.RegisteredClaims
+}
+
 // AllocationDiff is another named type for Allocation (to use the same fields),
 // which is used to represent the delta for an Allocation. If you need a method
 // defined on the al
@@ -10588,13 +10650,13 @@ func (a *AllocMetric) Copy() *AllocMetric {
 	}
 	na := new(AllocMetric)
 	*na = *a
-	na.NodesAvailable = helper.CopyMapStringInt(na.NodesAvailable)
-	na.ClassFiltered = helper.CopyMapStringInt(na.ClassFiltered)
-	na.ConstraintFiltered = helper.CopyMapStringInt(na.ConstraintFiltered)
-	na.ClassExhausted = helper.CopyMapStringInt(na.ClassExhausted)
-	na.DimensionExhausted = helper.CopyMapStringInt(na.DimensionExhausted)
-	na.QuotaExhausted = helper.CopySliceString(na.QuotaExhausted)
-	na.Scores = helper.CopyMapStringFloat64(na.Scores)
+	na.NodesAvailable = maps.Clone(na.NodesAvailable)
+	na.ClassFiltered = maps.Clone(na.ClassFiltered)
+	na.ConstraintFiltered = maps.Clone(na.ConstraintFiltered)
+	na.ClassExhausted = maps.Clone(na.ClassExhausted)
+	na.DimensionExhausted = maps.Clone(na.DimensionExhausted)
+	na.QuotaExhausted = slices.Clone(na.QuotaExhausted)
+	na.Scores = maps.Clone(na.Scores)
 	na.ScoreMetaData = CopySliceNodeScoreMeta(na.ScoreMetaData)
 	return na
 }
@@ -10774,6 +10836,12 @@ func (a *AllocNetworkStatus) Copy() *AllocNetworkStatus {
 	}
 }
 
+// NetworkStatus is an interface satisfied by alloc runner, for acquiring the
+// network status of an allocation.
+type NetworkStatus interface {
+	NetworkStatus() *AllocNetworkStatus
+}
+
 // AllocDeploymentStatus captures the status of the allocation as part of the
 // deployment. This can include things like if the allocation has been marked as
 // healthy.
@@ -10908,6 +10976,25 @@ const (
 	// CoreJobOneTimeTokenGC is use for the garbage collection of one-time
 	// tokens. We periodically scan for expired tokens and delete them.
 	CoreJobOneTimeTokenGC = "one-time-token-gc"
+
+	// CoreJobLocalTokenExpiredGC is used for the garbage collection of
+	// expired local ACL tokens. We periodically scan for expired tokens and
+	// delete them.
+	CoreJobLocalTokenExpiredGC = "local-token-expired-gc"
+
+	// CoreJobGlobalTokenExpiredGC is used for the garbage collection of
+	// expired global ACL tokens. We periodically scan for expired tokens and
+	// delete them.
+	CoreJobGlobalTokenExpiredGC = "global-token-expired-gc"
+
+	// CoreJobRootKeyRotateGC is used for periodic key rotation and
+	// garbage collection of unused encryption keys.
+	CoreJobRootKeyRotateOrGC = "root-key-rotate-gc"
+
+	// CoreJobVariablesRekey is used to fully rotate the encryption keys for
+	// variables by decrypting all variables and re-encrypting them with the
+	// active key
+	CoreJobVariablesRekey = "variables-rekey"
 
 	// CoreJobForceGC is used to force garbage collection of all GCable objects.
 	CoreJobForceGC = "force-gc"
@@ -11797,9 +11884,19 @@ type ACLPolicy struct {
 	Description string      // Human readable
 	Rules       string      // HCL or JSON format
 	RulesJSON   *acl.Policy // Generated from Rules on read
+	JobACL      *JobACL
 	Hash        []byte
+
 	CreateIndex uint64
 	ModifyIndex uint64
+}
+
+// JobACL represents an ACL policy's attachment to a job, group, or task.
+type JobACL struct {
+	Namespace string // namespace of the job
+	JobID     string // ID of the job
+	Group     string // ID of the group
+	Task      string // ID of the task
 }
 
 // SetHash is used to compute and set the hash of the ACL policy
@@ -11814,6 +11911,13 @@ func (a *ACLPolicy) SetHash() []byte {
 	_, _ = hash.Write([]byte(a.Name))
 	_, _ = hash.Write([]byte(a.Description))
 	_, _ = hash.Write([]byte(a.Rules))
+
+	if a.JobACL != nil {
+		_, _ = hash.Write([]byte(a.JobACL.Namespace))
+		_, _ = hash.Write([]byte(a.JobACL.JobID))
+		_, _ = hash.Write([]byte(a.JobACL.Group))
+		_, _ = hash.Write([]byte(a.JobACL.Task))
+	}
 
 	// Finalize the hash
 	hashVal := hash.Sum(nil)
@@ -11847,6 +11951,21 @@ func (a *ACLPolicy) Validate() error {
 		err := fmt.Errorf("description longer than %d", maxPolicyDescriptionLength)
 		mErr.Errors = append(mErr.Errors, err)
 	}
+	if a.JobACL != nil {
+		if a.JobACL.JobID != "" && a.JobACL.Namespace == "" {
+			err := fmt.Errorf("namespace must be set to set job ID")
+			mErr.Errors = append(mErr.Errors, err)
+		}
+		if a.JobACL.Group != "" && a.JobACL.JobID == "" {
+			err := fmt.Errorf("job ID must be set to set group")
+			mErr.Errors = append(mErr.Errors, err)
+		}
+		if a.JobACL.Task != "" && a.JobACL.Group == "" {
+			err := fmt.Errorf("group must be set to set task")
+			mErr.Errors = append(mErr.Errors, err)
+		}
+	}
+
 	return mErr.ErrorOrNil()
 }
 
@@ -11908,14 +12027,31 @@ type ACLPolicyUpsertRequest struct {
 
 // ACLToken represents a client token which is used to Authenticate
 type ACLToken struct {
-	AccessorID  string   // Public Accessor ID (UUID)
-	SecretID    string   // Secret ID, private (UUID)
-	Name        string   // Human friendly name
-	Type        string   // Client or Management
-	Policies    []string // Policies this token ties to
-	Global      bool     // Global or Region local
-	Hash        []byte
-	CreateTime  time.Time // Time of creation
+	AccessorID string   // Public Accessor ID (UUID)
+	SecretID   string   // Secret ID, private (UUID)
+	Name       string   // Human friendly name
+	Type       string   // Client or Management
+	Policies   []string // Policies this token ties to
+
+	// Roles represents the ACL roles that this token is tied to. The token
+	// will inherit the permissions of all policies detailed within the role.
+	Roles []*ACLTokenRoleLink
+
+	Global     bool // Global or Region local
+	Hash       []byte
+	CreateTime time.Time // Time of creation
+
+	// ExpirationTime represents the point after which a token should be
+	// considered revoked and is eligible for destruction. This time should
+	// always use UTC to account for multi-region global tokens. It is a
+	// pointer, so we can store nil, rather than the zero value of time.Time.
+	ExpirationTime *time.Time
+
+	// ExpirationTTL is a convenience field for helping set ExpirationTime to a
+	// value of CreateTime+ExpirationTTL. This can only be set during token
+	// creation. This is a string version of a time.Duration like "2m".
+	ExpirationTTL time.Duration
+
 	CreateIndex uint64
 	ModifyIndex uint64
 }
@@ -11943,8 +12079,12 @@ func (a *ACLToken) Copy() *ACLToken {
 
 	c.Policies = make([]string, len(a.Policies))
 	copy(c.Policies, a.Policies)
+
 	c.Hash = make([]byte, len(a.Hash))
 	copy(c.Hash, a.Hash)
+
+	c.Roles = make([]*ACLTokenRoleLink, len(a.Roles))
+	copy(c.Roles, a.Roles)
 
 	return c
 }
@@ -11962,18 +12102,22 @@ var (
 )
 
 type ACLTokenListStub struct {
-	AccessorID  string
-	Name        string
-	Type        string
-	Policies    []string
-	Global      bool
-	Hash        []byte
-	CreateTime  time.Time
-	CreateIndex uint64
-	ModifyIndex uint64
+	AccessorID     string
+	Name           string
+	Type           string
+	Policies       []string
+	Roles          []*ACLTokenRoleLink
+	Global         bool
+	Hash           []byte
+	CreateTime     time.Time
+	ExpirationTime *time.Time
+	CreateIndex    uint64
+	ModifyIndex    uint64
 }
 
-// SetHash is used to compute and set the hash of the ACL token
+// SetHash is used to compute and set the hash of the ACL token. It only hashes
+// fields which can be updated, and as such, does not hash fields such as
+// ExpirationTime.
 func (a *ACLToken) SetHash() []byte {
 	// Initialize a 256bit Blake2 hash (32 bytes)
 	hash, err := blake2b.New256(nil)
@@ -11993,6 +12137,13 @@ func (a *ACLToken) SetHash() []byte {
 		_, _ = hash.Write([]byte("local"))
 	}
 
+	// Iterate the ACL role links and hash the ID. The ID is immutable and the
+	// canonical way to reference a role. The name can be modified by
+	// operators, but won't impact the ACL token resolution.
+	for _, roleLink := range a.Roles {
+		_, _ = hash.Write([]byte(roleLink.ID))
+	}
+
 	// Finalize the hash
 	hashVal := hash.Sum(nil)
 
@@ -12003,37 +12154,18 @@ func (a *ACLToken) SetHash() []byte {
 
 func (a *ACLToken) Stub() *ACLTokenListStub {
 	return &ACLTokenListStub{
-		AccessorID:  a.AccessorID,
-		Name:        a.Name,
-		Type:        a.Type,
-		Policies:    a.Policies,
-		Global:      a.Global,
-		Hash:        a.Hash,
-		CreateTime:  a.CreateTime,
-		CreateIndex: a.CreateIndex,
-		ModifyIndex: a.ModifyIndex,
+		AccessorID:     a.AccessorID,
+		Name:           a.Name,
+		Type:           a.Type,
+		Policies:       a.Policies,
+		Roles:          a.Roles,
+		Global:         a.Global,
+		Hash:           a.Hash,
+		CreateTime:     a.CreateTime,
+		ExpirationTime: a.ExpirationTime,
+		CreateIndex:    a.CreateIndex,
+		ModifyIndex:    a.ModifyIndex,
 	}
-}
-
-// Validate is used to check a token for reasonableness
-func (a *ACLToken) Validate() error {
-	var mErr multierror.Error
-	if len(a.Name) > maxTokenNameLength {
-		mErr.Errors = append(mErr.Errors, fmt.Errorf("token name too long"))
-	}
-	switch a.Type {
-	case ACLClientToken:
-		if len(a.Policies) == 0 {
-			mErr.Errors = append(mErr.Errors, fmt.Errorf("client token missing policies"))
-		}
-	case ACLManagementToken:
-		if len(a.Policies) != 0 {
-			mErr.Errors = append(mErr.Errors, fmt.Errorf("management token cannot be associated with policies"))
-		}
-	default:
-		mErr.Errors = append(mErr.Errors, fmt.Errorf("token type must be client or management"))
-	}
-	return mErr.ErrorOrNil()
 }
 
 // PolicySubset checks if a given set of policies is a subset of the token

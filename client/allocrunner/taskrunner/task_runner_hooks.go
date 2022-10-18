@@ -61,6 +61,7 @@ func (tr *TaskRunner) initHooks() {
 	tr.runnerHooks = []interfaces.TaskHook{
 		newValidateHook(tr.clientConfig, hookLogger),
 		newTaskDirHook(tr, hookLogger),
+		newIdentityHook(tr, hookLogger),
 		newLogMonHook(tr, hookLogger),
 		newDispatchHook(alloc, hookLogger),
 		newVolumeHook(tr, hookLogger),
@@ -122,7 +123,7 @@ func (tr *TaskRunner) initHooks() {
 	tr.runnerHooks = append(tr.runnerHooks, newServiceHook(serviceHookConfig{
 		alloc:             tr.Alloc(),
 		task:              tr.Task(),
-		namespace:         serviceProviderNamespace,
+		providerNamespace: serviceProviderNamespace,
 		serviceRegWrapper: tr.serviceRegWrapper,
 		restarter:         tr,
 		logger:            hookLogger,
@@ -243,6 +244,7 @@ func (tr *TaskRunner) prestart() error {
 		}
 
 		req.VaultToken = tr.getVaultToken()
+		req.NomadToken = tr.getNomadToken()
 
 		// Time the prestart hook
 		var start time.Time

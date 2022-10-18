@@ -1176,7 +1176,6 @@ func TestJobDiff(t *testing.T) {
 				},
 			},
 		},
-
 		{
 			// Multiregion: region added
 			Old: &Job{
@@ -1319,6 +1318,21 @@ func TestJobDiff(t *testing.T) {
 						},
 					},
 				},
+			},
+		},
+		{
+			// VaultToken is filtered
+			Old: &Job{
+				ID:         "vault-job",
+				VaultToken: "secret",
+			},
+			New: &Job{
+				ID:         "vault-job",
+				VaultToken: "new-secret",
+			},
+			Expected: &JobDiff{
+				Type: DiffTypeNone,
+				ID:   "vault-job",
 			},
 		},
 	}
@@ -2778,7 +2792,7 @@ func TestTaskGroupDiff(t *testing.T) {
 											LocalBindPort:        8000,
 											Datacenter:           "dc2",
 											LocalBindAddress:     "127.0.0.2",
-											MeshGateway: &ConsulMeshGateway{
+											MeshGateway: ConsulMeshGateway{
 												Mode: "remote",
 											},
 										},

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/nomad/client/lib/cgutil"
+	"golang.org/x/exp/slices"
 
 	metrics "github.com/armon/go-metrics"
 	log "github.com/hashicorp/go-hclog"
@@ -194,6 +195,11 @@ type TaskRunner struct {
 	// getter.
 	vaultToken     string
 	vaultTokenLock sync.Mutex
+
+	// nomadToken is the current Nomad workload identity token. It
+	// should be accessed with the getter.
+	nomadToken     string
+	nomadTokenLock sync.Mutex
 
 	// baseLabels are used when emitting tagged metrics. All task runner metrics
 	// will have these tags, and optionally more.
@@ -1468,7 +1474,7 @@ func (tr *TaskRunner) setGaugeForMemory(ru *cstructs.TaskResourceUsage) {
 	ms := ru.ResourceUsage.MemoryStats
 
 	publishMetric := func(v uint64, reported, measured string) {
-		if v != 0 || helper.SliceStringContains(ms.Measured, measured) {
+		if v != 0 || slices.Contains(ms.Measured, measured) {
 			metrics.SetGaugeWithLabels([]string{"client", "allocs", "memory", reported},
 				float32(v), tr.baseLabels)
 		}

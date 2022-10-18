@@ -13,6 +13,7 @@ import { setupMirage } from 'ember-cli-mirage/test-support';
 import Layout from 'nomad-ui/tests/pages/layout';
 import percySnapshot from '@percy/ember';
 import a11yAudit from 'nomad-ui/tests/helpers/a11y-audit';
+import faker from 'nomad-ui/mirage/faker';
 
 module('Acceptance | keyboard', function (hooks) {
   setupApplicationTest(hooks);
@@ -20,6 +21,7 @@ module('Acceptance | keyboard', function (hooks) {
 
   module('modal', function () {
     test('Opening and closing shortcuts modal with key commands', async function (assert) {
+      faker.seed(1);
       assert.expect(4);
       await visit('/');
       assert.notOk(Layout.keyboard.modalShown);
@@ -335,6 +337,15 @@ module('Acceptance | keyboard', function (hooks) {
         currentURL(),
         `/jobs/${jobID}@default/evaluations`,
         'Shift+ArrowRight takes you to the next tab (Evaluations)'
+      );
+
+      await triggerKeyEvent('.page-layout', 'keydown', 'ArrowRight', {
+        shiftKey: true,
+      });
+      assert.equal(
+        currentURL(),
+        `/jobs/${jobID}@default/services`,
+        'Shift+ArrowRight takes you to the next tab (Services)'
       );
 
       await triggerKeyEvent('.page-layout', 'keydown', 'ArrowRight', {

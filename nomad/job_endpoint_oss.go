@@ -249,3 +249,12 @@ func (j *Job) interpolateMultiregionJobFields(job *structs.Job, region string) e
 // - interpolation  -> task -> group -> region -> job
 
 // - failure -> default is fail next regions
+
+// multiregionSpecChanged checks to see if the job spec has changed. If the job is multiregion,
+// it checks all regions to determine if any deployed jobs instances have been stopped or
+// otherwise differ from the incoming jobspec. Since multiregion jobs require coordinated
+// deployments and synchronized job versions across all regions, a change in one requires
+// redeployment of all.
+func (j *Job) multiregionSpecChanged(existingJob *structs.Job, args *structs.JobRegisterRequest) (bool, error) {
+	return existingJob.SpecChanged(args.Job), nil
+}

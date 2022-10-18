@@ -2,12 +2,15 @@ schema = "1"
 
 project "nomad" {
   team = "nomad"
+
   slack {
     notification_channel = "CUYKT2A73"
   }
+
   github {
     organization = "hashicorp"
     repository   = "nomad"
+
     release_branches = [
       "main",
       "release/**",
@@ -16,12 +19,12 @@ project "nomad" {
 }
 
 event "merge" {
-  // "entrypoint" to use if build is not run automatically
-  // i.e. send "merge" complete signal to orchestrator to trigger build
+  // "entrypoint" to use if build is not run automatically  // i.e. send "merge" complete signal to orchestrator to trigger build
 }
 
 event "build" {
   depends = ["merge"]
+
   action "build" {
     organization = "hashicorp"
     repository   = "nomad"
@@ -31,6 +34,7 @@ event "build" {
 
 event "upload-dev" {
   depends = ["build"]
+
   action "upload-dev" {
     organization = "hashicorp"
     repository   = "crt-workflows-common"
@@ -44,6 +48,7 @@ event "upload-dev" {
 
 event "security-scan-binaries" {
   depends = ["upload-dev"]
+
   action "security-scan-binaries" {
     organization = "hashicorp"
     repository   = "crt-workflows-common"
@@ -58,6 +63,7 @@ event "security-scan-binaries" {
 
 event "notarize-darwin-amd64" {
   depends = ["security-scan-binaries"]
+
   action "notarize-darwin-amd64" {
     organization = "hashicorp"
     repository   = "crt-workflows-common"
@@ -71,6 +77,7 @@ event "notarize-darwin-amd64" {
 
 event "notarize-darwin-arm64" {
   depends = ["notarize-darwin-amd64"]
+
   action "notarize-darwin-arm64" {
     organization = "hashicorp"
     repository   = "crt-workflows-common"
@@ -84,6 +91,7 @@ event "notarize-darwin-arm64" {
 
 event "notarize-windows-386" {
   depends = ["notarize-darwin-arm64"]
+
   action "notarize-windows-386" {
     organization = "hashicorp"
     repository   = "crt-workflows-common"
@@ -97,6 +105,7 @@ event "notarize-windows-386" {
 
 event "notarize-windows-amd64" {
   depends = ["notarize-windows-386"]
+
   action "notarize-windows-amd64" {
     organization = "hashicorp"
     repository   = "crt-workflows-common"
@@ -110,6 +119,7 @@ event "notarize-windows-amd64" {
 
 event "sign" {
   depends = ["notarize-windows-amd64"]
+
   action "sign" {
     organization = "hashicorp"
     repository   = "crt-workflows-common"
@@ -123,6 +133,7 @@ event "sign" {
 
 event "sign-linux-rpms" {
   depends = ["sign"]
+
   action "sign-linux-rpms" {
     organization = "hashicorp"
     repository   = "crt-workflows-common"
@@ -136,6 +147,7 @@ event "sign-linux-rpms" {
 
 event "verify" {
   depends = ["sign-linux-rpms"]
+
   action "verify" {
     organization = "hashicorp"
     repository   = "crt-workflows-common"
@@ -147,16 +159,26 @@ event "verify" {
   }
 }
 
+event "fossa-scan" {
+  depends = ["verify"]
+
+  action "fossa-scan" {
+    organization = "hashicorp"
+    repository   = "crt-workflows-common"
+    workflow     = "fossa-scan"
+  }
+}
+
 ## These are promotion and post-publish events
 ## they should be added to the end of the file after the verify event stanza.
 
 event "trigger-staging" {
-  // This event is dispatched by the bob trigger-promotion command
-  // and is required - do not delete.
+  // This event is dispatched by the bob trigger-promotion command  // and is required - do not delete.
 }
 
 event "promote-staging" {
   depends = ["trigger-staging"]
+
   action "promote-staging" {
     organization = "hashicorp"
     repository   = "crt-workflows-common"
@@ -170,12 +192,12 @@ event "promote-staging" {
 }
 
 event "trigger-production" {
-  // This event is dispatched by the bob trigger-promotion command
-  // and is required - do not delete.
+  // This event is dispatched by the bob trigger-promotion command  // and is required - do not delete.
 }
 
 event "promote-production" {
   depends = ["trigger-production"]
+
   action "promote-production" {
     organization = "hashicorp"
     repository   = "crt-workflows-common"
@@ -189,6 +211,7 @@ event "promote-production" {
 
 event "promote-production-packaging" {
   depends = ["promote-production"]
+
   action "promote-production-packaging" {
     organization = "hashicorp"
     repository   = "crt-workflows-common"

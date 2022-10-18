@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/user"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -27,6 +26,7 @@ import (
 	"github.com/hashicorp/nomad/client/taskenv"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/testlog"
+	"github.com/hashicorp/nomad/helper/users"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
@@ -184,7 +184,7 @@ func newTestHarness(t *testing.T, templates []*structs.Template, consul, vault b
 	if consul {
 		var err error
 		harness.consul, err = ctestutil.NewTestServerConfigT(t, func(c *ctestutil.TestServerConfig) {
-			// defaults
+			c.Peering = nil // fix for older versions of Consul (<1.13.0) that don't support peering
 		})
 		if err != nil {
 			t.Fatalf("error starting test Consul server: %v", err)
@@ -1273,7 +1273,7 @@ BAR={{key "bar"}}
 	// Update the keys in Consul
 	harness.consul.SetKV(t, key1, []byte(content1_2))
 
-	// Wait for restart
+	// Wait for script execution
 	timeout := time.After(time.Duration(5*testutil.TestMultiplier()) * time.Second)
 OUTER:
 	for {
@@ -1371,19 +1371,142 @@ BAR={{key "bar"}}
 	require.Contains(harness.mockHooks.KillEvent.DisplayMessage, "task is being killed")
 }
 
+func TestTaskTemplateManager_ChangeModeMixed(t *testing.T) {
+	ci.Parallel(t)
+
+	templateRestart := &structs.Template{
+		EmbeddedTmpl: `
+RESTART={{key "restart"}}
+COMMON={{key "common"}}
+`,
+		DestPath:   "restart",
+		ChangeMode: structs.TemplateChangeModeRestart,
+	}
+	templateSignal := &structs.Template{
+		EmbeddedTmpl: `
+SIGNAL={{key "signal"}}
+COMMON={{key "common"}}
+`,
+		DestPath:     "signal",
+		ChangeMode:   structs.TemplateChangeModeSignal,
+		ChangeSignal: "SIGALRM",
+	}
+	templateScript := &structs.Template{
+		EmbeddedTmpl: `
+SCRIPT={{key "script"}}
+COMMON={{key "common"}}
+`,
+		DestPath:   "script",
+		ChangeMode: structs.TemplateChangeModeScript,
+		ChangeScript: &structs.ChangeScript{
+			Command:     "/bin/foo",
+			Args:        []string{},
+			Timeout:     5 * time.Second,
+			FailOnError: true,
+		},
+	}
+	templates := []*structs.Template{
+		templateRestart,
+		templateSignal,
+		templateScript,
+	}
+
+	me := mockExecutor{DesiredExit: 0, DesiredErr: nil}
+	harness := newTestHarness(t, templates, true, false)
+	harness.start(t)
+	harness.manager.SetDriverHandle(&me)
+	defer harness.stop()
+
+	// Ensure no unblock
+	select {
+	case <-harness.mockHooks.UnblockCh:
+		require.Fail(t, "Task unblock should not have been called")
+	case <-time.After(time.Duration(1*testutil.TestMultiplier()) * time.Second):
+	}
+
+	// Write the key to Consul
+	harness.consul.SetKV(t, "common", []byte(fmt.Sprintf("%v", time.Now())))
+	harness.consul.SetKV(t, "restart", []byte(fmt.Sprintf("%v", time.Now())))
+	harness.consul.SetKV(t, "signal", []byte(fmt.Sprintf("%v", time.Now())))
+	harness.consul.SetKV(t, "script", []byte(fmt.Sprintf("%v", time.Now())))
+
+	// Wait for the unblock
+	select {
+	case <-harness.mockHooks.UnblockCh:
+	case <-time.After(time.Duration(5*testutil.TestMultiplier()) * time.Second):
+		require.Fail(t, "Task unblock should have been called")
+	}
+
+	t.Run("restart takes precedence", func(t *testing.T) {
+		// Update the common Consul key.
+		harness.consul.SetKV(t, "common", []byte(fmt.Sprintf("%v", time.Now())))
+
+		// Collect some events.
+		timeout := time.After(time.Duration(3*testutil.TestMultiplier()) * time.Second)
+		events := []*structs.TaskEvent{}
+	OUTER:
+		for {
+			select {
+			case <-harness.mockHooks.RestartCh:
+				// Consume restarts so the channel is clean for other tests.
+			case <-harness.mockHooks.SignalCh:
+				require.Fail(t, "signal not expected")
+			case ev := <-harness.mockHooks.EmitEventCh:
+				events = append(events, ev)
+			case <-timeout:
+				break OUTER
+			}
+		}
+
+		for _, ev := range events {
+			require.NotContains(t, ev.DisplayMessage, templateScript.ChangeScript.Command)
+			require.NotContains(t, ev.Type, structs.TaskSignaling)
+		}
+	})
+
+	t.Run("signal and script", func(t *testing.T) {
+		// Update the signal and script Consul keys.
+		harness.consul.SetKV(t, "signal", []byte(fmt.Sprintf("%v", time.Now())))
+		harness.consul.SetKV(t, "script", []byte(fmt.Sprintf("%v", time.Now())))
+
+		// Wait for a events.
+		var gotSignal, gotScript bool
+		timeout := time.After(time.Duration(5*testutil.TestMultiplier()) * time.Second)
+		for {
+			select {
+			case <-harness.mockHooks.RestartCh:
+				require.Fail(t, "restart not expected")
+			case ev := <-harness.mockHooks.EmitEventCh:
+				if strings.Contains(ev.DisplayMessage, templateScript.ChangeScript.Command) {
+					// Make sure we only run script once.
+					require.False(t, gotScript)
+					gotScript = true
+				}
+			case <-harness.mockHooks.SignalCh:
+				// Make sure we only signal once.
+				require.False(t, gotSignal)
+				gotSignal = true
+			case <-timeout:
+				require.Fail(t, "timeout waiting for script and signal")
+			}
+
+			if gotScript && gotSignal {
+				break
+			}
+		}
+	})
+}
+
 // TestTaskTemplateManager_FiltersProcessEnvVars asserts that we only render
 // environment variables found in task env-vars and not read the nomad host
 // process environment variables.  nomad host process environment variables
 // are to be treated the same as not found environment variables.
 func TestTaskTemplateManager_FiltersEnvVars(t *testing.T) {
-	ci.Parallel(t)
 
-	defer os.Setenv("NOMAD_TASK_NAME", os.Getenv("NOMAD_TASK_NAME"))
-	os.Setenv("NOMAD_TASK_NAME", "should be overridden by task")
+	t.Setenv("NOMAD_TASK_NAME", "should be overridden by task")
 
 	testenv := "TESTENV_" + strings.ReplaceAll(uuid.Generate(), "-", "")
-	os.Setenv(testenv, "MY_TEST_VALUE")
-	defer os.Unsetenv(testenv)
+	t.Setenv(testenv, "MY_TEST_VALUE")
 
 	// Make a template that will render immediately
 	content := `Hello Nomad Task: {{env "NOMAD_TASK_NAME"}}
@@ -2392,10 +2515,10 @@ func TestTaskTemplateManager_writeToFile(t *testing.T) {
 
 	ci.Parallel(t)
 
-	cu, err := user.Current()
+	cu, err := users.Current()
 	require.NoError(t, err)
 
-	cg, err := user.LookupGroupId(cu.Gid)
+	cg, err := users.LookupGroupId(cu.Gid)
 	require.NoError(t, err)
 
 	file := "my.tmpl"

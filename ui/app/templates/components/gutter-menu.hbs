@@ -33,9 +33,6 @@
           </ul>
         </div>
       {{/if}}
-      <p class="menu-label">
-        Workload
-      </p>
       <ul class="menu-list">
         <li {{keyboard-shortcut menuLevel=true pattern=(array "g" "j") }}>
           <LinkTo
@@ -72,6 +69,17 @@
             Storage
           </LinkTo>
         </li>
+        {{#if (can "list variables")}}
+        <li {{keyboard-shortcut menuLevel=true pattern=(array "g" "v") }}>
+          <LinkTo
+            @route="variables"
+            @activeClass="is-active"
+            data-test-gutter-link="variables"
+          >
+            Variables
+          </LinkTo>
+        </li>
+        {{/if}}
       </ul>
       <p class="menu-label">
         Cluster
@@ -123,8 +131,7 @@
     {{#if this.system.agent.version}}
       <footer class="gutter-footer">
         <span class="is-faded">
-          v
-          {{this.system.agent.version}}
+          v{{this.system.agent.version}}
         </span>
       </footer>
     {{/if}}

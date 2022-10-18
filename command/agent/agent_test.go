@@ -9,15 +9,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shoenig/test/must"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/hashicorp/nomad/ci"
 	cstructs "github.com/hashicorp/nomad/client/structs"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/testlog"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
-	"github.com/shoenig/test/must"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/hashicorp/nomad/testutil"
 )
 
 func TestAgent_RPC_Ping(t *testing.T) {
@@ -549,6 +551,31 @@ func TestAgent_ServerConfig_RaftMultiplier_Bad(t *testing.T) {
 	}
 }
 
+func TestAgent_ServerConfig_RaftProtocol_3(t *testing.T) {
+	ci.Parallel(t)
+
+	cases := []int{
+		0, 1, 2, 3, 4,
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("protocol_version %d", tc), func(t *testing.T) {
+			conf := DevConfig(nil)
+			conf.Server.RaftProtocol = tc
+			must.NoError(t, conf.normalizeAddrs())
+			_, err := convertServerConfig(conf)
+
+			switch tc {
+			case 0, 3: // 0 defers to default
+				must.NoError(t, err)
+			default:
+				exp := fmt.Sprintf("raft_protocol must be 3 in Nomad v1.4 and later, got %d", tc)
+				must.EqError(t, err, exp)
+			}
+		})
+	}
+}
+
 func TestAgent_ClientConfig(t *testing.T) {
 	ci.Parallel(t)
 	conf := DefaultConfig()
@@ -817,9 +844,9 @@ func TestServer_Reload_TLS_Shared_Keyloader(t *testing.T) {
 	}
 
 	assert.Nil(agent.Reload(newConfig))
-	assert.Equal(agent.Config.TLSConfig.CertFile, newConfig.TLSConfig.CertFile)
-	assert.Equal(agent.Config.TLSConfig.KeyFile, newConfig.TLSConfig.KeyFile)
-	assert.Equal(agent.Config.TLSConfig.GetKeyLoader(), originalKeyloader)
+	assert.Equal(agent.Agent.config.TLSConfig.CertFile, newConfig.TLSConfig.CertFile)
+	assert.Equal(agent.Agent.config.TLSConfig.KeyFile, newConfig.TLSConfig.KeyFile)
+	assert.Equal(agent.Agent.config.TLSConfig.GetKeyLoader(), originalKeyloader)
 
 	// Assert is passed through on the server correctly
 	if assert.NotNil(agent.server.GetConfig().TLSConfig) {
@@ -1055,7 +1082,40 @@ func TestServer_Reload_TLS_DowngradeFromTLS(t *testing.T) {
 	err := agent.Reload(newConfig)
 	assert.Nil(err)
 
-	assert.True(agentConfig.TLSConfig.IsEmpty())
+	assert.True(agent.config.TLSConfig.IsEmpty())
+}
+
+func TestServer_Reload_VaultConfig(t *testing.T) {
+	ci.Parallel(t)
+
+	agent := NewTestAgent(t, t.Name(), func(c *Config) {
+		c.Server.NumSchedulers = pointer.Of(0)
+		c.Vault = &config.VaultConfig{
+			Enabled:   pointer.Of(true),
+			Token:     "vault-token",
+			Namespace: "vault-namespace",
+			Addr:      "https://vault.consul:8200",
+		}
+	})
+	defer agent.Shutdown()
+
+	newConfig := agent.GetConfig().Copy()
+	newConfig.Vault = &config.VaultConfig{
+		Enabled:   pointer.Of(true),
+		Token:     "vault-token",
+		Namespace: "another-namespace",
+		Addr:      "https://vault.consul:8200",
+	}
+
+	sconf, err := convertServerConfig(newConfig)
+	must.NoError(t, err)
+	agent.finalizeServerConfig(sconf)
+
+	// TODO: the vault client isn't accessible here, and we don't actually
+	// overwrite the agent's server config on reload. We probably should? See
+	// tests in nomad/server_test.go for verification of this code path's
+	// behavior on the VaultClient
+	must.NoError(t, agent.server.Reload(sconf))
 }
 
 func TestServer_Reload_VaultConfig(t *testing.T) {
@@ -1429,10 +1489,17 @@ func TestAgent_ProxyRPC_Dev(t *testing.T) {
 		},
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	testutil.WaitForResultUntil(time.Second,
+		func() (bool, error) {
+			var resp cstructs.ClientStatsResponse
+			err := agent.RPC("ClientStats.Stats", req, &resp)
+			if err != nil {
+				return false, err
+			}
+			return true, nil
+		},
+		func(err error) {
+			t.Fatalf("was unable to read ClientStats.Stats RPC: %v", err)
+		})
 
-	var resp cstructs.ClientStatsResponse
-	if err := agent.RPC("ClientStats.Stats", req, &resp); err != nil {
-		t.Fatalf("err: %v", err)
-	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
 	"github.com/hashicorp/go-multierror"
+	"github.com/hashicorp/go-set"
 	"github.com/hashicorp/nomad/acl"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/pointer"
@@ -353,7 +354,12 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 	}
 
 	// Check if the job has changed at all
-	if existingJob == nil || existingJob.SpecChanged(args.Job) {
+	specChanged, err := j.multiregionSpecChanged(existingJob, args)
+	if err != nil {
+		return err
+	}
+
+	if existingJob == nil || specChanged {
 
 		// COMPAT(1.1.0): Remove the ServerMeetMinimumVersion check to always set args.Eval
 		// 0.12.1 introduced atomic eval job registration
@@ -1027,6 +1033,10 @@ func (j *Job) Scale(args *structs.JobScaleRequest, reply *structs.JobRegisterRes
 	if job == nil {
 		return structs.NewErrRPCCoded(404, fmt.Sprintf("job %q not found", args.JobID))
 	}
+
+	// Since job is going to be mutated we must copy it since state store methods
+	// return a shared pointer.
+	job = job.Copy()
 
 	// Find target group in job TaskGroups
 	groupName := args.Target[structs.ScalingTargetGroup]
@@ -2002,14 +2012,14 @@ func validateDispatchRequest(req *structs.JobDispatchRequest, job *structs.Job) 
 		keys[k] = struct{}{}
 	}
 
-	required := helper.SliceStringToSet(job.ParameterizedJob.MetaRequired)
-	optional := helper.SliceStringToSet(job.ParameterizedJob.MetaOptional)
+	required := set.From(job.ParameterizedJob.MetaRequired)
+	optional := set.From(job.ParameterizedJob.MetaOptional)
 
 	// Check the metadata key constraints are met
 	unpermitted := make(map[string]struct{})
 	for k := range req.Meta {
-		_, req := required[k]
-		_, opt := optional[k]
+		req := required.Contains(k)
+		opt := optional.Contains(k)
 		if !req && !opt {
 			unpermitted[k] = struct{}{}
 		}

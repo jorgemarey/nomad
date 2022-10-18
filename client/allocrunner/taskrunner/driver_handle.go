@@ -6,6 +6,7 @@ import (
 	"time"
 
 	cstructs "github.com/hashicorp/nomad/client/structs"
+	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/plugins/drivers"
 )
@@ -17,18 +18,12 @@ func NewDriverHandle(
 	task *structs.Task,
 	maxKillTimeout time.Duration,
 	net *drivers.DriverNetwork) *DriverHandle {
-
-	timeout := task.KillTimeout
-	if maxKillTimeout < timeout {
-		timeout = maxKillTimeout
-	}
-
 	return &DriverHandle{
 		driver:      driver,
 		net:         net,
 		taskID:      taskID,
 		killSignal:  task.KillSignal,
-		killTimeout: timeout,
+		killTimeout: helper.Min(task.KillTimeout, maxKillTimeout),
 	}
 }
 

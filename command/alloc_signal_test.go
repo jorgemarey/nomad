@@ -114,20 +114,12 @@ func TestAllocSignalCommand_Run(t *testing.T) {
 	code := waitForSuccess(ui, client, fullId, t, resp.EvalID)
 	must.Zero(t, code)
 
-	// get an alloc id
-	allocID := ""
-	if allocs, _, err := client.Jobs().Allocations(jobID, false, nil); err == nil {
-		if len(allocs) > 0 {
-			allocID = allocs[0].ID
-		}
-	}
-	must.NotEq(t, "", allocID)
+	// Get an alloc id
+	allocID := getAllocFromJob(t, client, jobID)
 
 	// Wait for alloc to be running
 	waitForAllocRunning(t, client, allocID)
 
 	code = cmd.Run([]string{"-address=" + url, allocID})
 	must.Zero(t, code)
-
-	ui.OutputWriter.Reset()
 }

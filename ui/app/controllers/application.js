@@ -16,6 +16,18 @@ export default class ApplicationController extends Controller {
   @service config;
   @service system;
   @service token;
+  @service flashMessages;
+
+  /**
+   * @type {KeyboardService}
+   */
+  @service keyboard;
+
+  // eslint-disable-next-line ember/classic-decorator-hooks
+  constructor() {
+    super(...arguments);
+    this.keyboard.listenForKeypress();
+  }
 
   /**
    * @type {KeyboardService}

@@ -16,6 +16,7 @@ const (
 	Recommendations Context = "recommendations"
 	ScalingPolicies Context = "scaling_policy"
 	Plugins         Context = "plugins"
+	Variables       Context = "vars"
 	Volumes         Context = "volumes"
 
 	// Subtypes used in fuzzy matching.
@@ -56,6 +57,15 @@ type SearchConfig struct {
 	// Increasing this value can avoid resource consumption on Nomad server by
 	// reducing searches with less meaningful results.
 	MinTermLength int `hcl:"min_term_length"`
+}
+
+func (s *SearchConfig) Copy() *SearchConfig {
+	if s == nil {
+		return nil
+	}
+
+	ns := *s
+	return &ns
 }
 
 // SearchResponse is used to return matches and information about whether

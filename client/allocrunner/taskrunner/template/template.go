@@ -114,6 +114,9 @@ type TaskTemplateManagerConfig struct {
 
 	// NomadNamespace is the Nomad namespace for the task
 	NomadNamespace string
+
+	// NomadToken is the Nomad token or identity claim for the task
+	NomadToken string
 }
 
 // Validate validates the configuration.
@@ -596,52 +599,65 @@ func (tm *TaskTemplateManager) onTemplateRendered(handledRenders map[string]time
 		handling = append(handling, id)
 	}
 
-	if restart || len(signals) != 0 {
-		if splay != 0 {
-			ns := splay.Nanoseconds()
-			offset := rand.Int63n(ns)
-			t := time.Duration(offset)
+	shouldHandle := restart || len(signals) != 0 || len(scripts) != 0
+	if !shouldHandle {
+		return
+	}
 
-			select {
-			case <-time.After(t):
-			case <-tm.shutdownCh:
-				return
-			}
-		}
+	// Apply splay timeout to avoid applying change_mode too frequently.
+	if splay != 0 {
+		ns := splay.Nanoseconds()
+		offset := rand.Int63n(ns)
+		t := time.Duration(offset)
 
-		// Update handle time
-		for _, id := range handling {
-			handledRenders[id] = events[id].LastDidRender
-		}
-
-		if restart {
-			tm.config.Lifecycle.Restart(context.Background(),
-				structs.NewTaskEvent(structs.TaskRestartSignal).
-					SetDisplayMessage("Template with change_mode restart re-rendered"), false)
-		} else if len(signals) != 0 {
-			var mErr multierror.Error
-			for signal := range signals {
-				s := tm.signals[signal]
-				event := structs.NewTaskEvent(structs.TaskSignaling).SetTaskSignal(s).SetDisplayMessage("Template re-rendered")
-				if err := tm.config.Lifecycle.Signal(event, signal); err != nil {
-					_ = multierror.Append(&mErr, err)
-				}
-			}
-
-			if err := mErr.ErrorOrNil(); err != nil {
-				flat := make([]os.Signal, 0, len(signals))
-				for signal := range signals {
-					flat = append(flat, tm.signals[signal])
-				}
-
-				tm.config.Lifecycle.Kill(context.Background(),
-					structs.NewTaskEvent(structs.TaskKilling).
-						SetFailsTask().
-						SetDisplayMessage(fmt.Sprintf("Template failed to send signals %v: %v", flat, err)))
-			}
+		select {
+		case <-time.After(t):
+		case <-tm.shutdownCh:
+			return
 		}
 	}
 
+	// Update handle time
+	for _, id := range handling {
+		handledRenders[id] = events[id].LastDidRender
+	}
+
+	if restart {
+		tm.config.Lifecycle.Restart(context.Background(),
+			structs.NewTaskEvent(structs.TaskRestartSignal).
+				SetDisplayMessage("Template with change_mode restart re-rendered"), false)
+	} else {
+		// Handle signals and scripts since the task may have multiple
+		// templates with mixed change_mode values.
+		tm.handleChangeModeSignal(signals)
+		tm.handleChangeModeScript(scripts)
+	}
+}
+
+func (tm *TaskTemplateManager) handleChangeModeSignal(signals map[string]struct{}) {
+	var mErr multierror.Error
+	for signal := range signals {
+		s := tm.signals[signal]
+		event := structs.NewTaskEvent(structs.TaskSignaling).SetTaskSignal(s).SetDisplayMessage("Template re-rendered")
+		if err := tm.config.Lifecycle.Signal(event, signal); err != nil {
+			_ = multierror.Append(&mErr, err)
+		}
+	}
+
+	if err := mErr.ErrorOrNil(); err != nil {
+		flat := make([]os.Signal, 0, len(signals))
+		for signal := range signals {
+			flat = append(flat, tm.signals[signal])
+		}
+
+		tm.config.Lifecycle.Kill(context.Background(),
+			structs.NewTaskEvent(structs.TaskKilling).
+				SetFailsTask().
+				SetDisplayMessage(fmt.Sprintf("Template failed to send signals %v: %v", flat, err)))
+	}
+}
+
+func (tm *TaskTemplateManager) handleChangeModeScript(scripts []*structs.ChangeScript) {
 	// process script execution concurrently
 	var wg sync.WaitGroup
 	for _, script := range scripts {
@@ -1046,9 +1062,18 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 	// Set up Nomad
 	conf.Nomad.Namespace = &config.NomadNamespace
 	conf.Nomad.Transport.CustomDialer = cc.TemplateDialer
-
-	// Use the Node's SecretID to authenticate Nomad template function calls.
-	conf.Nomad.Token = &cc.Node.SecretID
+	conf.Nomad.Token = &config.NomadToken
+	if cc.TemplateConfig != nil && cc.TemplateConfig.NomadRetry != nil {
+		// Set the user-specified Nomad RetryConfig
+		var err error
+		if err = cc.TemplateConfig.NomadRetry.Validate(); err != nil {
+			return nil, err
+		}
+		conf.Nomad.Retry, err = cc.TemplateConfig.NomadRetry.ToConsulTemplate()
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if cc.TemplateConfig != nil && cc.TemplateConfig.NomadRetry != nil {
 		// Set the user-specified Nomad RetryConfig

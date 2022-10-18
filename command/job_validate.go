@@ -48,12 +48,28 @@ Validate Options:
     used as the job.
 
   -hcl1
-    Parses the job file as HCLv1.
+    Parses the job file as HCLv1. Takes precedence over "-hcl2-strict".
 
   -hcl2-strict
     Whether an error should be produced from the HCL2 parser where a variable
     has been supplied which is not defined within the root variables. Defaults
-    to true.
+    to true, but ignored if "-hcl1" is also defined.
+
+  -vault-token
+    Used to validate if the user submitting the job has permission to run the job
+    according to its Vault policies. A Vault token must be supplied if the vault
+    stanza allow_unauthenticated is disabled in the Nomad server configuration.
+    If the -vault-token flag is set, the passed Vault token is added to the jobspec
+    before sending to the Nomad servers. This allows passing the Vault token
+    without storing it in the job file. This overrides the token found in the
+    $VAULT_TOKEN environment variable and the vault_token field in the job file.
+    This token is cleared from the job after validating and cannot be used within
+    the job executing environment. Use the vault stanza when templating in a job
+    with a Vault token.
+
+  -vault-namespace
+    If set, the passed Vault namespace is stored in the job before sending to the
+    Nomad servers.
 
   -vault-token
     Used to validate if the user submitting the job has permission to run the job
@@ -128,6 +144,10 @@ func (c *JobValidateCommand) Run(args []string) int {
 		c.Ui.Error("This command takes one argument: <path>")
 		c.Ui.Error(commandErrorText(c))
 		return 1
+	}
+
+	if c.JobGetter.HCL1 {
+		c.JobGetter.Strict = false
 	}
 
 	if err := c.JobGetter.Validate(); err != nil {

@@ -4,17 +4,9 @@
 package nomad
 
 import (
-	"github.com/hashicorp/consul/agent/consul/autopilot"
-	improvedAutopilot "github.com/jorgemarey/autopilot"
-
+	autopilot "github.com/hashicorp/raft-autopilot"
 	"github.com/jorgemarey/sentinel"
 )
-
-// LicenseConfig allows for tunable licensing config
-// primarily used for enterprise testing
-type LicenseConfig struct {
-	AdditionalPubKeys []string
-}
 
 type EnterpriseState struct {
 	sentinel *sentinel.Sentinel
@@ -30,8 +22,16 @@ func (es *EnterpriseState) ReloadLicense(_ *Config) error {
 
 func (s *Server) setupEnterprise(config *Config) error {
 	// Set up the OSS version of autopilot
-	apDelegate := improvedAutopilot.New(s.logger, &AutopilotDelegate{s})
-	s.autopilot = autopilot.NewAutopilot(s.logger, apDelegate, config.AutopilotInterval, config.ServerHealthInterval)
+	apDelegate := &AutopilotDelegate{s}
+
+	s.autopilot = autopilot.New(
+		s.raft,
+		apDelegate,
+		autopilot.WithLogger(s.logger),
+		autopilot.WithReconcileInterval(config.AutopilotInterval),
+		autopilot.WithUpdateInterval(config.ServerHealthInterval),
+		autopilot.WithPromoter(s.autopilotPromoter()),
+	)
 
 	s.sentinel = sentinel.New(nil)
 	return nil

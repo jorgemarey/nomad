@@ -4,6 +4,7 @@ package cgutil
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,10 +32,6 @@ const (
 	// in case for e.g. Nomad tasks should be further constrained by an externally
 	// configured systemd cgroup.
 	DefaultCgroupParentV2 = "nomad.slice"
-
-	// rootless is (for now) always false; Nomad clients require root, so we
-	// assume to not need to do the extra plumbing for rootless cgroups.
-	rootless = false
 )
 
 // nothing is used for treating a map like a set with no values
@@ -156,7 +153,7 @@ func (c *cpusetManagerV2) CgroupPathFor(allocID, task string) CgroupPathGetter {
 
 		for {
 			path := c.pathOf(makeID(allocID, task))
-			mgr, err := fs2.NewManager(nil, path, rootless)
+			mgr, err := fs2.NewManager(nil, path)
 			if err != nil {
 				return "", err
 			}
@@ -236,7 +233,7 @@ func (c *cpusetManagerV2) cleanup() {
 
 		return nil
 	}); err != nil {
-		c.logger.Error("failed to cleanup cgroup", "err", err)
+		c.logger.Error("failed to cleanup cgroup", "error", err)
 	}
 }
 
@@ -250,9 +247,9 @@ func (c *cpusetManagerV2) pathOf(id identity) string {
 // We avoid removing a cgroup if it still contains a PID, as the cpuset manager
 // may be initially empty on a Nomad client restart.
 func (c *cpusetManagerV2) remove(path string) {
-	mgr, err := fs2.NewManager(nil, path, rootless)
+	mgr, err := fs2.NewManager(nil, path)
 	if err != nil {
-		c.logger.Warn("failed to create manager", "path", path, "err", err)
+		c.logger.Warn("failed to create manager", "path", path, "error", err)
 		return
 	}
 
@@ -268,7 +265,7 @@ func (c *cpusetManagerV2) remove(path string) {
 
 	// remove the cgroup
 	if err3 := mgr.Destroy(); err3 != nil {
-		c.logger.Warn("failed to cleanup cgroup", "path", path, "err", err)
+		c.logger.Warn("failed to cleanup cgroup", "path", path, "error", err)
 		return
 	}
 }
@@ -278,21 +275,24 @@ func (c *cpusetManagerV2) write(id identity, set cpuset.CPUSet) {
 	path := c.pathOf(id)
 
 	// make a manager for the cgroup
-	m, err := fs2.NewManager(nil, path, rootless)
+	m, err := fs2.NewManager(new(configs.Cgroup), path)
 	if err != nil {
-		c.logger.Error("failed to manage cgroup", "path", path, "err", err)
+		c.logger.Error("failed to manage cgroup", "path", path, "error", err)
+		return
 	}
 
 	// create the cgroup
 	if err = m.Apply(CreationPID); err != nil {
-		c.logger.Error("failed to apply cgroup", "path", path, "err", err)
+		c.logger.Error("failed to apply cgroup", "path", path, "error", err)
+		return
 	}
 
 	// set the cpuset value for the cgroup
 	if err = m.Set(&configs.Resources{
 		CpusetCpus: set.String(),
 	}); err != nil {
-		c.logger.Error("failed to set cgroup", "path", path, "err", err)
+		c.logger.Error("failed to set cgroup", "path", path, "error", err)
+		return
 	}
 }
 
@@ -314,4 +314,16 @@ func getCPUsFromCgroupV2(group string) ([]uint16, error) {
 		return nil, err
 	}
 	return set.ToSlice(), nil
+}
+
+// identity is the "<allocID>.<taskName>" string that uniquely identifies an
+// individual instance of a task within the flat cgroup namespace
+type identity string
+
+func makeID(allocID, task string) identity {
+	return identity(fmt.Sprintf("%s.%s", allocID, task))
+}
+
+func makeScope(id identity) string {
+	return string(id) + ".scope"
 }

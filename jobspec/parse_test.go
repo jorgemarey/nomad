@@ -628,6 +628,13 @@ func TestParse(t *testing.T) {
 										GetterOptions: nil,
 										RelativeDest:  stringToPtr("var/foo"),
 									},
+									{
+										GetterSource: stringToPtr("https://example.com/file.txt"),
+										GetterHeaders: map[string]string{
+											"User-Agent":    "nomad",
+											"X-Nomad-Alloc": "alloc",
+										},
+									},
 								},
 							},
 						},
@@ -862,6 +869,28 @@ func TestParse(t *testing.T) {
 								KillSignal: "SIGQUIT",
 								Config: map[string]interface{}{
 									"image": "hashicorp/image",
+								},
+							},
+						},
+					},
+				},
+			},
+			false,
+		},
+		{
+			"service-tagged-address.hcl",
+			&api.Job{
+				ID:   stringToPtr("service_tagged_address"),
+				Name: stringToPtr("service_tagged_address"),
+				Type: stringToPtr("service"),
+				TaskGroups: []*api.TaskGroup{
+					{
+						Name: stringToPtr("group"),
+						Services: []*api.Service{
+							{
+								Name: "service1",
+								TaggedAddresses: map[string]string{
+									"public_wan": "1.2.3.4",
 								},
 							},
 						},

@@ -3,12 +3,13 @@ package consul
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/hashicorp/consul/api"
-	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/nomad/structs"
+	"golang.org/x/exp/slices"
 )
 
 type connectInformation struct {
@@ -21,7 +22,7 @@ type connectInformation struct {
 // newConnect creates a new Consul AgentServiceConnect struct based on a Nomad
 // Connect struct. If the nomad Connect struct is nil, nil will be returned to
 // disable Connect for this service.
-func newConnect(serviceID string, ci connectInformation, serviceName string, nc *structs.ConsulConnect, networks structs.Networks, ports structs.AllocatedPorts) (*api.AgentServiceConnect, error) {
+func newConnect(serviceID string, info structs.AllocInfo, serviceName string, nc *structs.ConsulConnect, networks structs.Networks, ports structs.AllocatedPorts) (*api.AgentServiceConnect, error) {
 	switch {
 	case nc == nil:
 		// no connect stanza means there is no connect service to register
@@ -40,7 +41,7 @@ func newConnect(serviceID string, ci connectInformation, serviceName string, nc 
 		if nc.SidecarService.Port == "" {
 			nc.SidecarService.Port = fmt.Sprintf("%s-%s", structs.ConnectProxyPrefix, serviceName)
 		}
-		sidecarReg, err := connectSidecarRegistration(serviceID, ci, nc.SidecarService, networks, ports)
+		sidecarReg, err := connectSidecarRegistration(serviceID, info, nc.SidecarService, networks, ports)
 		if err != nil {
 			return nil, err
 		}
@@ -97,7 +98,7 @@ func newConnectGateway(connect *structs.ConsulConnect) *api.AgentServiceConnectP
 	return &api.AgentServiceConnectProxyConfig{Config: envoyConfig}
 }
 
-func connectSidecarRegistration(serviceID string, ci connectInformation, css *structs.ConsulSidecarService, networks structs.Networks, ports structs.AllocatedPorts) (*api.AgentServiceRegistration, error) {
+func connectSidecarRegistration(serviceID string, info structs.AllocInfo, css *structs.ConsulSidecarService, networks structs.Networks, ports structs.AllocatedPorts) (*api.AgentServiceRegistration, error) {
 	if css == nil {
 		// no sidecar stanza means there is no sidecar service to register
 		return nil, nil
@@ -108,7 +109,7 @@ func connectSidecarRegistration(serviceID string, ci connectInformation, css *st
 		return nil, err
 	}
 
-	proxy, err := connectSidecarProxy(ci, css.Proxy, cMapping.To, networks)
+	proxy, err := connectSidecarProxy(info, css.Proxy, cMapping.To, networks)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +130,7 @@ func connectSidecarRegistration(serviceID string, ci connectInformation, css *st
 	}
 
 	return &api.AgentServiceRegistration{
-		Tags:    helper.CopySliceString(css.Tags),
+		Tags:    slices.Clone(css.Tags),
 		Port:    cMapping.Value,
 		Address: cMapping.HostIP,
 		Proxy:   proxy,
@@ -137,7 +138,7 @@ func connectSidecarRegistration(serviceID string, ci connectInformation, css *st
 	}, nil
 }
 
-func connectSidecarProxy(ci connectInformation, proxy *structs.ConsulProxy, cPort int, networks structs.Networks) (*api.AgentServiceConnectProxyConfig, error) {
+func connectSidecarProxy(info structs.AllocInfo, proxy *structs.ConsulProxy, cPort int, networks structs.Networks) (*api.AgentServiceConnectProxyConfig, error) {
 	if proxy == nil {
 		proxy = new(structs.ConsulProxy)
 	}
@@ -150,7 +151,7 @@ func connectSidecarProxy(ci connectInformation, proxy *structs.ConsulProxy, cPor
 	return &api.AgentServiceConnectProxyConfig{
 		LocalServiceAddress: proxy.LocalServiceAddress,
 		LocalServicePort:    proxy.LocalServicePort,
-		Config:              connectProxyConfig(proxy.Config, cPort, ci),
+		Config:              connectProxyConfig(proxy.Config, cPort, info),
 		Upstreams:           connectUpstreams(proxy.Upstreams),
 		Expose:              expose,
 	}, nil
@@ -216,13 +217,9 @@ func connectUpstreams(in []structs.ConsulUpstream) []api.Upstream {
 // connectMeshGateway creates an api.MeshGatewayConfig from the nomad upstream
 // block. A non-existent config or unsupported gateway mode will default to the
 // Consul default mode.
-func connectMeshGateway(in *structs.ConsulMeshGateway) api.MeshGatewayConfig {
+func connectMeshGateway(in structs.ConsulMeshGateway) api.MeshGatewayConfig {
 	gw := api.MeshGatewayConfig{
 		Mode: api.MeshGatewayModeDefault,
-	}
-
-	if in == nil {
-		return gw
 	}
 
 	switch in.Mode {
@@ -237,59 +234,59 @@ func connectMeshGateway(in *structs.ConsulMeshGateway) api.MeshGatewayConfig {
 	return gw
 }
 
-func connectProxyConfig(cfg map[string]interface{}, port int, ci connectInformation) map[string]interface{} {
+func connectProxyConfig(cfg map[string]interface{}, port int, info structs.AllocInfo) map[string]interface{} {
 	if cfg == nil {
 		cfg = make(map[string]interface{})
 	}
 	cfg["bind_address"] = "0.0.0.0"
 	cfg["bind_port"] = port
 
-	if ci.Namespace == "" {
-		ci.Namespace = "default"
-	}
-
 	tags := map[string]string{
-		"nomad.group=":     ci.Group,
-		"nomad.job=":       ci.JobID,
-		"nomad.namespace=": ci.Namespace,
-		"nomad.alloc_id=":  ci.AllocID,
+		"nomad.group=":     info.Group,
+		"nomad.job=":       info.JobID,
+		"nomad.namespace=": info.Namespace,
+		"nomad.alloc_id=":  info.AllocID,
 	}
-	injectNomadStatsTags(cfg, tags)
+	injectNomadInfo(cfg, tags)
 	return cfg
 }
 
-// injectNomadStatsTags merges nomad information into cfg=>envoy_stats_tags
+// injectNomadInfo merges nomad information into cfg=>envoy_stats_tags
 //
 // cfg must not be nil
-func injectNomadStatsTags(cfg map[string]interface{}, nomadTags map[string]string) {
-	const key = "envoy_stats_tags"
-	tags, exists := cfg[key]
-	if !exists {
-		var tags []string
-		for k, value := range nomadTags {
-			pair := k + value
-			tags = append(tags, pair)
-		}
-		if tags != nil {
-			cfg[key] = tags
-		}
-		return
-	}
-	switch v := tags.(type) {
+func injectNomadInfo(cfg map[string]interface{}, defaultTags map[string]string) {
+	const configKey = "envoy_stats_tags"
+
+	existingTagsI := cfg[configKey]
+	switch existingTags := existingTagsI.(type) {
 	case []string:
-		// scan the existing tags to see if any tag is already set
+		if len(existingTags) == 0 {
+			break
+		}
 	OUTER:
-		for k, value := range nomadTags {
-			for _, s := range v {
-				if strings.HasPrefix(s, k) {
+		for key, value := range defaultTags {
+			for _, tag := range existingTags {
+				if strings.HasPrefix(tag, key) {
 					continue OUTER
 				}
 			}
-			pair := k + value
-			v = append(v, pair)
+			existingTags = append(existingTags, key+value)
 		}
-		cfg[key] = v
+		cfg[configKey] = existingTags
+		return
 	}
+
+	// common case.
+	var tags []string
+	for key, value := range defaultTags {
+		if value == "" {
+			continue
+		}
+		tag := key + value
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags) // mostly for test stability
+	cfg[configKey] = tags
 }
 
 func connectNetworkInvariants(networks structs.Networks) error {

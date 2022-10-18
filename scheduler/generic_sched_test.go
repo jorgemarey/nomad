@@ -9,7 +9,6 @@ import (
 
 	memdb "github.com/hashicorp/go-memdb"
 	"github.com/hashicorp/nomad/ci"
-	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
@@ -17,6 +16,7 @@ import (
 	"github.com/hashicorp/nomad/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/exp/slices"
 )
 
 func TestServiceSched_JobRegister(t *testing.T) {
@@ -65,10 +65,11 @@ func TestServiceSched_JobRegister(t *testing.T) {
 
 	// Ensure the eval has no spawned blocked eval
 	if len(h.CreateEvals) != 0 {
-		t.Fatalf("bad: %#v", h.CreateEvals)
+		t.Errorf("bad: %#v", h.CreateEvals)
 		if h.Evals[0].BlockedEval != "" {
 			t.Fatalf("bad: %#v", h.Evals[0])
 		}
+		t.FailNow()
 	}
 
 	// Ensure the plan allocated
@@ -1518,10 +1519,11 @@ func TestServiceSched_EvaluateBlockedEval_Finished(t *testing.T) {
 
 	// Ensure the eval has no spawned blocked eval
 	if len(h.Evals) != 1 {
-		t.Fatalf("bad: %#v", h.Evals)
+		t.Errorf("bad: %#v", h.Evals)
 		if h.Evals[0].BlockedEval != "" {
 			t.Fatalf("bad: %#v", h.Evals[0])
 		}
+		t.FailNow()
 	}
 
 	// Ensure the plan allocated
@@ -1594,6 +1596,7 @@ func TestServiceSched_JobModify(t *testing.T) {
 		alloc.NodeID = nodes[i].ID
 		alloc.Name = fmt.Sprintf("my-job.web[%d]", i)
 		alloc.DesiredStatus = structs.AllocDesiredStatusStop
+		alloc.ClientStatus = structs.AllocClientStatusFailed // #10446
 		terminal = append(terminal, alloc)
 	}
 	require.NoError(t, h.State.UpsertAllocs(structs.MsgTypeTestSetup, h.NextIndex(), terminal))
@@ -1728,7 +1731,7 @@ func TestServiceSched_JobModify_Datacenters(t *testing.T) {
 	placed := map[string]*structs.Allocation{}
 	for node, placedAllocs := range plan.NodeAllocation {
 		require.True(
-			helper.SliceStringContains([]string{nodes[0].ID, nodes[1].ID}, node),
+			slices.Contains([]string{nodes[0].ID, nodes[1].ID}, node),
 			"allocation placed on ineligible node",
 		)
 		for _, alloc := range placedAllocs {

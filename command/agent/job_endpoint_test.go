@@ -79,7 +79,6 @@ func TestHTTP_PrefixJobsList(t *testing.T) {
 		"aabbbbbb-e8f7-fd38-c855-ab94ceb89706",
 		"aabbcccc-e8f7-fd38-c855-ab94ceb89706",
 	}
-	ci.Parallel(t)
 	httpTest(t, nil, func(s *TestAgent) {
 		for i := 0; i < 3; i++ {
 			// Create the job
@@ -2518,6 +2517,9 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						Meta: map[string]string{
 							"servicemeta": "foobar",
 						},
+						TaggedAddresses: map[string]string{
+							"wan": "1.2.3.4",
+						},
 						CheckRestart: &api.CheckRestart{
 							Limit: 4,
 							Grace: pointer.Of(11 * time.Second),
@@ -2923,7 +2925,10 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						Meta: map[string]string{
 							"servicemeta": "foobar",
 						},
-						OnUpdate: "require_healthy",
+						TaggedAddresses: map[string]string{
+							"wan": "1.2.3.4",
+						},
+						OnUpdate: structs.OnUpdateRequireHealthy,
 						Checks: []*structs.ServiceCheck{
 							{
 								Name:          "bar",
@@ -2947,7 +2952,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 									IgnoreWarnings: true,
 								},
 								TaskName:               "task1",
-								OnUpdate:               "require_healthy",
+								OnUpdate:               structs.OnUpdateRequireHealthy,
 								SuccessBeforePassing:   2,
 								FailuresBeforeCritical: 3,
 							},
@@ -3017,7 +3022,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 								Meta: map[string]string{
 									"servicemeta": "foobar",
 								},
-								OnUpdate: "require_healthy",
+								OnUpdate: structs.OnUpdateRequireHealthy,
 								Checks: []*structs.ServiceCheck{
 									{
 										Name:                   "bar",
@@ -3040,7 +3045,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 											Grace:          11 * time.Second,
 											IgnoreWarnings: true,
 										},
-										OnUpdate: "require_healthy",
+										OnUpdate: structs.OnUpdateRequireHealthy,
 									},
 									{
 										Name:      "check2",
@@ -3052,7 +3057,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 											Limit: 4,
 											Grace: 11 * time.Second,
 										},
-										OnUpdate: "require_healthy",
+										OnUpdate: structs.OnUpdateRequireHealthy,
 									},
 								},
 							},
@@ -3701,7 +3706,7 @@ func TestConversion_apiUpstreamsToStructs(t *testing.T) {
 		LocalBindPort:        8000,
 		Datacenter:           "dc2",
 		LocalBindAddress:     "127.0.0.2",
-		MeshGateway:          &structs.ConsulMeshGateway{Mode: "local"},
+		MeshGateway:          structs.ConsulMeshGateway{Mode: "local"},
 	}}, apiUpstreamsToStructs([]*api.ConsulUpstream{{
 		DestinationName:      "upstream",
 		DestinationNamespace: "ns2",
@@ -3714,8 +3719,8 @@ func TestConversion_apiUpstreamsToStructs(t *testing.T) {
 
 func TestConversion_apiConsulMeshGatewayToStructs(t *testing.T) {
 	ci.Parallel(t)
-	require.Nil(t, apiMeshGatewayToStructs(nil))
-	require.Equal(t, &structs.ConsulMeshGateway{Mode: "remote"},
+	require.Equal(t, structs.ConsulMeshGateway{}, apiMeshGatewayToStructs(nil))
+	require.Equal(t, structs.ConsulMeshGateway{Mode: "remote"},
 		apiMeshGatewayToStructs(&api.ConsulMeshGateway{Mode: "remote"}))
 }
 
@@ -3726,7 +3731,7 @@ func TestConversion_apiConnectSidecarServiceProxyToStructs(t *testing.T) {
 	require.Equal(t, &structs.ConsulProxy{
 		LocalServiceAddress: "192.168.30.1",
 		LocalServicePort:    9000,
-		Config:              nil,
+		Config:              map[string]any{},
 		Upstreams: []structs.ConsulUpstream{{
 			DestinationName: "upstream",
 		}},
