@@ -12,13 +12,6 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-type connectInformation struct {
-	Group     string
-	JobID     string
-	Namespace string
-	AllocID   string
-}
-
 // newConnect creates a new Consul AgentServiceConnect struct based on a Nomad
 // Connect struct. If the nomad Connect struct is nil, nil will be returned to
 // disable Connect for this service.

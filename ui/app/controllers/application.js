@@ -29,17 +29,6 @@ export default class ApplicationController extends Controller {
     this.keyboard.listenForKeypress();
   }
 
-  /**
-   * @type {KeyboardService}
-   */
-  @service keyboard;
-
-  // eslint-disable-next-line ember/classic-decorator-hooks
-  constructor() {
-    super(...arguments);
-    this.keyboard.listenForKeypress();
-  }
-
   queryParams = [
     {
       region: 'region',

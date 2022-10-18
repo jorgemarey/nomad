@@ -81,8 +81,9 @@ module('Acceptance | volumes list', function (hooks) {
       const healthy = volume.controllersHealthy;
       const expected = volume.controllersExpected;
       const isHealthy = healthy > 0;
-      controllerHealthStr = `${isHealthy ? 'Healthy' : 'Unhealthy'
-        } ( ${healthy} / ${expected} )`;
+      controllerHealthStr = `${
+        isHealthy ? 'Healthy' : 'Unhealthy'
+      } ( ${healthy} / ${expected} )`;
     }
 
     const nodeHealthStr = volume.nodesHealthy > 0 ? 'Healthy' : 'Unhealthy';

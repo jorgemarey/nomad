@@ -6713,6 +6713,7 @@ func (tg *TaskGroup) validateServices() error {
 		if service.AddressMode == AddressModeDriver {
 			mErr.Errors = append(mErr.Errors, fmt.Errorf("service %q cannot use address_mode=\"driver\", only services defined in a \"task\" block can use this mode", service.Name))
 		}
+
 		for _, check := range service.Checks {
 			if check.TaskName != "" {
 				if check.Type != ServiceCheckScript && check.Type != ServiceCheckGRPC {
@@ -7702,20 +7703,6 @@ var (
 	// mode is given
 	TemplateChangeModeInvalidError = errors.New("Invalid change mode. Must be one of the following: noop, signal, script, restart")
 )
-
-// ChangeScript holds the configuration for the script that is executed if
-// change mode is set to script
-type ChangeScript struct {
-	// Command is the full path to the script
-	Command string
-	// Args is a slice of arguments passed to the script
-	Args []string
-	// Timeout is the amount of seconds we wait for the script to finish
-	Timeout time.Duration
-	// FailOnError indicates whether a task should fail in case script execution
-	// fails or log script failure and don't interrupt the task
-	FailOnError bool
-}
 
 // Template represents a template configuration to be rendered for a given task
 type Template struct {

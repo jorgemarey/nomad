@@ -35,8 +35,6 @@ type groupServiceHook struct {
 	// registrations will be made. This field may be updated.
 	providerNamespace string
 
-	nomadNamespace string
-
 	// serviceRegWrapper is the handler wrapper that is used to perform service
 	// and check registration and deregistration.
 	serviceRegWrapper *wrapper.HandlerWrapper
@@ -67,8 +65,6 @@ type groupServiceHookConfig struct {
 	// providerNamespace is the Nomad or Consul namespace in which service
 	// registrations will be made.
 	providerNamespace string
-
-	nomadNamespace string
 
 	// serviceRegWrapper is the handler wrapper that is used to perform service
 	// and check registration and deregistration.
@@ -138,12 +134,6 @@ func (h *groupServiceHook) Update(req *interfaces.RunnerUpdateRequest) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// MEIGAS: If we already run the PreKill don't do this (Is this OK?)
-	if h.deregistered {
-		// TODO: log this
-		return nil
-	}
-
 	oldWorkloadServices := h.getWorkloadServices()
 
 	// Store new updated values out of request
@@ -181,6 +171,11 @@ func (h *groupServiceHook) Update(req *interfaces.RunnerUpdateRequest) error {
 	if !h.prerun {
 		// Update called before Prerun. Update alloc and exit to allow
 		// Prerun to do initial registration.
+		return nil
+	}
+
+	if h.deregistered {
+		h.logger.Warn("update called after service deregistered", "allocID", h.allocID, "group", h.group)
 		return nil
 	}
 

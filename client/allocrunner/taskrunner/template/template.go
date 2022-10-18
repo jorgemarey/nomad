@@ -68,11 +68,6 @@ type TaskTemplateManager struct {
 	// shutdown marks whether the manager has been shutdown
 	shutdown     bool
 	shutdownLock sync.Mutex
-
-	noopLookup map[string][]*structs.Template
-	noopRunner *manager.Runner
-
-	allTemplates []*structs.Template
 }
 
 // TaskTemplateManagerConfig is used to configure an instance of the
@@ -171,37 +166,6 @@ func NewTaskTemplateManager(config *TaskTemplateManagerConfig) (*TaskTemplateMan
 		tm.signals[tmpl.ChangeSignal] = sig
 	}
 
-	noopConfig := &TaskTemplateManagerConfig{
-		UnblockCh:            config.UnblockCh,
-		Lifecycle:            config.Lifecycle,
-		Events:               config.Events,
-		ClientConfig:         config.ClientConfig,
-		VaultToken:           config.VaultToken,
-		VaultNamespace:       config.VaultNamespace,
-		TaskDir:              config.TaskDir,
-		EnvBuilder:           config.EnvBuilder,
-		MaxTemplateEventRate: config.MaxTemplateEventRate,
-		Templates:            []*structs.Template{},
-	}
-	nonNoopTemplates := make([]*structs.Template, 0)
-	tm.allTemplates = make([]*structs.Template, 0, len(tm.config.Templates))
-	for _, t := range tm.config.Templates {
-		if t.ChangeMode == structs.TemplateChangeModeNoop {
-			noopConfig.Templates = append(noopConfig.Templates, t)
-		} else {
-			nonNoopTemplates = append(nonNoopTemplates, t)
-		}
-		tm.allTemplates = append(tm.allTemplates, t)
-	}
-	tm.config.Templates = nonNoopTemplates
-
-	noopRunner, noopLookup, err := templateRunner(noopConfig)
-	if err != nil {
-		return nil, err
-	}
-	tm.noopRunner = noopRunner
-	tm.noopLookup = noopLookup
-
 	// Build the consul-template runner
 	runner, lookup, err := templateRunner(config)
 	if err != nil {
@@ -227,9 +191,6 @@ func (tm *TaskTemplateManager) Stop() {
 	tm.shutdown = true
 
 	// Stop the consul-template runner
-	if tm.noopRunner != nil {
-		tm.noopRunner.Stop()
-	}
 	if tm.runner != nil {
 		tm.runner.Stop()
 	}
@@ -245,27 +206,18 @@ func (tm *TaskTemplateManager) SetDriverHandle(executor interfaces.ScriptExecuto
 
 // run is the long lived loop that handles errors and templates being rendered
 func (tm *TaskTemplateManager) run() {
-	// Runner is nil if there is no templates
-	if tm.noopRunner == nil && tm.runner == nil {
+	// Runner is nil if there are no templates
+	if tm.runner == nil {
 		// Unblock the start if there is nothing to do
 		close(tm.config.UnblockCh)
 		return
 	}
 
 	// Start the runner
-	if tm.noopRunner != nil {
-		go tm.noopRunner.Start()
-	}
-	if tm.runner != nil {
-		go tm.runner.Start()
-	}
+	go tm.runner.Start()
 
 	// Block till all the templates have been rendered
 	tm.handleFirstRender()
-
-	if tm.noopRunner != nil {
-		tm.noopRunner.Stop()
-	}
 
 	// Detect if there was a shutdown.
 	select {
@@ -275,7 +227,7 @@ func (tm *TaskTemplateManager) run() {
 	}
 
 	// Read environment variables from env templates before we unblock
-	envMap, err := loadTemplateEnv(tm.allTemplates, tm.config.EnvBuilder.Build())
+	envMap, err := loadTemplateEnv(tm.config.Templates, tm.config.EnvBuilder.Build())
 	if err != nil {
 		tm.config.Lifecycle.Kill(context.Background(),
 			structs.NewTaskEvent(structs.TaskKilling).
@@ -313,43 +265,13 @@ func (tm *TaskTemplateManager) handleFirstRender() {
 	// be fired.
 	outstandingEvent := false
 
-	var runnerFinish, noopRunnerFinish bool
-	emptyCh := make(<-chan struct{})
-
-	runnerTempalteRenderedCh := emptyCh
-	runnerRenderEventCh := emptyCh
-	runnerErrCh := make(chan error)
-	runnerFinish = true
-	if tm.runner != nil {
-		runnerTempalteRenderedCh = tm.runner.TemplateRenderedCh()
-		runnerRenderEventCh = tm.runner.RenderEventCh()
-		runnerErrCh = tm.runner.ErrCh
-		runnerFinish = false
-	}
-	noopRunnerTempalteRenderedCh := emptyCh
-	noopRunnerRenderEventCh := emptyCh
-	noopRunnerErrCh := make(chan error)
-	noopRunnerFinish = true
-	if tm.noopRunner != nil {
-		noopRunnerTempalteRenderedCh = tm.noopRunner.TemplateRenderedCh()
-		noopRunnerRenderEventCh = tm.noopRunner.RenderEventCh()
-		noopRunnerErrCh = tm.noopRunner.ErrCh
-		noopRunnerFinish = false
-	}
-
-	renderEventCh := make(chan map[string]*manager.RenderEvent)
-	endCh := make(chan struct{})
-	go tm.renderEvents(renderEventCh, runnerRenderEventCh, noopRunnerRenderEventCh, endCh)
-	defer close(endCh)
-
 	// Wait till all the templates have been rendered
 WAIT:
 	for {
-
 		select {
 		case <-tm.shutdownCh:
 			return
-		case err, ok := <-runnerErrCh:
+		case err, ok := <-tm.runner.ErrCh:
 			if !ok {
 				continue
 			}
@@ -358,16 +280,7 @@ WAIT:
 				structs.NewTaskEvent(structs.TaskKilling).
 					SetFailsTask().
 					SetDisplayMessage(fmt.Sprintf("Template failed: %v", err)))
-		case err, ok := <-noopRunnerErrCh:
-			if !ok {
-				continue
-			}
-
-			tm.config.Lifecycle.Kill(context.Background(),
-				structs.NewTaskEvent(structs.TaskKilling).
-					SetFailsTask().
-					SetDisplayMessage(fmt.Sprintf("Template failed: %v", err)))
-		case <-runnerTempalteRenderedCh:
+		case <-tm.runner.TemplateRenderedCh():
 			// A template has been rendered, figure out what to do
 			events := tm.runner.RenderEvents()
 
@@ -390,50 +303,13 @@ WAIT:
 			// if there's a driver handle then the task is already running and
 			// that changes how we want to behave on first render
 			if dirty && tm.config.Lifecycle.IsRunning() {
-				handledRenders := make(map[string]time.Time, len(tm.allTemplates))
-				tm.onTemplateRendered(handledRenders, time.Time{}, events)
-			}
-
-			runnerFinish = true
-			if !noopRunnerFinish {
-				continue
+				handledRenders := make(map[string]time.Time, len(tm.config.Templates))
+				tm.onTemplateRendered(handledRenders, time.Time{})
 			}
 
 			break WAIT
-		case <-noopRunnerTempalteRenderedCh:
-			// A template has been rendered, figure out what to do
-			events := tm.noopRunner.RenderEvents()
-
-			// Not all templates have been rendered yet
-			if len(events) < len(tm.noopLookup) {
-				continue
-			}
-
-			dirty := false
-			for _, event := range events {
-				// This template hasn't been rendered
-				if event.LastWouldRender.IsZero() {
-					continue WAIT
-				}
-				if event.WouldRender && event.DidRender {
-					dirty = true
-				}
-			}
-
-			// if there's a driver handle then the task is already running and
-			// that changes how we want to behave on first render
-			if dirty && tm.config.Lifecycle.IsRunning() {
-				handledRenders := make(map[string]time.Time, len(tm.allTemplates))
-				tm.onTemplateRendered(handledRenders, time.Time{}, events)
-			}
-
-			noopRunnerFinish = true
-			if !runnerFinish {
-				continue
-			}
-
-			break WAIT
-		case events := <-renderEventCh:
+		case <-tm.runner.RenderEventCh():
+			events := tm.runner.RenderEvents()
 			joinedSet := make(map[string]struct{})
 			for _, event := range events {
 				missing := event.MissingDeps
@@ -497,19 +373,6 @@ WAIT:
 	}
 }
 
-func (tm *TaskTemplateManager) renderEvents(eventCh chan<- map[string]*manager.RenderEvent, reCh, nreCh, endCh <-chan struct{}) {
-	select {
-	case <-tm.shutdownCh:
-		return
-	case <-endCh:
-		return
-	case <-reCh:
-		eventCh <- tm.runner.RenderEvents()
-	case <-nreCh:
-		eventCh <- tm.noopRunner.RenderEvents()
-	}
-}
-
 // handleTemplateRerenders is used to handle template render events after they
 // have all rendered. It takes action based on which set of templates re-render.
 // The passed allRenderedTime is the time at which all templates have rendered.
@@ -532,12 +395,12 @@ func (tm *TaskTemplateManager) handleTemplateRerenders(allRenderedTime time.Time
 					SetFailsTask().
 					SetDisplayMessage(fmt.Sprintf("Template failed: %v", err)))
 		case <-tm.runner.TemplateRenderedCh():
-			tm.onTemplateRendered(handledRenders, allRenderedTime, tm.runner.RenderEvents())
+			tm.onTemplateRendered(handledRenders, allRenderedTime)
 		}
 	}
 }
 
-func (tm *TaskTemplateManager) onTemplateRendered(handledRenders map[string]time.Time, allRenderedTime time.Time, events map[string]*manager.RenderEvent) {
+func (tm *TaskTemplateManager) onTemplateRendered(handledRenders map[string]time.Time, allRenderedTime time.Time) {
 
 	var handling []string
 	signals := make(map[string]struct{})
@@ -545,6 +408,7 @@ func (tm *TaskTemplateManager) onTemplateRendered(handledRenders map[string]time
 	restart := false
 	var splay time.Duration
 
+	events := tm.runner.RenderEvents()
 	for id, event := range events {
 
 		// First time through
@@ -569,7 +433,7 @@ func (tm *TaskTemplateManager) onTemplateRendered(handledRenders map[string]time
 		}
 
 		// Read environment variables from templates
-		envMap, err := loadTemplateEnv(tm.allTemplates, tm.config.EnvBuilder.Build())
+		envMap, err := loadTemplateEnv(tm.config.Templates, tm.config.EnvBuilder.Build())
 		if err != nil {
 			tm.config.Lifecycle.Kill(context.Background(),
 				structs.NewTaskEvent(structs.TaskKilling).
@@ -930,18 +794,16 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 			}
 			if cc.TemplateConfig.WaitBounds.Min != nil {
 				if tmpl.Wait.Min != nil && *tmpl.Wait.Min < *cc.TemplateConfig.WaitBounds.Min {
-					tmpl.Wait.Min = cc.TemplateConfig.WaitBounds.Min
+					tmpl.Wait.Min = &*cc.TemplateConfig.WaitBounds.Min
 				}
 			}
 			if cc.TemplateConfig.WaitBounds.Max != nil {
 				if tmpl.Wait.Max != nil && *tmpl.Wait.Max > *cc.TemplateConfig.WaitBounds.Max {
-					tmpl.Wait.Max = cc.TemplateConfig.WaitBounds.Max
+					tmpl.Wait.Max = &*cc.TemplateConfig.WaitBounds.Max
 				}
 			}
 		}
 	}
-
-	retryAttemps := 10000 // ~ one week
 
 	// Set up the Consul config
 	if cc.ConsulConfig != nil {
@@ -968,7 +830,7 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 		if cc.ConsulConfig.Auth != "" {
 			parts := strings.SplitN(cc.ConsulConfig.Auth, ":", 2)
 			if len(parts) != 2 {
-				return nil, fmt.Errorf("failed to parse Consul Auth config")
+				return nil, fmt.Errorf("Failed to parse Consul Auth config")
 			}
 
 			conf.Consul.Auth = &ctconf.AuthConfig{
@@ -990,9 +852,6 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 				return nil, err
 			}
 		}
-	}
-	if conf.Consul.Retry.Attempts == nil {
-		conf.Consul.Retry.Attempts = &retryAttemps
 	}
 
 	// Get the Consul namespace from job/group config. This is the higher level
@@ -1055,26 +914,11 @@ func newRunnerConfig(config *TaskTemplateManagerConfig,
 			}
 		}
 	}
-	if conf.Vault.Retry.Attempts == nil {
-		conf.Vault.Retry.Attempts = &retryAttemps
-	}
 
 	// Set up Nomad
 	conf.Nomad.Namespace = &config.NomadNamespace
 	conf.Nomad.Transport.CustomDialer = cc.TemplateDialer
 	conf.Nomad.Token = &config.NomadToken
-	if cc.TemplateConfig != nil && cc.TemplateConfig.NomadRetry != nil {
-		// Set the user-specified Nomad RetryConfig
-		var err error
-		if err = cc.TemplateConfig.NomadRetry.Validate(); err != nil {
-			return nil, err
-		}
-		conf.Nomad.Retry, err = cc.TemplateConfig.NomadRetry.ToConsulTemplate()
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	if cc.TemplateConfig != nil && cc.TemplateConfig.NomadRetry != nil {
 		// Set the user-specified Nomad RetryConfig
 		var err error

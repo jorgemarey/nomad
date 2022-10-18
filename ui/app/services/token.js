@@ -3,7 +3,6 @@ import { computed } from '@ember/object';
 import { alias, reads } from '@ember/object/computed';
 import { getOwner } from '@ember/application';
 import { assign } from '@ember/polyfills';
-import Ember from 'ember';
 import { task } from 'ember-concurrency';
 import queryString from 'query-string';
 import fetch from 'nomad-ui/utils/fetch';
@@ -87,8 +86,6 @@ export default class TokenService extends Service {
     const credentials = 'include';
     const headers = {};
     const token = this.secret;
-
-    if (!token && !Ember.testing) return null;
 
     if (token) {
       headers['X-Nomad-Token'] = token;

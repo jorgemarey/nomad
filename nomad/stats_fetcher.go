@@ -119,6 +119,7 @@ func (f *StatsFetcher) Fetch(ctx context.Context, servers map[raft.ServerID]*aut
 			f.inflightLock.Lock()
 			delete(f.inflight, workItem.server.ID)
 			f.inflightLock.Unlock()
+
 		}
 	}
 	return replies

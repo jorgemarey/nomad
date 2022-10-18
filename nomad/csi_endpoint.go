@@ -718,7 +718,11 @@ func (v *CSIVolume) nodeUnpublishVolume(vol *structs.CSIVolume, claim *structs.C
 		if err != nil {
 			return err
 		}
-		v.logger.Debug("skipping node unpublish for down or GC'd node")
+		if node == nil || node.Status == structs.NodeStatusDown {
+			v.logger.Debug("skipping node unpublish for down or GC'd node")
+			claim.State = structs.CSIVolumeClaimStateNodeDetached
+			return v.checkpointClaim(vol, claim)
+		}
 	}
 
 	if claim.AllocationID != "" {

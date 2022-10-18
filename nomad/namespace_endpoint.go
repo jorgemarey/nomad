@@ -17,7 +17,8 @@ type Namespace struct {
 }
 
 // UpsertNamespaces is used to upsert a set of namespaces
-func (n *Namespace) UpsertNamespaces(args *structs.NamespaceUpsertRequest, reply *structs.GenericResponse) error {
+func (n *Namespace) UpsertNamespaces(args *structs.NamespaceUpsertRequest,
+	reply *structs.GenericResponse) error {
 	args.Region = n.srv.config.AuthoritativeRegion
 	if done, err := n.srv.forward("Namespace.UpsertNamespaces", args, args, reply); done {
 		return err
@@ -41,6 +42,7 @@ func (n *Namespace) UpsertNamespaces(args *structs.NamespaceUpsertRequest, reply
 		if err := ns.Validate(); err != nil {
 			return fmt.Errorf("Invalid namespace %q: %v", ns.Name, err)
 		}
+
 		ns.SetHash()
 	}
 

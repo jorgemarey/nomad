@@ -9,10 +9,10 @@
 package command
 
 import (
+	"github.com/elazarl/go-bindata-assetfs"
 	"bytes"
 	"compress/gzip"
 	"fmt"
-	"github.com/elazarl/go-bindata-assetfs"
 	"io"
 	"io/ioutil"
 	"os"
@@ -205,9 +205,9 @@ func AssetNames() []string {
 // _bindata is a table, holding each asset generator, mapped to its name.
 var _bindata = map[string]func() (*asset, error){
 	"command/assets/connect-short.nomad": commandAssetsConnectShortNomad,
-	"command/assets/connect.nomad":       commandAssetsConnectNomad,
+	"command/assets/connect.nomad": commandAssetsConnectNomad,
 	"command/assets/example-short.nomad": commandAssetsExampleShortNomad,
-	"command/assets/example.nomad":       commandAssetsExampleNomad,
+	"command/assets/example.nomad": commandAssetsExampleNomad,
 }
 
 // AssetDir returns the file names below a certain
@@ -249,14 +249,13 @@ type bintree struct {
 	Func     func() (*asset, error)
 	Children map[string]*bintree
 }
-
 var _bintree = &bintree{nil, map[string]*bintree{
 	"command": &bintree{nil, map[string]*bintree{
 		"assets": &bintree{nil, map[string]*bintree{
 			"connect-short.nomad": &bintree{commandAssetsConnectShortNomad, map[string]*bintree{}},
-			"connect.nomad":       &bintree{commandAssetsConnectNomad, map[string]*bintree{}},
+			"connect.nomad": &bintree{commandAssetsConnectNomad, map[string]*bintree{}},
 			"example-short.nomad": &bintree{commandAssetsExampleShortNomad, map[string]*bintree{}},
-			"example.nomad":       &bintree{commandAssetsExampleNomad, map[string]*bintree{}},
+			"example.nomad": &bintree{commandAssetsExampleNomad, map[string]*bintree{}},
 		}},
 	}},
 }}
@@ -307,6 +306,7 @@ func _filePath(dir, name string) string {
 	cannonicalName := strings.Replace(name, "\\", "/", -1)
 	return filepath.Join(append([]string{dir}, strings.Split(cannonicalName, "/")...)...)
 }
+
 
 func assetFS() *assetfs.AssetFS {
 	assetInfo := func(path string) (os.FileInfo, error) {

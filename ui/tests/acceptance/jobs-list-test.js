@@ -226,8 +226,8 @@ module('Acceptance | jobs list', function (hooks) {
     return job.periodic
       ? 'periodic'
       : job.parameterized
-        ? 'parameterized'
-        : job.type;
+      ? 'parameterized'
+      : job.type;
   }
 
   test('the jobs list page has appropriate faceted search options', async function (assert) {

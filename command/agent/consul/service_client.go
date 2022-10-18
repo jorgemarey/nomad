@@ -1003,13 +1003,6 @@ func (c *ServiceClient) serviceRegs(
 		copy(tags, service.Tags)
 	}
 
-	ci := connectInformation{
-		Group:     workload.Group,
-		JobID:     workload.JobID,
-		Namespace: workload.NomadNamespace,
-		AllocID:   workload.AllocID,
-	}
-
 	// newConnect returns (nil, nil) if there's no Connect-enabled service.
 	connect, err := newConnect(id, workload.AllocInfo, service.Name, service.Connect, workload.Networks, workload.Ports)
 	if err != nil {

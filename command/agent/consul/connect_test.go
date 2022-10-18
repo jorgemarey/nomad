@@ -393,10 +393,6 @@ func TestConnect_connectProxyConfig(t *testing.T) {
 	ci.Parallel(t)
 
 	t.Run("nil map", func(t *testing.T) {
-		ci := connectInformation{
-			AllocID: "test_alloc1",
-		}
-
 		require.Equal(t, map[string]interface{}{
 			"bind_address":     "0.0.0.0",
 			"bind_port":        42,
@@ -405,10 +401,6 @@ func TestConnect_connectProxyConfig(t *testing.T) {
 	})
 
 	t.Run("pre-existing map", func(t *testing.T) {
-		ci := connectInformation{
-			AllocID: "test_alloc2",
-		}
-
 		require.Equal(t, map[string]interface{}{
 			"bind_address":     "0.0.0.0",
 			"bind_port":        42,
@@ -641,7 +633,7 @@ func Test_injectNomadInfo(t *testing.T) {
 		info1(),
 		make(map[string]interface{}),
 		map[string]interface{}{
-			"envoy_stats_tags": []string{"nomad.job=jobtest", "nomad.alloc_id=abc123"},
+			"envoy_stats_tags": []string{"nomad.alloc_id=abc123"},
 		},
 	)
 
@@ -651,7 +643,7 @@ func Test_injectNomadInfo(t *testing.T) {
 		map[string]interface{}{"foo": "bar"},
 		map[string]interface{}{
 			"foo":              "bar",
-			"envoy_stats_tags": []string{"nomad.job=jobtest", "nomad.alloc_id=abc123"},
+			"envoy_stats_tags": []string{"nomad.alloc_id=abc123"},
 		},
 	)
 
@@ -664,7 +656,7 @@ func Test_injectNomadInfo(t *testing.T) {
 		},
 		map[string]interface{}{
 			"foo":              "bar",
-			"envoy_stats_tags": []string{"k1=v1", "k2=v2", "nomad.job=jobtest", "nomad.alloc_id=abc123"},
+			"envoy_stats_tags": []string{"k1=v1", "k2=v2", "nomad.alloc_id=abc123"},
 		},
 	)
 

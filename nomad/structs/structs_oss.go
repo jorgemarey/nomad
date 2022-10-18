@@ -4,6 +4,7 @@
 package structs
 
 import (
+	"errors"
 	"fmt"
 
 	multierror "github.com/hashicorp/go-multierror"
@@ -11,6 +12,10 @@ import (
 
 func (m *Multiregion) Validate(jobType string, jobDatacenters []string) error {
 	// TODO
+	if m != nil {
+		return errors.New("Multiregion jobs are unlicensed.")
+	}
+
 	return nil
 }
 

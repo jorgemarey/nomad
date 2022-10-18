@@ -953,6 +953,7 @@ func (n *nomadFSM) applyUpsertNodeEvent(msgType structs.MessageType, buf []byte,
 	var caseReq struct{ Namespaces bool }
 	if err := structs.Decode(buf, &caseReq); err != nil {
 		// if decode fails this is an old request that must be forwarded to applyNamespace
+		n.logger.Warn("applyUpsertNodeEvent decode failed, this is a legacy request")
 		return n.applyNamespaceDelete(buf, index)
 	}
 	// END
@@ -1263,6 +1264,7 @@ func (n *nomadFSM) applyAutopilotUpdate(buf []byte, index uint64) interface{} {
 	var caseReq struct{ Namespaces bool }
 	if err := structs.Decode(buf, &caseReq); err != nil {
 		// if decode fails this is an old request that must be forwarded to applyNamespace
+		n.logger.Warn("applyAutopilotUpdate decode failed, this is a legacy request")
 		return n.applyNamespaceUpsert(buf, index)
 	}
 	var req structs.AutopilotSetConfigRequest
@@ -1673,7 +1675,7 @@ func (n *nomadFSM) restoreImpl(old io.ReadCloser, filter *FSMFilter) error {
 			var caseReq struct{ Name bool }
 			if err := dec.Decode(&caseReq); err != nil {
 				// if decode fails this is an old request that must be forwarded to restoreNamespace
-				n.logger.Error("New SchedulerConfigSnapshot: Using namespaceRestore")
+				n.logger.Warn("SchedulerConfigSnapshot decode failed, using namespaceRestore, this is a legacy request")
 				dec.Reset(io.MultiReader(&buf, old))
 				if err := restoreNamespace(restore, dec); err != nil {
 					return err
