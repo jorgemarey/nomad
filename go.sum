@@ -653,8 +653,8 @@ github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0/go.mod h1:8NvIoxWQoOIhqOTXgf
 github.com/grpc-ecosystem/grpc-gateway v1.9.0/go.mod h1:vNeuVxBJEsws4ogUvrchl83t/GYV9WGTSLVdBhOQFDY=
 github.com/grpc-ecosystem/grpc-gateway v1.9.5/go.mod h1:vNeuVxBJEsws4ogUvrchl83t/GYV9WGTSLVdBhOQFDY=
 github.com/grpc-ecosystem/grpc-gateway v1.16.0/go.mod h1:BDjrQk3hbvj6Nolgz8mAMFbcEtjT1g+wF4CSlocrBnw=
-github.com/hashicorp/consul-template v0.29.3-0.20220922183329-be2fb1f1eb46 h1:iRGVxFufmSnBr4DJLfUyNMPx+/WRqUWGYc89wIF+Enc=
-github.com/hashicorp/consul-template v0.29.3-0.20220922183329-be2fb1f1eb46/go.mod h1:DADc2BQ6Lz53wIf3zLARP/SViPb9uYd201w+uPGiupE=
+github.com/hashicorp/consul-template v0.29.5 h1:tzEo93RqODAX2cgOe/ke8xcpdPdxg5rxl6d22wE3f6c=
+github.com/hashicorp/consul-template v0.29.5/go.mod h1:SZGBPz/t0JaBwMOqM6q/mG66cBRA8IeDUjOwjO0Pa5M=
 github.com/hashicorp/consul/api v1.15.2 h1:3Q/pDqvJ7udgt/60QOOW/p/PeKioQN+ncYzzCdN2av0=
 github.com/hashicorp/consul/api v1.15.2/go.mod h1:v6nvB10borjOuIwNRZYPZiHKrTM/AyrGtd0WVVodKM8=
 github.com/hashicorp/consul/sdk v0.11.0 h1:HRzj8YSCln2yGgCumN5CL8lYlD3gBurnervJRJAZyC4=
@@ -750,6 +750,7 @@ github.com/hashicorp/go-uuid v1.0.3 h1:2gKiV6YVmrJ1i2CKKa9obLvRieoRGviZFL26PcT/C
 github.com/hashicorp/go-uuid v1.0.3/go.mod h1:6SBZvOh/SIDV7/2o3Jml5SYk/TvGqwFJ/bN7x4byOro=
 github.com/hashicorp/go-version v1.1.0/go.mod h1:fltr4n8CU8Ke44wwGCBoEymUuxUHl09ZGVZPK5anwXA=
 github.com/hashicorp/go-version v1.2.0/go.mod h1:fltr4n8CU8Ke44wwGCBoEymUuxUHl09ZGVZPK5anwXA=
+github.com/hashicorp/go-version v1.2.1/go.mod h1:fltr4n8CU8Ke44wwGCBoEymUuxUHl09ZGVZPK5anwXA=
 github.com/hashicorp/go-version v1.6.0 h1:feTTfFNnjP967rlCxM/I9g701jU+RN74YKx2mOkIeek=
 github.com/hashicorp/go-version v1.6.0/go.mod h1:fltr4n8CU8Ke44wwGCBoEymUuxUHl09ZGVZPK5anwXA=
 github.com/hashicorp/golang-lru v0.5.0/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ4Ao+sR/qLZy8=
@@ -834,6 +835,10 @@ github.com/jmespath/go-jmespath/internal/testify v1.5.1 h1:shLQSRRSCCPj3f2gpwzGw
 github.com/jmespath/go-jmespath/internal/testify v1.5.1/go.mod h1:L3OGu8Wl2/fWfCI6z80xFu9LTZmf1ZRjMHUOPmWr69U=
 github.com/joefitzgerald/rainbow-reporter v0.1.0/go.mod h1:481CNgqmVHQZzdIbN52CupLJyoVwB10FQ/IQlF1pdL8=
 github.com/jonboulle/clockwork v0.1.0/go.mod h1:Ii8DK3G1RaLaWxj9trq07+26W01tbo22gdxWY5EU2bo=
+github.com/jorgemarey/autopilot v0.4.5 h1:dMVUC5T6wpfY3wZAeoTUxdWovWycE9QLsaBbkLr0YdE=
+github.com/jorgemarey/autopilot v0.4.5/go.mod h1:lpJLdm24yTgb+XpKgF7/KNEMUvo4sXKQsXqA8TL7cw8=
+github.com/jorgemarey/sentinel v0.1.3 h1:FPEs1S2vImxLswNkARS5lsbP7krwODDZjG5ov7ISaFQ=
+github.com/jorgemarey/sentinel v0.1.3/go.mod h1:hb0TSFfCS/HZzuVY05wdS37En1AcaKOubvJdgy/xb2k=
 github.com/joyent/triton-go v0.0.0-20180628001255-830d2b111e62/go.mod h1:U+RSyWxWd04xTqnuOQxnai7XGS2PrPY2cfGoDKtMHjA=
 github.com/joyent/triton-go v0.0.0-20190112182421-51ffac552869 h1:BvV6PYcRz0yGnWXNZrd5wginNT1GfFfPvvWpPbjfFL8=
 github.com/joyent/triton-go v0.0.0-20190112182421-51ffac552869/go.mod h1:U+RSyWxWd04xTqnuOQxnai7XGS2PrPY2cfGoDKtMHjA=
