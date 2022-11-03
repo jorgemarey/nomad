@@ -139,7 +139,7 @@ func (a *ACL) ListPolicies(args *structs.ACLPolicyListRequest, reply *structs.AC
 
 	// If it is not a management token determine the policies that may be listed
 	mgt := acl.IsManagement()
-	var policies map[string]struct{}
+	tokenPolicyNames := set.New[string](0)
 	if !mgt {
 		token, err := a.requestACLToken(args.AuthToken)
 		if err != nil {
@@ -149,10 +149,15 @@ func (a *ACL) ListPolicies(args *structs.ACLPolicyListRequest, reply *structs.AC
 			return structs.ErrTokenNotFound
 		}
 
-		policies = make(map[string]struct{}, len(token.Policies))
-		for _, p := range token.Policies {
-			policies[p] = struct{}{}
+		// Generate a set of policy names. This is initially generated from the
+		// ACL role links.
+		tokenPolicyNames, err = a.policyNamesFromRoleLinks(token.Roles)
+		if err != nil {
+			return err
 		}
+
+		// Add the token policies which are directly referenced into the set.
+		tokenPolicyNames.InsertAll(token.Policies)
 	}
 
 	// Setup the blocking query
@@ -179,9 +184,9 @@ func (a *ACL) ListPolicies(args *structs.ACLPolicyListRequest, reply *structs.AC
 				if raw == nil {
 					break
 				}
-				policy := raw.(*structs.ACLPolicy)
-				if _, ok := policies[policy.Name]; ok || mgt {
-					reply.Policies = append(reply.Policies, policy.Stub())
+				realPolicy := raw.(*structs.ACLPolicy)
+				if mgt || tokenPolicyNames.Contains(realPolicy.Name) {
+					reply.Policies = append(reply.Policies, realPolicy.Stub())
 				}
 			}
 
@@ -233,15 +238,17 @@ func (a *ACL) GetPolicy(args *structs.ACLPolicySpecificRequest, reply *structs.S
 			return structs.ErrTokenNotFound
 		}
 
-		found := false
-		for _, p := range token.Policies {
-			if p == args.Name {
-				found = true
-				break
-			}
+		// Generate a set of policy names. This is initially generated from the
+		// ACL role links.
+		tokenPolicyNames, err := a.policyNamesFromRoleLinks(token.Roles)
+		if err != nil {
+			return err
 		}
 
-		if !found {
+		// Add the token policies which are directly referenced into the set.
+		tokenPolicyNames.InsertAll(token.Policies)
+
+		if !tokenPolicyNames.Contains(args.Name) {
 			return structs.ErrPermissionDenied
 		}
 	}
@@ -310,11 +317,22 @@ func (a *ACL) GetPolicies(args *structs.ACLPolicySetRequest, reply *structs.ACLP
 	if err != nil {
 		return err
 	}
-
 	if token == nil {
 		return structs.ErrTokenNotFound
 	}
-	if token.Type != structs.ACLManagementToken && !token.PolicySubset(args.Names) {
+
+	// Generate a set of policy names. This is initially generated from the
+	// ACL role links.
+	tokenPolicyNames, err := a.policyNamesFromRoleLinks(token.Roles)
+	if err != nil {
+		return err
+	}
+
+	// Add the token policies which are directly referenced into the set.
+	tokenPolicyNames.InsertAll(token.Policies)
+
+	// Ensure the token has enough permissions to query the named policies.
+	if token.Type != structs.ACLManagementToken && !tokenPolicyNames.ContainsAll(args.Names) {
 		return structs.ErrPermissionDenied
 	}
 
@@ -944,8 +962,8 @@ func (a *ACL) UpsertOneTimeToken(args *structs.OneTimeTokenUpsertRequest, reply 
 	defer metrics.MeasureSince(
 		[]string{"nomad", "acl", "upsert_one_time_token"}, time.Now())
 
-	if !ServersMeetMinimumVersion(a.srv.Members(), minOneTimeAuthenticationTokenVersion, false) {
-		return fmt.Errorf("All servers should be running version %v or later to use one-time authentication tokens", minAutopilotVersion)
+	if !ServersMeetMinimumVersion(a.srv.Members(), a.srv.Region(), minOneTimeAuthenticationTokenVersion, false) {
+		return fmt.Errorf("All servers should be running version %v or later to use one-time authentication tokens", minOneTimeAuthenticationTokenVersion)
 	}
 
 	// Snapshot the state
@@ -996,8 +1014,8 @@ func (a *ACL) ExchangeOneTimeToken(args *structs.OneTimeTokenExchangeRequest, re
 	defer metrics.MeasureSince(
 		[]string{"nomad", "acl", "exchange_one_time_token"}, time.Now())
 
-	if !ServersMeetMinimumVersion(a.srv.Members(), minOneTimeAuthenticationTokenVersion, false) {
-		return fmt.Errorf("All servers should be running version %v or later to use one-time authentication tokens", minAutopilotVersion)
+	if !ServersMeetMinimumVersion(a.srv.Members(), a.srv.Region(), minOneTimeAuthenticationTokenVersion, false) {
+		return fmt.Errorf("All servers should be running version %v or later to use one-time authentication tokens", minOneTimeAuthenticationTokenVersion)
 	}
 
 	// Snapshot the state
@@ -1053,8 +1071,8 @@ func (a *ACL) ExpireOneTimeTokens(args *structs.OneTimeTokenExpireRequest, reply
 	defer metrics.MeasureSince(
 		[]string{"nomad", "acl", "expire_one_time_tokens"}, time.Now())
 
-	if !ServersMeetMinimumVersion(a.srv.Members(), minOneTimeAuthenticationTokenVersion, false) {
-		return fmt.Errorf("All servers should be running version %v or later to use one-time authentication tokens", minAutopilotVersion)
+	if !ServersMeetMinimumVersion(a.srv.Members(), a.srv.Region(), minOneTimeAuthenticationTokenVersion, false) {
+		return fmt.Errorf("All servers should be running version %v or later to use one-time authentication tokens", minOneTimeAuthenticationTokenVersion)
 	}
 
 	// Check management level permissions
@@ -1096,6 +1114,13 @@ func (a *ACL) UpsertRoles(
 		return err
 	}
 	defer metrics.MeasureSince([]string{"nomad", "acl", "upsert_roles"}, time.Now())
+
+	// ACL roles can only be used once all servers, in all federated regions
+	// have been upgraded to 1.4.0 or greater.
+	if !ServersMeetMinimumVersion(a.srv.Members(), AllRegions, minACLRoleVersion, false) {
+		return fmt.Errorf("all servers should be running version %v or later to use ACL roles",
+			minACLRoleVersion)
+	}
 
 	// Only tokens with management level permissions can create ACL roles.
 	if acl, err := a.srv.ResolveToken(args.AuthToken); err != nil {
@@ -1233,6 +1258,13 @@ func (a *ACL) DeleteRolesByID(
 	}
 	defer metrics.MeasureSince([]string{"nomad", "acl", "delete_roles"}, time.Now())
 
+	// ACL roles can only be used once all servers, in all federated regions
+	// have been upgraded to 1.4.0 or greater.
+	if !ServersMeetMinimumVersion(a.srv.Members(), AllRegions, minACLRoleVersion, false) {
+		return fmt.Errorf("all servers should be running version %v or later to use ACL roles",
+			minACLRoleVersion)
+	}
+
 	// Only tokens with management level permissions can create ACL roles.
 	if acl, err := a.srv.ResolveToken(args.AuthToken); err != nil {
 		return err
@@ -1352,8 +1384,8 @@ func (a *ACL) ListRoles(
 }
 
 // GetRolesByID is used to get a set of ACL Roles as defined by their ID. This
-// endpoint is used by the replication process and uses a specific response in
-// order to make that process easier.
+// endpoint is used by the replication process and Nomad agent client token
+// resolution.
 func (a *ACL) GetRolesByID(args *structs.ACLRolesByIDRequest, reply *structs.ACLRolesByIDResponse) error {
 
 	// This endpoint is only used by the replication process which is only
@@ -1368,11 +1400,17 @@ func (a *ACL) GetRolesByID(args *structs.ACLRolesByIDRequest, reply *structs.ACL
 	}
 	defer metrics.MeasureSince([]string{"nomad", "acl", "get_roles_id"}, time.Now())
 
-	// Check that the caller has a management token and that ACLs are enabled
-	// properly.
-	if acl, err := a.srv.ResolveToken(args.AuthToken); err != nil {
+	// For client typed tokens, allow them to query any roles associated with
+	// that token. This is used by Nomad agents in client mode which are
+	// resolving the roles to enforce.
+	token, err := a.requestACLToken(args.AuthToken)
+	if err != nil {
 		return err
-	} else if acl == nil || !acl.IsManagement() {
+	}
+	if token == nil {
+		return structs.ErrTokenNotFound
+	}
+	if token.Type != structs.ACLManagementToken && !token.HasRoles(args.ACLRoleIDs) {
 		return structs.ErrPermissionDenied
 	}
 
@@ -1572,4 +1610,60 @@ func (a *ACL) GetRoleByName(
 			return nil
 		},
 	})
+}
+
+// policyNamesFromRoleLinks resolves the policy names which are linked via the
+// passed role links. This is useful when you need to understand what polices
+// an ACL token has access to and need to include role links. The function will
+// not return a nil set object, so callers can use this without having to check
+// this.
+func (a *ACL) policyNamesFromRoleLinks(roleLinks []*structs.ACLTokenRoleLink) (*set.Set[string], error) {
+
+	numRoles := len(roleLinks)
+	policyNameSet := set.New[string](numRoles)
+
+	if numRoles < 1 {
+		return policyNameSet, nil
+	}
+
+	stateSnapshot, err := a.srv.State().Snapshot()
+	if err != nil {
+		return policyNameSet, err
+	}
+
+	// Iterate all the token role links, so we can unpack these and identify
+	// the ACL policies.
+	for _, roleLink := range roleLinks {
+
+		// Any error reading the role means we cannot move forward. We just
+		// ignore any roles that have been detailed but are not within our
+		// state.
+		role, err := stateSnapshot.GetACLRoleByID(nil, roleLink.ID)
+		if err != nil {
+			return policyNameSet, err
+		}
+		if role == nil {
+			continue
+		}
+
+		// Unpack the policies held within the ACL role to form a single list
+		// of ACL policies that this token has available.
+		for _, policyLink := range role.Policies {
+			policyByName, err := stateSnapshot.ACLPolicyByName(nil, policyLink.Name)
+			if err != nil {
+				return policyNameSet, err
+			}
+
+			// Ignore policies that don't exist, since they don't grant any
+			// more privilege.
+			if policyByName == nil {
+				continue
+			}
+
+			// Add the policy to the tracking array.
+			policyNameSet.Insert(policyByName.Name)
+		}
+	}
+
+	return policyNameSet, nil
 }

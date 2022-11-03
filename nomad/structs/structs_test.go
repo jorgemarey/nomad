@@ -1278,9 +1278,6 @@ func TestTaskGroup_Validate(t *testing.T) {
 	expected = `Check check-a invalid: refers to non-existent task task-b`
 	require.Contains(t, err.Error(), expected)
 
-	expected = `Check check-a invalid: only script and gRPC checks should have tasks`
-	require.Contains(t, err.Error(), expected)
-
 	tg = &TaskGroup{
 		Name: "group-a",
 		Services: []*Service{
@@ -6115,33 +6112,6 @@ func TestIsRecoverable(t *testing.T) {
 	if !IsRecoverable(NewRecoverableError(fmt.Errorf(""), true)) {
 		t.Errorf("Explicitly recoverable errors *should* be recoverable")
 	}
-}
-
-func TestACLTokenPolicySubset(t *testing.T) {
-	ci.Parallel(t)
-
-	tk := &ACLToken{
-		Type:     ACLClientToken,
-		Policies: []string{"foo", "bar", "baz"},
-	}
-
-	assert.Equal(t, true, tk.PolicySubset([]string{"foo", "bar", "baz"}))
-	assert.Equal(t, true, tk.PolicySubset([]string{"foo", "bar"}))
-	assert.Equal(t, true, tk.PolicySubset([]string{"foo"}))
-	assert.Equal(t, true, tk.PolicySubset([]string{}))
-	assert.Equal(t, false, tk.PolicySubset([]string{"foo", "bar", "new"}))
-	assert.Equal(t, false, tk.PolicySubset([]string{"new"}))
-
-	tk = &ACLToken{
-		Type: ACLManagementToken,
-	}
-
-	assert.Equal(t, true, tk.PolicySubset([]string{"foo", "bar", "baz"}))
-	assert.Equal(t, true, tk.PolicySubset([]string{"foo", "bar"}))
-	assert.Equal(t, true, tk.PolicySubset([]string{"foo"}))
-	assert.Equal(t, true, tk.PolicySubset([]string{}))
-	assert.Equal(t, true, tk.PolicySubset([]string{"foo", "bar", "new"}))
-	assert.Equal(t, true, tk.PolicySubset([]string{"new"}))
 }
 
 func TestACLTokenSetHash(t *testing.T) {

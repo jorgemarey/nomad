@@ -49,6 +49,16 @@ var minJobRegisterAtomicEvalVersion = version.Must(version.NewVersion("0.12.1"))
 
 var minOneTimeAuthenticationTokenVersion = version.Must(version.NewVersion("1.1.0"))
 
+// minACLRoleVersion is the Nomad version at which the ACL role table was
+// introduced. It forms the minimum version all federated servers must meet
+// before the feature can be used.
+var minACLRoleVersion = version.Must(version.NewVersion("1.4.0"))
+
+// minNomadServiceRegistrationVersion is the Nomad version at which the service
+// registrations table was introduced. It forms the minimum version all local
+// servers must meet before the feature can be used.
+var minNomadServiceRegistrationVersion = version.Must(version.NewVersion("1.3.0"))
+
 // monitorLeadership is used to monitor if we acquire or lose our role
 // as the leader in the Raft cluster. There is some work the leader is
 // expected to do, so we must react to changes
@@ -293,9 +303,6 @@ func (s *Server) establishLeadership(stopCh chan struct{}) error {
 	// Initialize scheduler configuration.
 	schedulerConfig := s.getOrCreateSchedulerConfig()
 
-	// Create the first root key if it doesn't already exist
-	go s.initializeKeyring(stopCh)
-
 	// Initialize the ClusterID
 	_, _ = s.ClusterID()
 	// todo: use cluster ID for stuff, later!
@@ -339,6 +346,9 @@ func (s *Server) establishLeadership(stopCh chan struct{}) error {
 	s.setConsistentReadReady()
 
 	// Further clean ups and follow up that don't block RPC consistency
+
+	// Create the first root key if it doesn't already exist
+	go s.initializeKeyring(stopCh)
 
 	// Restore the periodic dispatcher state
 	if err := s.restorePeriodicDispatcher(); err != nil {
@@ -814,7 +824,7 @@ func (s *Server) schedulePeriodic(stopCh chan struct{}) {
 				s.evalBroker.Enqueue(s.coreJobEval(structs.CoreJobCSIVolumeClaimGC, index))
 			}
 		case <-oneTimeTokenGC.C:
-			if !ServersMeetMinimumVersion(s.Members(), minOneTimeAuthenticationTokenVersion, false) {
+			if !ServersMeetMinimumVersion(s.Members(), s.Region(), minOneTimeAuthenticationTokenVersion, false) {
 				continue
 			}
 
@@ -1922,7 +1932,7 @@ func (s *Server) getOrCreateAutopilotConfig() *structs.AutopilotConfig {
 		return config
 	}
 
-	if !ServersMeetMinimumVersion(s.Members(), minAutopilotVersion, false) {
+	if !ServersMeetMinimumVersion(s.Members(), AllRegions, minAutopilotVersion, false) {
 		s.logger.Named("autopilot").Warn("can't initialize until all servers are above minimum version", "min_version", minAutopilotVersion)
 		return nil
 	}
@@ -1949,7 +1959,7 @@ func (s *Server) getOrCreateSchedulerConfig() *structs.SchedulerConfiguration {
 	if config != nil {
 		return config
 	}
-	if !ServersMeetMinimumVersion(s.Members(), minSchedulerConfigVersion, false) {
+	if !ServersMeetMinimumVersion(s.Members(), s.Region(), minSchedulerConfigVersion, false) {
 		s.logger.Named("core").Warn("can't initialize scheduler config until all servers are above minimum version", "min_version", minSchedulerConfigVersion)
 		return nil
 	}
@@ -1990,11 +2000,12 @@ func (s *Server) initializeKeyring(stopCh <-chan struct{}) {
 			return
 		default:
 		}
-		if ServersMeetMinimumVersion(s.serf.Members(), minVersionKeyring, true) {
+
+		if ServersMeetMinimumVersion(s.serf.Members(), s.Region(), minVersionKeyring, true) {
 			break
 		}
 	}
-	// we might have lost leadershuip during the version check
+	// we might have lost leadership during the version check
 	if !s.IsLeader() {
 		return
 	}
@@ -2026,7 +2037,7 @@ func (s *Server) initializeKeyring(stopCh <-chan struct{}) {
 }
 
 func (s *Server) generateClusterID() (string, error) {
-	if !ServersMeetMinimumVersion(s.Members(), minClusterIDVersion, false) {
+	if !ServersMeetMinimumVersion(s.Members(), AllRegions, minClusterIDVersion, false) {
 		s.logger.Named("core").Warn("cannot initialize cluster ID until all servers are above minimum version", "min_version", minClusterIDVersion)
 		return "", fmt.Errorf("cluster ID cannot be created until all servers are above minimum version %s", minClusterIDVersion)
 	}

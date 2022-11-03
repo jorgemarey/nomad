@@ -781,6 +781,7 @@ type JobDispatchRequest struct {
 	Payload []byte
 	Meta    map[string]string
 	WriteRequest
+	IdPrefixTemplate string
 }
 
 // JobValidateRequest is used to validate a job
@@ -5408,8 +5409,13 @@ func (d *ParameterizedJobConfig) Copy() *ParameterizedJobConfig {
 
 // DispatchedID returns an ID appropriate for a job dispatched against a
 // particular parameterized job
-func DispatchedID(templateID string, t time.Time) string {
+func DispatchedID(templateID, idPrefixTemplate string, t time.Time) string {
 	u := uuid.Generate()[:8]
+
+	if idPrefixTemplate != "" {
+		return fmt.Sprintf("%s%s%s-%d-%s", templateID, DispatchLaunchSuffix, idPrefixTemplate, t.Unix(), u)
+	}
+
 	return fmt.Sprintf("%s%s%d-%s", templateID, DispatchLaunchSuffix, t.Unix(), u)
 }
 
@@ -6716,10 +6722,6 @@ func (tg *TaskGroup) validateServices() error {
 
 		for _, check := range service.Checks {
 			if check.TaskName != "" {
-				if check.Type != ServiceCheckScript && check.Type != ServiceCheckGRPC {
-					mErr.Errors = append(mErr.Errors,
-						fmt.Errorf("Check %s invalid: only script and gRPC checks should have tasks", check.Name))
-				}
 				if check.AddressMode == AddressModeDriver {
 					mErr.Errors = append(mErr.Errors, fmt.Errorf("Check %q invalid: cannot use address_mode=\"driver\", only checks defined in a \"task\" service block can use this mode", service.Name))
 				}
@@ -12153,24 +12155,6 @@ func (a *ACLToken) Stub() *ACLTokenListStub {
 		CreateIndex:    a.CreateIndex,
 		ModifyIndex:    a.ModifyIndex,
 	}
-}
-
-// PolicySubset checks if a given set of policies is a subset of the token
-func (a *ACLToken) PolicySubset(policies []string) bool {
-	// Hot-path the management tokens, superset of all policies.
-	if a.Type == ACLManagementToken {
-		return true
-	}
-	associatedPolicies := make(map[string]struct{}, len(a.Policies))
-	for _, policy := range a.Policies {
-		associatedPolicies[policy] = struct{}{}
-	}
-	for _, policy := range policies {
-		if _, ok := associatedPolicies[policy]; !ok {
-			return false
-		}
-	}
-	return true
 }
 
 // ACLTokenListRequest is used to request a list of tokens

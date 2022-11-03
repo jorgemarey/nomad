@@ -105,10 +105,8 @@ func (e *Encrypter) loadKeystore() error {
 // root key, and returns the cipher text (including the nonce), and
 // the key ID used to encrypt it
 func (e *Encrypter) Encrypt(cleartext []byte) ([]byte, string, error) {
-	e.lock.RLock()
-	defer e.lock.RUnlock()
 
-	keyset, err := e.activeKeySetLocked()
+	keyset, err := e.activeKeySet()
 	if err != nil {
 		return nil, "", err
 	}
@@ -155,12 +153,26 @@ const keyIDHeader = "kid"
 // SignClaims signs the identity claim for the task and returns an
 // encoded JWT with both the claim and its signature
 func (e *Encrypter) SignClaims(claim *structs.IdentityClaims) (string, error) {
-	e.lock.RLock()
-	defer e.lock.RUnlock()
 
-	keyset, err := e.activeKeySetLocked()
+	// If a key is rotated immediately following a leader election, plans that
+	// are in-flight may get signed before the new leader has the key. Allow for
+	// a short timeout-and-retry to avoid rejecting plans
+	keyset, err := e.activeKeySet()
 	if err != nil {
-		return "", err
+		ctx, cancel := context.WithTimeout(e.srv.shutdownCtx, 5*time.Second)
+		defer cancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return "", err
+			default:
+				time.Sleep(50 * time.Millisecond)
+				keyset, err = e.activeKeySet()
+				if keyset != nil {
+					break
+				}
+			}
+		}
 	}
 
 	token := jwt.NewWithClaims(&jwt.SigningMethodEd25519{}, claim)
@@ -177,8 +189,6 @@ func (e *Encrypter) SignClaims(claim *structs.IdentityClaims) (string, error) {
 // VerifyClaim accepts a previously-signed encoded claim and validates
 // it before returning the claim
 func (e *Encrypter) VerifyClaim(tokenString string) (*structs.IdentityClaims, error) {
-	e.lock.RLock()
-	defer e.lock.RUnlock()
 
 	token, err := jwt.ParseWithClaims(tokenString, &structs.IdentityClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodEd25519); !ok {
@@ -189,6 +199,9 @@ func (e *Encrypter) VerifyClaim(tokenString string) (*structs.IdentityClaims, er
 			return nil, fmt.Errorf("missing key ID header")
 		}
 		keyID := raw.(string)
+
+		e.lock.RLock()
+		defer e.lock.RUnlock()
 		keyset, err := e.keysetByIDLocked(keyID)
 		if err != nil {
 			return nil, err
@@ -271,7 +284,7 @@ func (e *Encrypter) GetKey(keyID string) ([]byte, error) {
 // activeKeySetLocked returns the keyset that belongs to the key marked as
 // active in the state store (so that it's consistent with raft). The
 // called must read-lock the keyring
-func (e *Encrypter) activeKeySetLocked() (*keyset, error) {
+func (e *Encrypter) activeKeySet() (*keyset, error) {
 	store := e.srv.fsm.State()
 	keyMeta, err := store.GetActiveRootKeyMeta(nil)
 	if err != nil {
@@ -280,7 +293,8 @@ func (e *Encrypter) activeKeySetLocked() (*keyset, error) {
 	if keyMeta == nil {
 		return nil, fmt.Errorf("keyring has not been initialized yet")
 	}
-
+	e.lock.RLock()
+	defer e.lock.RUnlock()
 	return e.keysetByIDLocked(keyMeta.KeyID)
 }
 
@@ -435,7 +449,10 @@ START:
 			return
 		default:
 			// Rate limit how often we attempt replication
-			limiter.Wait(ctx)
+			err := limiter.Wait(ctx)
+			if err != nil {
+				goto ERR_WAIT // rate limit exceeded
+			}
 
 			ws := store.NewWatchSet()
 			iter, err := store.RootKeyMetas(ws)
@@ -461,7 +478,8 @@ START:
 				getReq := &structs.KeyringGetRootKeyRequest{
 					KeyID: keyID,
 					QueryOptions: structs.QueryOptions{
-						Region: krr.srv.config.Region,
+						Region:        krr.srv.config.Region,
+						MinQueryIndex: keyMeta.ModifyIndex - 1,
 					},
 				}
 				getResp := &structs.KeyringGetRootKeyResponse{}
@@ -474,12 +492,12 @@ START:
 					// new leader has not yet replicated the key from
 					// the old leader before the transition. Ask all
 					// the other servers if they have it.
-					krr.logger.Debug("failed to fetch key from current leader",
+					krr.logger.Warn("failed to fetch key from current leader, trying peers",
 						"key", keyID, "error", err)
 					getReq.AllowStale = true
 					for _, peer := range krr.getAllPeers() {
 						err = krr.srv.forwardServer(peer, "Keyring.Get", getReq, getResp)
-						if err == nil {
+						if err == nil && getResp.Key != nil {
 							break
 						}
 					}
@@ -494,7 +512,7 @@ START:
 					krr.logger.Error("failed to add key", "key", keyID, "error", err)
 					goto ERR_WAIT
 				}
-				krr.logger.Trace("added key", "key", keyID)
+				krr.logger.Info("added key", "key", keyID)
 			}
 		}
 	}
