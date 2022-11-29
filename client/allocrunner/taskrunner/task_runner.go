@@ -424,6 +424,10 @@ func NewTaskRunner(config *Config) (*TaskRunner, error) {
 		return nil, err
 	}
 
+	// Use the client secret only as the initial value; the identity hook will
+	// update this with a workload identity if one is available
+	tr.setNomadToken(config.ClientConfig.Node.SecretID)
+
 	// Initialize the runners hooks. Must come after initDriver so hooks
 	// can use tr.driverCapabilities
 	tr.initHooks()
@@ -559,7 +563,8 @@ func (tr *TaskRunner) Run() {
 	// Set the initial task state.
 	tr.stateUpdater.TaskStateUpdated()
 
-	timer, stop := helper.NewSafeTimer(0) // timer duration calculated JIT
+	// start with a stopped timer; actual restart delay computed later
+	timer, stop := helper.NewStoppedTimer()
 	defer stop()
 
 MAIN:

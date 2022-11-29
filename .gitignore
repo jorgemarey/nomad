@@ -131,4 +131,7 @@ e2e/remotetasks/input/ecs.vars
 # local terraform overrides
 *.auto.tfvars
 
+# Tools files
+tools/missing/missing
+
 *.diff

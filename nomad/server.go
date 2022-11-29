@@ -206,6 +206,9 @@ type Server struct {
 	// transitions to collide and create inconsistent state.
 	brokerLock sync.Mutex
 
+	// reapCancelableEvalsCh is used to signal the cancelable evals reaper to wake up
+	reapCancelableEvalsCh chan struct{}
+
 	// deploymentWatcher is used to watch deployments and their allocations and
 	// make the required calls to continue to transition the deployment.
 	deploymentWatcher *deploymentwatcher.Watcher
@@ -362,6 +365,7 @@ func NewServer(config *Config, consulCatalog consul.CatalogAPI, consulConfigEntr
 		readyForConsistentReads: &atomic.Bool{},
 		eventCh:                 make(chan serf.Event, 256),
 		evalBroker:              evalBroker,
+		reapCancelableEvalsCh:   make(chan struct{}),
 		blockedEvals:            NewBlockedEvals(evalBroker, logger),
 		rpcTLS:                  incomingTLS,
 		aclCache:                aclCache,
@@ -1517,6 +1521,7 @@ func (s *Server) setupSerf(conf *serf.Config, ch chan serf.Event, path string) (
 	conf.Tags["region"] = s.config.Region
 	conf.Tags["dc"] = s.config.Datacenter
 	conf.Tags["build"] = s.config.Build
+	conf.Tags["revision"] = s.config.Revision
 	conf.Tags["vsn"] = deprecatedAPIMajorVersionStr // for Nomad <= v1.2 compat
 	conf.Tags["raft_vsn"] = fmt.Sprintf("%d", s.config.RaftConfig.ProtocolVersion)
 	conf.Tags["id"] = s.config.NodeID

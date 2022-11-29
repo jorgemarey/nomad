@@ -701,6 +701,12 @@ type JobSpecificRequest struct {
 // JobListRequest is used to parameterize a list request
 type JobListRequest struct {
 	QueryOptions
+	Fields *JobStubFields
+}
+
+// Stub returns a summarized version of the job
+type JobStubFields struct {
+	Meta bool
 }
 
 // JobPlanRequest is used for the Job.Plan endpoint to trigger a dry-run
@@ -853,8 +859,14 @@ type EvalUpdateRequest struct {
 // Eval.Delete use the same Raft message when performing deletes so we do not
 // need more Raft message types.
 type EvalReapRequest struct {
-	Evals  []string
-	Allocs []string
+	Evals  []string // slice of Evaluation IDs
+	Allocs []string // slice of Allocation IDs
+
+	// Filter specifies the go-bexpr filter expression to be used for
+	// filtering the data prior to returning a response
+	Filter    string
+	PerPage   int32
+	NextToken string
 
 	// UserInitiated tracks whether this reap request is the result of an
 	// operator request. If this is true, the FSM needs to ensure the eval
@@ -903,6 +915,11 @@ func (req *EvalListRequest) ShouldBeFiltered(e *Evaluation) bool {
 		return true
 	}
 	return false
+}
+
+// EvalCountRequest is used to count evaluations
+type EvalCountRequest struct {
+	QueryOptions
 }
 
 // PlanRequest is used to submit an allocation plan to the leader
@@ -1602,6 +1619,12 @@ type DeploymentListResponse struct {
 // EvalListResponse is used for a list request
 type EvalListResponse struct {
 	Evaluations []*Evaluation
+	QueryMeta
+}
+
+// EvalCountResponse is used for a count request
+type EvalCountResponse struct {
+	Count int
 	QueryMeta
 }
 
@@ -4529,8 +4552,8 @@ func (j *Job) HasUpdateStrategy() bool {
 }
 
 // Stub is used to return a summary of the job
-func (j *Job) Stub(summary *JobSummary) *JobListStub {
-	return &JobListStub{
+func (j *Job) Stub(summary *JobSummary, fields *JobStubFields) *JobListStub {
+	jobStub := &JobListStub{
 		ID:                j.ID,
 		Namespace:         j.Namespace,
 		ParentID:          j.ParentID,
@@ -4550,6 +4573,14 @@ func (j *Job) Stub(summary *JobSummary) *JobListStub {
 		SubmitTime:        j.SubmitTime,
 		JobSummary:        summary,
 	}
+
+	if fields != nil {
+		if fields.Meta {
+			jobStub.Meta = j.Meta
+		}
+	}
+
+	return jobStub
 }
 
 // IsPeriodic returns whether a job is periodic.
@@ -4755,6 +4786,7 @@ type JobListStub struct {
 	ModifyIndex       uint64
 	JobModifyIndex    uint64
 	SubmitTime        int64
+	Meta              map[string]string `json:",omitempty"`
 }
 
 // JobSummary summarizes the state of the allocations of a job
@@ -7765,6 +7797,10 @@ type Template struct {
 
 	// WaitConfig is used to override the global WaitConfig on a per-template basis
 	Wait *WaitConfig
+
+	// ErrMissingKey is used to control how the template behaves when attempting
+	// to index a struct or map key that does not exist.
+	ErrMissingKey bool
 }
 
 // DefaultTemplate returns a default template.
@@ -9763,10 +9799,13 @@ type Allocation struct {
 	// to stop running because it got preempted
 	PreemptedByAllocation string
 
-	// SignedIdentities is a map of task names to signed
-	// identity/capability claim tokens for those tasks. If needed, it
-	// is populated in the plan applier
+	// SignedIdentities is a map of task names to signed identity/capability
+	// claim tokens for those tasks. If needed, it is populated in the plan
+	// applier.
 	SignedIdentities map[string]string `json:"-"`
+
+	// SigningKeyID is the key used to sign the SignedIdentities field.
+	SigningKeyID string
 
 	// Raft Indexes
 	CreateIndex uint64
@@ -10439,27 +10478,24 @@ func (a *Allocation) LastUnknown() time.Time {
 	return lastUnknown.UTC()
 }
 
-// Reconnected determines whether a reconnect event has occurred for any task
-// and whether that event occurred within the allowable duration specified by MaxClientDisconnect.
-func (a *Allocation) Reconnected() (bool, bool) {
-	var lastReconnect time.Time
-	for _, taskState := range a.TaskStates {
-		for _, taskEvent := range taskState.Events {
-			if taskEvent.Type != TaskClientReconnected {
-				continue
-			}
-			eventTime := time.Unix(0, taskEvent.Time).UTC()
-			if lastReconnect.IsZero() || lastReconnect.Before(eventTime) {
-				lastReconnect = eventTime
-			}
+// NeedsToReconnect returns true if the last known ClientStatus value is
+// "unknown" and so the allocation did not reconnect yet.
+func (a *Allocation) NeedsToReconnect() bool {
+	disconnected := false
+
+	// AllocStates are appended to the list and we only need the latest
+	// ClientStatus transition, so traverse from the end until we find one.
+	for i := len(a.AllocStates) - 1; i >= 0; i-- {
+		s := a.AllocStates[i]
+		if s.Field != AllocStateFieldClientStatus {
+			continue
 		}
+
+		disconnected = s.Value == AllocClientStatusUnknown
+		break
 	}
 
-	if lastReconnect.IsZero() {
-		return false, false
-	}
-
-	return true, a.Expired(lastReconnect)
+	return disconnected
 }
 
 func (a *Allocation) ToIdentityClaims(job *Job) *IdentityClaims {

@@ -37,6 +37,16 @@ func (s *HTTPServer) jobListRequest(resp http.ResponseWriter, req *http.Request)
 		return nil, nil
 	}
 
+	args.Fields = &structs.JobStubFields{}
+	// Parse meta query param
+	jobMeta, err := parseBool(req, "meta")
+	if err != nil {
+		return nil, err
+	}
+	if jobMeta != nil {
+		args.Fields.Meta = *jobMeta
+	}
+
 	var out structs.JobListResponse
 	if err := s.agent.RPC("Job.List", &args, &out); err != nil {
 		return nil, err
@@ -1212,21 +1222,22 @@ func ApiTaskToStructsTask(job *structs.Job, group *structs.TaskGroup,
 		for _, template := range apiTask.Templates {
 			structsTask.Templates = append(structsTask.Templates,
 				&structs.Template{
-					SourcePath:   *template.SourcePath,
-					DestPath:     *template.DestPath,
-					EmbeddedTmpl: *template.EmbeddedTmpl,
-					ChangeMode:   *template.ChangeMode,
-					ChangeSignal: *template.ChangeSignal,
-					ChangeScript: apiChangeScriptToStructsChangeScript(template.ChangeScript),
-					Splay:        *template.Splay,
-					Perms:        *template.Perms,
-					Uid:          template.Uid,
-					Gid:          template.Gid,
-					LeftDelim:    *template.LeftDelim,
-					RightDelim:   *template.RightDelim,
-					Envvars:      *template.Envvars,
-					VaultGrace:   *template.VaultGrace,
-					Wait:         apiWaitConfigToStructsWaitConfig(template.Wait),
+					SourcePath:    *template.SourcePath,
+					DestPath:      *template.DestPath,
+					EmbeddedTmpl:  *template.EmbeddedTmpl,
+					ChangeMode:    *template.ChangeMode,
+					ChangeSignal:  *template.ChangeSignal,
+					ChangeScript:  apiChangeScriptToStructsChangeScript(template.ChangeScript),
+					Splay:         *template.Splay,
+					Perms:         *template.Perms,
+					Uid:           template.Uid,
+					Gid:           template.Gid,
+					LeftDelim:     *template.LeftDelim,
+					RightDelim:    *template.RightDelim,
+					Envvars:       *template.Envvars,
+					VaultGrace:    *template.VaultGrace,
+					Wait:          apiWaitConfigToStructsWaitConfig(template.Wait),
+					ErrMissingKey: *template.ErrMissingKey,
 				})
 		}
 	}
