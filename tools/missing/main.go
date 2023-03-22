@@ -201,4 +201,3 @@ func inCode(root string) ([]string, error) {
 	sort.Strings(packages)
 	return packages, nil
 }
-

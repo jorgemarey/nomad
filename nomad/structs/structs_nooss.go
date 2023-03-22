@@ -84,7 +84,7 @@ func (s *SentinelPolicy) SetHash() []byte {
 
 func (s *SentinelPolicy) Validate() error {
 	var mErr multierror.Error
-	if !validPolicyName.MatchString(s.Name) {
+	if !ValidPolicyName.MatchString(s.Name) {
 		err := fmt.Errorf("invalid name %q", s.Name)
 		mErr.Errors = append(mErr.Errors, err)
 	}

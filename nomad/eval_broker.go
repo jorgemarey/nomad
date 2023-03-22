@@ -127,10 +127,6 @@ type ReadyEvaluations []*structs.Evaluation
 // implement the container/heap interface so that this is a priority queue.
 type PendingEvaluations []*structs.Evaluation
 
-// BlockedEvaluations is a list of blocked evaluations for a given job. We
-// implement the container/heap interface so that this is a priority queue.
-type BlockedEvaluations []*structs.Evaluation
-
 // NewEvalBroker creates a new evaluation broker. This is parameterized
 // with the timeout used for messages that are not acknowledged before we
 // assume a Nack and attempt to redeliver as well as the deliveryLimit
@@ -1027,59 +1023,6 @@ func (p *PendingEvaluations) MarkForCancel() []*structs.Evaluation {
 	// for each eval we remove. Because we expect to have at most one remaining,
 	// we'll just create a new heap.
 	retain := PendingEvaluations{(heap.Pop(p)).(*structs.Evaluation)}
-
-	cancelable := make([]*structs.Evaluation, len(*p))
-	copy(cancelable, *p)
-
-	*p = retain
-	return cancelable
-}
-
-// Len is for the sorting interface
-func (p BlockedEvaluations) Len() int {
-	return len(p)
-}
-
-// Less is for the sorting interface. We flip the check
-// so that the "min" in the min-heap is the element with the
-// highest priority or highest modify index
-func (p BlockedEvaluations) Less(i, j int) bool {
-	if p[i].Priority != p[j].Priority {
-		return !(p[i].Priority < p[j].Priority)
-	}
-	return !(p[i].ModifyIndex < p[j].ModifyIndex)
-}
-
-// Swap is for the sorting interface
-func (p BlockedEvaluations) Swap(i, j int) {
-	p[i], p[j] = p[j], p[i]
-}
-
-// Push implements the heap interface and is used to add a new evaluation to the slice
-func (p *BlockedEvaluations) Push(e interface{}) {
-	*p = append(*p, e.(*structs.Evaluation))
-}
-
-// Pop implements the heap interface and is used to remove an evaluation from the slice
-func (p *BlockedEvaluations) Pop() interface{} {
-	n := len(*p)
-	e := (*p)[n-1]
-	(*p)[n-1] = nil
-	*p = (*p)[:n-1]
-	return e
-}
-
-// MarkForCancel is used to clear the blocked list of all but the one with the
-// highest modify index and highest priority. It returns a slice of cancelable
-// evals so that Eval.Ack RPCs can write batched raft entries to cancel
-// them. This must be called inside the broker's lock.
-func (p *BlockedEvaluations) MarkForCancel() []*structs.Evaluation {
-
-	// In pathological cases, we can have a large number of blocked evals but
-	// will want to cancel most of them. Using heap.Remove requires we re-sort
-	// for each eval we remove. Because we expect to have at most one remaining,
-	// we'll just create a new heap.
-	retain := BlockedEvaluations{(heap.Pop(p)).(*structs.Evaluation)}
 
 	cancelable := make([]*structs.Evaluation, len(*p))
 	copy(cancelable, *p)

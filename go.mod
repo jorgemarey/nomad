@@ -24,7 +24,11 @@ require (
 	github.com/coreos/go-iptables v0.6.0
 	github.com/creack/pty v1.1.18
 	github.com/docker/cli v23.0.1+incompatible
+	github.com/docker/distribution v2.8.1+incompatible
+	github.com/docker/docker v20.10.23+incompatible
+	github.com/docker/go-units v0.5.0
 	github.com/docker/libnetwork v0.8.0-dev.2.0.20210525090646-64b7a4574d14
+	github.com/dustin/go-humanize v1.0.0
 	github.com/elazarl/go-bindata-assetfs v1.0.1-0.20200509193318-234c15e7648f
 	github.com/fsouza/go-dockerclient v1.7.9
 	github.com/golang/protobuf v1.5.2
@@ -282,9 +286,4 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	kernel.org/pub/linux/libs/security/libcap/psx v1.2.66 // indirect
-)
-
-require (
-	golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4 // indirect
-	golang.org/x/tools v0.1.12 // indirect
 )

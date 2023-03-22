@@ -19,4 +19,3 @@ func Test_isCoveredOne(t *testing.T) {
 	try("foo/...", true)
 	try("abc/...", false)
 }
-
