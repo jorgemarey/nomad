@@ -154,7 +154,7 @@ func (j *Job) multiregionStart(args *structs.JobRegisterRequest, reply *structs.
 			},
 		}
 		var out structs.DeploymentUpdateResponse
-		if err := j.srv.staticEndpoints.Deployment.Run(req, &out); err != nil {
+		if err := j.srv.deploymentWatcher.RunDeployment(req, &out); err != nil {
 			return err
 		}
 	}
