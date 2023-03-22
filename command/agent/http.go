@@ -969,7 +969,7 @@ func parseInt(req *http.Request, field string) (*int, error) {
 // parseToken is used to parse the X-Nomad-Token param
 func (s *HTTPServer) parseToken(req *http.Request, token *string) {
 	if other := req.Header.Get("X-Nomad-Token"); other != "" {
-		*token = other
+		*token = strings.TrimSpace(other)
 		return
 	}
 
@@ -1122,7 +1122,7 @@ func (a *authMiddleware) ServeHTTP(resp http.ResponseWriter, req *http.Request) 
 	if err := a.srv.agent.RPC("ACL.WhoAmI", &args, &reply); err != nil {
 		// When ACLs are enabled, WhoAmI returns ErrPermissionDenied on bad
 		// credentials, so convert it to a Forbidden response code.
-		if err.Error() == structs.ErrPermissionDenied.Error() {
+		if strings.HasSuffix(err.Error(), structs.ErrPermissionDenied.Error()) {
 			a.srv.logger.Debug("Failed to authenticated Task API request", "method", req.Method, "url", req.URL)
 			resp.WriteHeader(http.StatusForbidden)
 			resp.Write([]byte(http.StatusText(http.StatusForbidden)))
