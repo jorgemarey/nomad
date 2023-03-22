@@ -14,7 +14,7 @@ type EnterpriseEndpoints struct {
 // are none in oss
 func NewEnterpriseEndpoints(s *Server, ctx *RPCContext) *EnterpriseEndpoints {
 	return &EnterpriseEndpoints{
-		Sentinel: &Sentinel{s},
+		Sentinel: &Sentinel{srv: s, ctx: ctx, logger: s.logger.Named("sentinel")},
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	metrics "github.com/armon/go-metrics"
+	"github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
 	"github.com/hashicorp/nomad/nomad/state"
 	"github.com/hashicorp/nomad/nomad/structs"
@@ -12,7 +13,9 @@ import (
 
 // Sentinel endpoint is used for manipulating Sentinel policies
 type Sentinel struct {
-	srv *Server
+	srv    *Server
+	ctx    *RPCContext
+	logger hclog.Logger
 }
 
 // UpsertPolicies is used to create or update a set of policies
@@ -22,9 +25,13 @@ func (s *Sentinel) UpsertPolicies(args *structs.SentinelPolicyUpsertRequest, rep
 		return aclDisabled
 	}
 	args.Region = s.srv.config.AuthoritativeRegion
-
+	authErr := s.srv.Authenticate(s.ctx, args)
 	if done, err := s.srv.forward("Sentinel.UpsertPolicies", args, args, reply); done {
 		return err
+	}
+	s.srv.MeasureRPCRate("sentinel", structs.RateMetricWrite, args)
+	if authErr != nil {
+		return structs.ErrPermissionDenied
 	}
 	defer metrics.MeasureSince([]string{"nomad", "sentinel", "upsert_policies"}, time.Now())
 
@@ -66,9 +73,13 @@ func (s *Sentinel) DeletePolicies(args *structs.SentinelPolicyDeleteRequest, rep
 		return aclDisabled
 	}
 	args.Region = s.srv.config.AuthoritativeRegion
-
+	authErr := s.srv.Authenticate(s.ctx, args)
 	if done, err := s.srv.forward("Sentinel.DeletePolicies", args, args, reply); done {
 		return err
+	}
+	s.srv.MeasureRPCRate("sentinel", structs.RateMetricWrite, args)
+	if authErr != nil {
+		return structs.ErrPermissionDenied
 	}
 	defer metrics.MeasureSince([]string{"nomad", "sentinel", "delete_policies"}, time.Now())
 
@@ -100,8 +111,13 @@ func (s *Sentinel) ListPolicies(args *structs.SentinelPolicyListRequest, reply *
 	if !s.srv.config.ACLEnabled {
 		return aclDisabled
 	}
+	authErr := s.srv.Authenticate(s.ctx, args)
 	if done, err := s.srv.forward("Sentinel.ListPolicies", args, args, reply); done {
 		return err
+	}
+	s.srv.MeasureRPCRate("sentinel", structs.RateMetricList, args)
+	if authErr != nil {
+		return structs.ErrPermissionDenied
 	}
 	defer metrics.MeasureSince([]string{"nomad", "sentinel", "list_policies"}, time.Now())
 
@@ -162,8 +178,13 @@ func (s *Sentinel) GetPolicy(args *structs.SentinelPolicySpecificRequest, reply 
 	if !s.srv.config.ACLEnabled {
 		return aclDisabled
 	}
+	authErr := s.srv.Authenticate(s.ctx, args)
 	if done, err := s.srv.forward("Sentinel.GetPolicy", args, args, reply); done {
 		return err
+	}
+	s.srv.MeasureRPCRate("sentinel", structs.RateMetricRead, args)
+	if authErr != nil {
+		return structs.ErrPermissionDenied
 	}
 	defer metrics.MeasureSince([]string{"nomad", "sentinel", "get_policy"}, time.Now())
 
@@ -207,8 +228,13 @@ func (s *Sentinel) GetPolicies(args *structs.SentinelPolicySetRequest, reply *st
 	if !s.srv.config.ACLEnabled {
 		return aclDisabled
 	}
+	authErr := s.srv.Authenticate(s.ctx, args)
 	if done, err := s.srv.forward("Sentinel.GetPolicies", args, args, reply); done {
 		return err
+	}
+	s.srv.MeasureRPCRate("sentinel", structs.RateMetricList, args)
+	if authErr != nil {
+		return structs.ErrPermissionDenied
 	}
 	defer metrics.MeasureSince([]string{"nomad", "sentinel", "get_policies"}, time.Now())
 

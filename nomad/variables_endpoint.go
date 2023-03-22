@@ -513,8 +513,6 @@ func (sv *Variables) handleMixedAuthEndpoint(args structs.QueryOptions, policy, 
 	if err != nil {
 		return aclObj, claims, err
 	}
-	return nil, claims, nil
-}
 
 	return aclObj, claims, nil
 }
