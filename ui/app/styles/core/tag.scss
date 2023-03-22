@@ -82,12 +82,11 @@
     width: 1rem;
   }
 
-
+  
   $tagPadding: 0.75em;
 
   &.canary {
     overflow: hidden;
-
     &:before {
       content: "Canary";
       background-color: $blue-light;

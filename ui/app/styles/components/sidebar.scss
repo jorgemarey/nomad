@@ -14,12 +14,10 @@ $subNavOffset: 49px;
   transition-duration: 150ms;
   transition-timing-function: ease;
   z-index: $z-modal;
-
   &.open {
     transform: translateX(0%);
     box-shadow: 6px 6px rgba(0, 0, 0, 0.06), 0px 12px 16px rgba(0, 0, 0, 0.2);
   }
-
   &.has-subnav {
     top: calc($topNavOffset + $subNavOffset);
   }
@@ -82,7 +80,6 @@ $subNavOffset: 49px;
   &.has-events {
     grid-template-rows: auto minmax(auto, 25%) 1fr;
   }
-
   header {
     display: grid;
     justify-content: left;
@@ -121,19 +118,17 @@ $subNavOffset: 49px;
       &.running:before {
         background-color: $green;
       }
-
       &.dead:before {
         background-color: $red;
       }
-
       &.pending:before {
         background-color: $grey-lighter;
       }
     }
   }
 
-  &>.task-events,
-  &>.task-log {
+  & > .task-events,
+  & > .task-log {
     overflow: hidden;
   }
 
@@ -141,11 +136,9 @@ $subNavOffset: 49px;
   .task-log {
     display: grid;
     grid-template-rows: auto 1fr;
-
     .boxed-section-body {
       overflow: auto;
     }
-
     .notification {
       grid-row: -1;
     }
