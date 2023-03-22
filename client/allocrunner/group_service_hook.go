@@ -235,7 +235,7 @@ func (h *groupServiceHook) Postrun() error {
 	return nil
 }
 
-// deregister services from Consul.
+// deregister services from Consul/Nomad service provider.
 func (h *groupServiceHook) deregister() {
 	if len(h.services) > 0 {
 		workloadServices := h.getWorkloadServices()

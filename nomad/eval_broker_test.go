@@ -9,14 +9,16 @@ import (
 	"time"
 
 	msgpackrpc "github.com/hashicorp/net-rpc-msgpackrpc"
+	"github.com/shoenig/test"
+	"github.com/shoenig/test/must"
+	"github.com/shoenig/test/wait"
+	"github.com/stretchr/testify/require"
+
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/state"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/testutil"
-	"github.com/shoenig/test"
-	"github.com/shoenig/test/must"
-	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -434,7 +436,7 @@ func TestEvalBroker_Serialize_DuplicateJobID(t *testing.T) {
 	}
 
 	must.Eq(t, BrokerStats{TotalReady: 2, TotalUnacked: 0,
-		TotalBlocked: 5, TotalCancelable: 0}, getStats())
+		TotalPending: 5, TotalCancelable: 0}, getStats())
 
 	// Dequeue should get 1st eval
 	out, token, err := b.Dequeue(defaultSched, time.Second)
@@ -442,7 +444,7 @@ func TestEvalBroker_Serialize_DuplicateJobID(t *testing.T) {
 	must.Eq(t, out, eval1, must.Sprint("expected 1st eval"))
 
 	must.Eq(t, BrokerStats{TotalReady: 1, TotalUnacked: 1,
-		TotalBlocked: 5, TotalCancelable: 0}, getStats())
+		TotalPending: 5, TotalCancelable: 0}, getStats())
 
 	// Current wait index should be 4 but Ack to exercise behavior
 	// when worker's Eval.getWaitIndex gets a stale index
@@ -450,25 +452,25 @@ func TestEvalBroker_Serialize_DuplicateJobID(t *testing.T) {
 	must.NoError(t, err)
 
 	must.Eq(t, BrokerStats{TotalReady: 2, TotalUnacked: 0,
-		TotalBlocked: 2, TotalCancelable: 2}, getStats())
+		TotalPending: 2, TotalCancelable: 2}, getStats())
 
 	// eval4 and eval5 are ready
-	// eval6 and eval7 are blocked
+	// eval6 and eval7 are pending
 	// Dequeue should get 4th eval
 	out, token, err = b.Dequeue(defaultSched, time.Second)
 	must.NoError(t, err)
 	must.Eq(t, out, eval4, must.Sprint("expected 4th eval"))
 
 	must.Eq(t, BrokerStats{TotalReady: 1, TotalUnacked: 1,
-		TotalBlocked: 2, TotalCancelable: 2}, getStats())
+		TotalPending: 2, TotalCancelable: 2}, getStats())
 
-	// Ack should clear the rest of namespace-one blocked but leave
+	// Ack should clear the rest of namespace-one pending but leave
 	// namespace-two untouched
 	err = b.Ack(eval4.ID, token)
 	must.NoError(t, err)
 
 	must.Eq(t, BrokerStats{TotalReady: 1, TotalUnacked: 0,
-		TotalBlocked: 2, TotalCancelable: 2}, getStats())
+		TotalPending: 2, TotalCancelable: 2}, getStats())
 
 	// Dequeue should get 5th eval
 	out, token, err = b.Dequeue(defaultSched, time.Second)
@@ -476,14 +478,14 @@ func TestEvalBroker_Serialize_DuplicateJobID(t *testing.T) {
 	must.Eq(t, out, eval5, must.Sprint("expected 5th eval"))
 
 	must.Eq(t, BrokerStats{TotalReady: 0, TotalUnacked: 1,
-		TotalBlocked: 2, TotalCancelable: 2}, getStats())
+		TotalPending: 2, TotalCancelable: 2}, getStats())
 
-	// Ack should clear remaining namespace-two blocked evals
+	// Ack should clear remaining namespace-two pending evals
 	err = b.Ack(eval5.ID, token)
 	must.NoError(t, err)
 
 	must.Eq(t, BrokerStats{TotalReady: 1, TotalUnacked: 0,
-		TotalBlocked: 0, TotalCancelable: 3}, getStats())
+		TotalPending: 0, TotalCancelable: 3}, getStats())
 
 	// Dequeue should get 7th eval because that's all that's left
 	out, token, err = b.Dequeue(defaultSched, time.Second)
@@ -491,14 +493,14 @@ func TestEvalBroker_Serialize_DuplicateJobID(t *testing.T) {
 	must.Eq(t, out, eval7, must.Sprint("expected 7th eval"))
 
 	must.Eq(t, BrokerStats{TotalReady: 0, TotalUnacked: 1,
-		TotalBlocked: 0, TotalCancelable: 3}, getStats())
+		TotalPending: 0, TotalCancelable: 3}, getStats())
 
 	// Last ack should leave the broker empty except for cancels
 	err = b.Ack(eval7.ID, token)
 	must.NoError(t, err)
 
 	must.Eq(t, BrokerStats{TotalReady: 0, TotalUnacked: 0,
-		TotalBlocked: 0, TotalCancelable: 3}, getStats())
+		TotalPending: 0, TotalCancelable: 3}, getStats())
 }
 
 func TestEvalBroker_Enqueue_Disable(t *testing.T) {
@@ -553,7 +555,7 @@ func TestEvalBroker_Enqueue_Disable_Delay(t *testing.T) {
 		stats := b.Stats()
 		require.Equal(t, 0, stats.TotalReady, "Expected ready to be flushed")
 		require.Equal(t, 0, stats.TotalWaiting, "Expected waiting to be flushed")
-		require.Equal(t, 0, stats.TotalBlocked, "Expected blocked to be flushed")
+		require.Equal(t, 0, stats.TotalPending, "Expected pending to be flushed")
 		require.Equal(t, 0, stats.TotalUnacked, "Expected unacked to be flushed")
 		_, ok := stats.ByScheduler[baseEval.Type]
 		require.False(t, ok, "Expected scheduler to have no stats")
@@ -577,7 +579,7 @@ func TestEvalBroker_Enqueue_Disable_Delay(t *testing.T) {
 		stats := b.Stats()
 		require.Equal(t, 0, stats.TotalReady, "Expected ready to be flushed")
 		require.Equal(t, 0, stats.TotalWaiting, "Expected waiting to be flushed")
-		require.Equal(t, 0, stats.TotalBlocked, "Expected blocked to be flushed")
+		require.Equal(t, 0, stats.TotalPending, "Expected pending to be flushed")
 		require.Equal(t, 0, stats.TotalUnacked, "Expected unacked to be flushed")
 		_, ok := stats.ByScheduler[baseEval.Type]
 		require.False(t, ok, "Expected scheduler to have no stats")
@@ -1379,8 +1381,242 @@ func TestEvalBroker_NamespacedJobs(t *testing.T) {
 	require.Nil(err)
 	require.Nil(out3)
 
-	require.Equal(1, len(b.blocked))
+	require.Equal(1, len(b.pending))
 
+}
+
+func TestEvalBroker_ReadyEvals_Ordering(t *testing.T) {
+
+	ready := ReadyEvaluations{}
+
+	newEval := func(jobID, evalID string, priority int, index uint64) *structs.Evaluation {
+		eval := mock.Eval()
+		eval.JobID = jobID
+		eval.ID = evalID
+		eval.Priority = priority
+		eval.CreateIndex = uint64(index)
+		return eval
+	}
+
+	// note: we're intentionally pushing these out-of-order to assert we're
+	// getting them back out in the intended order and not just as inserted
+	heap.Push(&ready, newEval("example1", "eval01", 50, 1))
+	heap.Push(&ready, newEval("example3", "eval03", 70, 3))
+	heap.Push(&ready, newEval("example2", "eval02", 50, 2))
+
+	next := heap.Pop(&ready).(*structs.Evaluation)
+	test.Eq(t, "eval03", next.ID,
+		test.Sprint("expected highest Priority to be next ready"))
+
+	next = heap.Pop(&ready).(*structs.Evaluation)
+	test.Eq(t, "eval01", next.ID,
+		test.Sprint("expected oldest CreateIndex to be next ready"))
+
+	heap.Push(&ready, newEval("example4", "eval04", 50, 4))
+
+	next = heap.Pop(&ready).(*structs.Evaluation)
+	test.Eq(t, "eval02", next.ID,
+		test.Sprint("expected oldest CreateIndex to be next ready"))
+
+}
+
+func TestEvalBroker_PendingEval_Ordering(t *testing.T) {
+	pending := PendingEvaluations{}
+
+	newEval := func(evalID string, priority int, index uint64) *structs.Evaluation {
+		eval := mock.Eval()
+		eval.ID = evalID
+		eval.Priority = priority
+		eval.ModifyIndex = uint64(index)
+		return eval
+	}
+
+	// note: we're intentionally pushing these out-of-order to assert we're
+	// getting them back out in the intended order and not just as inserted
+	heap.Push(&pending, newEval("eval03", 50, 3))
+	heap.Push(&pending, newEval("eval02", 100, 2))
+	heap.Push(&pending, newEval("eval01", 50, 1))
+
+	next := heap.Pop(&pending).(*structs.Evaluation)
+	test.Eq(t, "eval02", next.ID,
+		test.Sprint("expected eval with highest priority to be next"))
+
+	next = heap.Pop(&pending).(*structs.Evaluation)
+	test.Eq(t, "eval03", next.ID,
+		test.Sprint("expected eval with highest modify index to be next"))
+
+	heap.Push(&pending, newEval("eval04", 30, 4))
+	next = heap.Pop(&pending).(*structs.Evaluation)
+	test.Eq(t, "eval01", next.ID,
+		test.Sprint("expected eval with highest priority to be nexct"))
+
+}
+
+func TestEvalBroker_PendingEvals_MarkForCancel(t *testing.T) {
+	ci.Parallel(t)
+
+	pending := PendingEvaluations{}
+
+	// note: we're intentionally pushing these out-of-order to assert we're
+	// getting them back out in the intended order and not just as inserted
+	for i := 100; i > 0; i -= 10 {
+		eval := mock.Eval()
+		eval.JobID = "example"
+		eval.CreateIndex = uint64(i)
+		eval.ModifyIndex = uint64(i)
+		heap.Push(&pending, eval)
+	}
+
+	canceled := pending.MarkForCancel()
+	must.Eq(t, 9, len(canceled))
+	must.Eq(t, 1, pending.Len())
+
+	raw := heap.Pop(&pending)
+	must.NotNil(t, raw)
+	eval := raw.(*structs.Evaluation)
+	must.Eq(t, 100, eval.ModifyIndex)
+}
+
+func TestEvalBroker_Cancelable(t *testing.T) {
+	ci.Parallel(t)
+
+	b := testBroker(t, time.Minute)
+
+	evals := []*structs.Evaluation{}
+	for i := 0; i < 20; i++ {
+		eval := mock.Eval()
+		evals = append(evals, eval)
+	}
+	b.cancelable = evals
+	b.stats.TotalCancelable = len(b.cancelable)
+
+	must.Len(t, 20, b.cancelable)
+	cancelable := b.Cancelable(10)
+	must.Len(t, 10, cancelable)
+	must.Len(t, 10, b.cancelable)
+	must.Eq(t, 10, b.stats.TotalCancelable)
+
+	cancelable = b.Cancelable(20)
+	must.Len(t, 10, cancelable)
+	must.Len(t, 0, b.cancelable)
+	must.Eq(t, 0, b.stats.TotalCancelable)
+}
+
+// TestEvalBroker_IntegrationTest exercises the eval broker with realistic
+// workflows
+func TestEvalBroker_IntegrationTest(t *testing.T) {
+	ci.Parallel(t)
+
+	srv, cleanupS1 := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0                             // Prevent dequeue
+		c.EvalReapCancelableInterval = time.Minute * 10 // Prevent sweep-up
+	})
+
+	defer cleanupS1()
+	testutil.WaitForLeader(t, srv.RPC)
+
+	codec := rpcClient(t, srv)
+	store := srv.fsm.State()
+
+	// create a system job, a node for it to run on, and a set of node up/down
+	// events that will result in evaluations queued.
+
+	job := mock.SystemJob()
+	jobReq := &structs.JobRegisterRequest{
+		Job:          job,
+		EvalPriority: 50,
+		WriteRequest: structs.WriteRequest{Region: "global"},
+	}
+	var jobResp structs.JobRegisterResponse
+	err := msgpackrpc.CallWithCodec(codec, "Job.Register", jobReq, &jobResp)
+	must.NoError(t, err)
+
+	node := mock.Node()
+	nodeReq := &structs.NodeRegisterRequest{
+		Node:         node,
+		WriteRequest: structs.WriteRequest{Region: "global"},
+	}
+	var nodeResp structs.NodeUpdateResponse
+	err = msgpackrpc.CallWithCodec(codec, "Node.Register", nodeReq, &nodeResp)
+	must.NoError(t, err)
+
+	for i := 0; i < 10; i++ {
+		status := structs.NodeStatusDown
+		if i%2 == 0 {
+			status = structs.NodeStatusReady
+		}
+		statusReq := &structs.NodeUpdateStatusRequest{
+			NodeID:       node.ID,
+			Status:       status,
+			WriteRequest: structs.WriteRequest{Region: "global"},
+		}
+		var statusResp structs.NodeUpdateResponse
+		err = msgpackrpc.CallWithCodec(codec, "Node.UpdateStatus", statusReq, &statusResp)
+		must.NoError(t, err)
+	}
+
+	// ensure we have the expected number of evaluations and eval broker state
+
+	// retreive the stats from the broker, less some uninteresting ones
+	getStats := func() BrokerStats {
+		t.Helper()
+		stats := srv.evalBroker.Stats()
+		stats.DelayedEvals = nil
+		stats.ByScheduler = nil
+		return *stats
+	}
+
+	getEvalStatuses := func() map[string]int {
+		t.Helper()
+		statuses := map[string]int{}
+		iter, err := store.Evals(nil, state.SortDefault)
+		must.NoError(t, err)
+		for {
+			raw := iter.Next()
+			if raw == nil {
+				break
+			}
+			eval := raw.(*structs.Evaluation)
+			statuses[eval.Status] += 1
+			if eval.Status == structs.EvalStatusCancelled {
+				must.Eq(t, "canceled after more recent eval was processed", eval.StatusDescription)
+			}
+		}
+		return statuses
+	}
+
+	must.Eq(t, map[string]int{structs.EvalStatusPending: 11}, getEvalStatuses())
+	must.Eq(t, BrokerStats{TotalReady: 1, TotalUnacked: 0,
+		TotalPending: 10, TotalCancelable: 0}, getStats())
+
+	// start schedulers: all the evals are for a single job so there should only
+	// be one eval processesed at a time no matter how many schedulers we run
+
+	config := DefaultConfig()
+	config.NumSchedulers = 4
+	must.NoError(t, srv.Reload(config))
+
+	// assert that all but 2 evals were canceled and that the eval broker state
+	// has been cleared
+
+	var got map[string]int
+
+	must.Wait(t, wait.InitialSuccess(
+		wait.Timeout(5*time.Second),
+		wait.Gap(100*time.Millisecond),
+		wait.BoolFunc(func() bool {
+			got = getEvalStatuses()
+			return got[structs.EvalStatusComplete] == 2 &&
+				got[structs.EvalStatusCancelled] == 9
+		}),
+	),
+		must.Func(func() string {
+			return fmt.Sprintf("expected map[complete:2 canceled:9] within timeout, got: %v with broker status=%#v", got, getStats())
+		}),
+	)
+
+	must.Eq(t, BrokerStats{TotalReady: 0, TotalUnacked: 0,
+		TotalPending: 0, TotalCancelable: 0}, getStats())
 }
 
 func TestEvalBroker_PendingEvals_Ordering(t *testing.T) {

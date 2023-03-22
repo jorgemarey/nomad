@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/consul/sdk/testutil/retry"
 	"github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
 	"github.com/hashicorp/go-version"
 	"github.com/shoenig/test/must"
+	"github.com/shoenig/test/wait"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -768,11 +768,8 @@ func TestLeader_ClusterID_upgradePath(t *testing.T) {
 	// A check that ClusterID is not available yet
 	noIDYet := func() {
 		for _, s := range servers {
-			retry.Run(t, func(r *retry.R) {
-				if _, err := s.s.ClusterID(); err == nil {
-					r.Error("expected error")
-				}
-			})
+			_, err := s.s.ClusterID()
+			must.Error(t, err)
 		}
 	}
 
@@ -863,23 +860,32 @@ func TestLeader_ClusterID_noUpgrade(t *testing.T) {
 }
 
 func agreeClusterID(t *testing.T, servers []*Server) {
-	retries := &retry.Timer{Timeout: 60 * time.Second, Wait: 1 * time.Second}
-	ids := make([]string, 3)
-	for i, s := range servers {
-		retry.RunWith(retries, t, func(r *retry.R) {
-			id, err := s.ClusterID()
-			if err != nil {
-				r.Error(err.Error())
-				return
-			}
-			if !helper.IsUUID(id) {
-				r.Error("not a UUID")
-				return
-			}
-			ids[i] = id
-		})
+	must.Len(t, 3, servers)
+
+	f := func() error {
+		id1, err1 := servers[0].ClusterID()
+		if err1 != nil {
+			return err1
+		}
+		id2, err2 := servers[1].ClusterID()
+		if err2 != nil {
+			return err2
+		}
+		id3, err3 := servers[2].ClusterID()
+		if err3 != nil {
+			return err3
+		}
+		if id1 != id2 || id2 != id3 {
+			return fmt.Errorf("ids do not match, id1: %s, id2: %s, id3: %s", id1, id2, id3)
+		}
+		return nil
 	}
-	require.True(t, ids[0] == ids[1] && ids[1] == ids[2], "ids[0] %s, ids[1] %s, ids[2] %s", ids[0], ids[1], ids[2])
+
+	must.Wait(t, wait.InitialSuccess(
+		wait.ErrorFunc(f),
+		wait.Timeout(60*time.Second),
+		wait.Gap(1*time.Second),
+	))
 }
 
 func TestLeader_ReplicateACLPolicies(t *testing.T) {
@@ -1133,6 +1139,70 @@ func Test_diffACLRoles(t *testing.T) {
 		aclRole2.Stub(), aclRole3.Stub(), aclRole4.Stub()})
 	require.ElementsMatch(t, []string{aclRole0.ID, aclRole1.ID}, toDelete)
 	require.ElementsMatch(t, []string{aclRole3.ID, aclRole4.ID}, toUpdate)
+}
+
+func Test_diffACLAuthMethods(t *testing.T) {
+	ci.Parallel(t)
+
+	stateStore := state.TestStateStore(t)
+
+	// Build an initial baseline of ACL auth-methods.
+	aclAuthMethod0 := mock.ACLAuthMethod()
+	aclAuthMethod1 := mock.ACLAuthMethod()
+	aclAuthMethod2 := mock.ACLAuthMethod()
+	aclAuthMethod3 := mock.ACLAuthMethod()
+
+	// Upsert these into our local state. Use copies, so we can alter the
+	// auth-methods directly and use within the diff func.
+	err := stateStore.UpsertACLAuthMethods(50,
+		[]*structs.ACLAuthMethod{aclAuthMethod0.Copy(), aclAuthMethod1.Copy(),
+			aclAuthMethod2.Copy(), aclAuthMethod3.Copy()})
+	must.NoError(t, err)
+
+	// Modify the ACL auth-methods to create a number of differences. These
+	// methods represent the state of the authoritative region.
+	aclAuthMethod2.ModifyIndex = 50
+	aclAuthMethod3.ModifyIndex = 200
+	aclAuthMethod3.Hash = []byte{0, 1, 2, 3}
+	aclAuthMethod4 := mock.ACLAuthMethod()
+
+	// Run the diff function and test the output.
+	toDelete, toUpdate := diffACLAuthMethods(stateStore, 50, []*structs.ACLAuthMethodStub{
+		aclAuthMethod2.Stub(), aclAuthMethod3.Stub(), aclAuthMethod4.Stub()})
+	require.ElementsMatch(t, []string{aclAuthMethod0.Name, aclAuthMethod1.Name}, toDelete)
+	require.ElementsMatch(t, []string{aclAuthMethod3.Name, aclAuthMethod4.Name}, toUpdate)
+}
+
+func Test_diffACLBindingRules(t *testing.T) {
+	ci.Parallel(t)
+
+	stateStore := state.TestStateStore(t)
+
+	// Build an initial baseline of ACL binding rules.
+	aclBindingRule0 := mock.ACLBindingRule()
+	aclBindingRule1 := mock.ACLBindingRule()
+	aclBindingRule2 := mock.ACLBindingRule()
+	aclBindingRule3 := mock.ACLBindingRule()
+
+	// Upsert these into our local state. Use copies, so we can alter the
+	// binding rules directly and use within the diff func.
+	err := stateStore.UpsertACLBindingRules(50,
+		[]*structs.ACLBindingRule{aclBindingRule0.Copy(), aclBindingRule1.Copy(),
+			aclBindingRule2.Copy(), aclBindingRule3.Copy()}, true)
+	must.NoError(t, err)
+
+	// Modify the ACL auth-methods to create a number of differences. These
+	// methods represent the state of the authoritative region.
+	aclBindingRule2.ModifyIndex = 50
+	aclBindingRule3.ModifyIndex = 200
+	aclBindingRule3.Hash = []byte{0, 1, 2, 3}
+	aclBindingRule4 := mock.ACLBindingRule()
+
+	// Run the diff function and test the output.
+	toDelete, toUpdate := diffACLBindingRules(stateStore, 50, []*structs.ACLBindingRuleListStub{
+		aclBindingRule2.Stub(), aclBindingRule3.Stub(), aclBindingRule4.Stub()})
+	must.SliceContainsAll(t, []string{aclBindingRule0.ID, aclBindingRule1.ID}, toDelete)
+	must.SliceContainsAll(t, []string{aclBindingRule3.ID, aclBindingRule4.ID}, toUpdate)
 }
 
 func TestLeader_Reelection(t *testing.T) {

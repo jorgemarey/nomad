@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	golog "log"
 	"net"
 	"os"
@@ -115,7 +114,11 @@ type Agent struct {
 	builtinListener net.Listener
 	builtinDialer   *bufconndialer.BufConnWrapper
 
-	InmemSink *metrics.InmemSink
+	// taskAPIServer is an HTTP server for attaching per-task listeners. Always
+	// requires auth.
+	taskAPIServer *builtinAPI
+
+	inmemSink *metrics.InmemSink
 }
 
 // NewAgent is used to create a new agent with the given configuration
@@ -124,7 +127,7 @@ func NewAgent(config *Config, logger log.InterceptLogger, logOutput io.Writer, i
 		config:     config,
 		logOutput:  logOutput,
 		shutdownCh: make(chan struct{}),
-		InmemSink:  inmem,
+		inmemSink:  inmem,
 	}
 
 	// Create the loggers
@@ -136,10 +139,6 @@ func NewAgent(config *Config, logger log.InterceptLogger, logOutput io.Writer, i
 
 	if err := a.setupConsul(config.Consul); err != nil {
 		return nil, fmt.Errorf("Failed to initialize Consul client: %v", err)
-	}
-
-	if err := a.setupPlugins(); err != nil {
-		return nil, err
 	}
 
 	if err := a.setupServer(); err != nil {
@@ -171,6 +170,7 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 	conf.EnableDebug = agentConfig.EnableDebug
 
 	conf.Build = agentConfig.Version.VersionNumber()
+	conf.BuildDate = agentConfig.Version.BuildDate
 	conf.Revision = agentConfig.Version.Revision
 	if agentConfig.Region != "" {
 		conf.Region = agentConfig.Region
@@ -212,6 +212,32 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 			return nil, fmt.Errorf("raft_multiplier cannot be %d. Must be between 1 and %d", *agentConfig.Server.RaftMultiplier, MaxRaftMultiplier)
 		}
 	}
+
+	if vPtr := agentConfig.Server.RaftTrailingLogs; vPtr != nil {
+		if *vPtr < 1 {
+			return nil, fmt.Errorf("raft_trailing_logs must be non-negative, got %d", *vPtr)
+		}
+		conf.RaftConfig.TrailingLogs = uint64(*vPtr)
+	}
+
+	if vPtr := agentConfig.Server.RaftSnapshotInterval; vPtr != nil {
+		dur, err := time.ParseDuration(*vPtr)
+		if err != nil {
+			return nil, err
+		}
+		if dur < 5*time.Millisecond {
+			return nil, fmt.Errorf("raft_snapshot_interval must be greater than 5ms, got %q", *vPtr)
+		}
+		conf.RaftConfig.SnapshotInterval = dur
+	}
+
+	if vPtr := agentConfig.Server.RaftSnapshotThreshold; vPtr != nil {
+		if *vPtr < 1 {
+			return nil, fmt.Errorf("raft_snapshot_threshold must be non-negative, got %d", *vPtr)
+		}
+		conf.RaftConfig.SnapshotThreshold = uint64(*vPtr)
+	}
+
 	conf.RaftConfig.ElectionTimeout *= time.Duration(raftMultiplier)
 	conf.RaftConfig.HeartbeatTimeout *= time.Duration(raftMultiplier)
 	conf.RaftConfig.LeaderLeaseTimeout *= time.Duration(raftMultiplier)
@@ -296,6 +322,23 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 		}
 	}
 
+	jobMaxPriority := structs.JobDefaultMaxPriority
+	if agentConfig.Server.JobMaxPriority != nil && *agentConfig.Server.JobMaxPriority != 0 {
+		jobMaxPriority = *agentConfig.Server.JobMaxPriority
+		if jobMaxPriority < structs.JobDefaultMaxPriority || jobMaxPriority > structs.JobMaxPriority {
+			return nil, fmt.Errorf("job_max_priority cannot be %d. Must be between %d and %d", *agentConfig.Server.JobMaxPriority, structs.JobDefaultMaxPriority, structs.JobMaxPriority)
+		}
+	}
+	jobDefaultPriority := structs.JobDefaultPriority
+	if agentConfig.Server.JobDefaultPriority != nil && *agentConfig.Server.JobDefaultPriority != 0 {
+		jobDefaultPriority = *agentConfig.Server.JobDefaultPriority
+		if jobDefaultPriority < structs.JobDefaultPriority || jobDefaultPriority >= jobMaxPriority {
+			return nil, fmt.Errorf("job_default_priority cannot be %d. Must be between %d and %d", *agentConfig.Server.JobDefaultPriority, structs.JobDefaultPriority, jobMaxPriority)
+		}
+	}
+	conf.JobMaxPriority = jobMaxPriority
+	conf.JobDefaultPriority = jobDefaultPriority
+
 	// Set up the bind addresses
 	rpcAddr, err := net.ResolveTCPAddr("tcp", agentConfig.normalizedAddrs.RPC)
 	if err != nil {
@@ -309,6 +352,7 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 	conf.RPCAddr.IP = rpcAddr.IP
 	conf.SerfConfig.MemberlistConfig.BindPort = serfAddr.Port
 	conf.SerfConfig.MemberlistConfig.BindAddr = serfAddr.IP.String()
+	conf.SerfConfig.RejoinAfterLeave = agentConfig.Server.RejoinAfterLeave
 
 	// Set up the advertise addresses
 	rpcAddr, err = net.ResolveTCPAddr("tcp", agentConfig.AdvertiseAddrs.RPC)
@@ -363,12 +407,28 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 		}
 		conf.EvalGCThreshold = dur
 	}
+	if gcThreshold := agentConfig.Server.BatchEvalGCThreshold; gcThreshold != "" {
+		dur, err := time.ParseDuration(gcThreshold)
+		if err != nil {
+			return nil, err
+		}
+		conf.BatchEvalGCThreshold = dur
+	}
 	if gcThreshold := agentConfig.Server.DeploymentGCThreshold; gcThreshold != "" {
 		dur, err := time.ParseDuration(gcThreshold)
 		if err != nil {
 			return nil, err
 		}
 		conf.DeploymentGCThreshold = dur
+	}
+	if gcInterval := agentConfig.Server.CSIVolumeClaimGCInterval; gcInterval != "" {
+		dur, err := time.ParseDuration(gcInterval)
+		if err != nil {
+			return nil, err
+		} else if dur <= time.Duration(0) {
+			return nil, fmt.Errorf("csi_volume_claim_gc_interval should be greater than 0s")
+		}
+		conf.CSIVolumeClaimGCInterval = dur
 	}
 	if gcThreshold := agentConfig.Server.CSIVolumeClaimGCThreshold; gcThreshold != "" {
 		dur, err := time.ParseDuration(gcThreshold)
@@ -445,6 +505,7 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 	// Setup telemetry related config
 	conf.StatsCollectionInterval = agentConfig.Telemetry.collectionInterval
 	conf.DisableDispatchedJobSummaryMetrics = agentConfig.Telemetry.DisableDispatchedJobSummaryMetrics
+	conf.DisableRPCRateMetricsLabels = agentConfig.Telemetry.DisableRPCRateMetricsLabels
 
 	if d, err := time.ParseDuration(agentConfig.Limits.RPCHandshakeTimeout); err != nil {
 		return nil, fmt.Errorf("error parsing rpc_handshake_timeout: %v", err)
@@ -524,15 +585,11 @@ func (a *Agent) serverConfig() (*nomad.Config, error) {
 }
 
 // finalizeServerConfig sets configuration fields on the server config that are
-// not staticly convertable and are from the agent.
+// not statically convertible and are from the agent.
 func (a *Agent) finalizeServerConfig(c *nomad.Config) {
 	// Setup the logging
 	c.Logger = a.logger
 	c.LogOutput = a.logOutput
-
-	// Setup the plugin loaders
-	c.PluginLoader = a.pluginLoader
-	c.PluginSingletonLoader = a.pluginSingletonLoader
 	c.AgentShutdown = func() error { return a.Shutdown() }
 }
 
@@ -552,11 +609,10 @@ func (a *Agent) clientConfig() (*clientconfig.Config, error) {
 }
 
 // finalizeClientConfig sets configuration fields on the client config that are
-// not staticly convertable and are from the agent.
+// not statically convertible and are from the agent.
 func (a *Agent) finalizeClientConfig(c *clientconfig.Config) error {
 	// Setup the logging
 	c.Logger = a.logger
-	c.LogOutput = a.logOutput
 
 	// If we are running a server, append both its bind and advertise address so
 	// we are able to at least talk to the local server even if that isn't
@@ -612,7 +668,6 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	}
 
 	conf.Servers = agentConfig.Client.Servers
-	conf.LogLevel = agentConfig.LogLevel
 	conf.DevMode = agentConfig.DevMode
 	conf.EnableDebug = agentConfig.EnableDebug
 
@@ -642,6 +697,12 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	}
 	if agentConfig.Client.MemoryMB != 0 {
 		conf.MemoryMB = agentConfig.Client.MemoryMB
+	}
+	if agentConfig.Client.DiskTotalMB != 0 {
+		conf.DiskTotalMB = agentConfig.Client.DiskTotalMB
+	}
+	if agentConfig.Client.DiskFreeMB != 0 {
+		conf.DiskFreeMB = agentConfig.Client.DiskFreeMB
 	}
 	if agentConfig.Client.MaxKillTimeout != "" {
 		dur, err := time.ParseDuration(agentConfig.Client.MaxKillTimeout)
@@ -749,6 +810,7 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	conf.CNIConfigDir = agentConfig.Client.CNIConfigDir
 	conf.BridgeNetworkName = agentConfig.Client.BridgeNetworkName
 	conf.BridgeNetworkAllocSubnet = agentConfig.Client.BridgeNetworkSubnet
+	conf.BridgeNetworkHairpinMode = agentConfig.Client.BridgeNetworkHairpinMode
 
 	for _, hn := range agentConfig.Client.HostNetworks {
 		conf.HostNetworks[hn.Name] = hn
@@ -882,7 +944,7 @@ func (a *Agent) setupNodeID(config *nomad.Config) error {
 	// validate it. Saved state overwrites any configured node id
 	fileID := filepath.Join(config.DataDir, "node-id")
 	if _, err := os.Stat(fileID); err == nil {
-		rawID, err := ioutil.ReadFile(fileID)
+		rawID, err := os.ReadFile(fileID)
 		if err != nil {
 			return err
 		}
@@ -907,7 +969,7 @@ func (a *Agent) setupNodeID(config *nomad.Config) error {
 		if err := escapingfs.EnsurePath(fileID, false); err != nil {
 			return err
 		}
-		if err := ioutil.WriteFile(fileID, []byte(config.NodeID), 0600); err != nil {
+		if err := os.WriteFile(fileID, []byte(config.NodeID), 0600); err != nil {
 			return err
 		}
 		return nil
@@ -919,7 +981,7 @@ func (a *Agent) setupNodeID(config *nomad.Config) error {
 		if err := escapingfs.EnsurePath(fileID, false); err != nil {
 			return err
 		}
-		if err := ioutil.WriteFile(fileID, []byte(id), 0600); err != nil {
+		if err := os.WriteFile(fileID, []byte(id), 0600); err != nil {
 			return err
 		}
 
@@ -957,6 +1019,14 @@ func (a *Agent) setupClient() error {
 	if !a.config.Client.Enabled {
 		return nil
 	}
+
+	// Plugin setup must happen before the call to clientConfig, because it
+	// copies the pointers to the plugin loaders from the Agent to the
+	// Client config.
+	if err := a.setupPlugins(); err != nil {
+		return err
+	}
+
 	// Setup the configuration
 	conf, err := a.clientConfig()
 	if err != nil {
@@ -974,11 +1044,16 @@ func (a *Agent) setupClient() error {
 	}
 
 	// Set up a custom listener and dialer. This is used by Nomad clients when
-	// running consul-template functions that utilise the Nomad API. We lazy
+	// running consul-template functions that utilize the Nomad API. We lazy
 	// load this into the client config, therefore this needs to happen before
 	// we call NewClient.
 	a.builtinListener, a.builtinDialer = bufconndialer.New()
 	conf.TemplateDialer = a.builtinDialer
+
+	// Initialize builtin Task API server here for use in the client, but it
+	// won't accept connections until the HTTP servers are created.
+	a.taskAPIServer = newBuiltinAPI()
+	conf.APIListenerRegistrar = a.taskAPIServer
 
 	nomadClient, err := client.NewClient(
 		conf, a.consulCatalog, a.consulProxies, a.consulService, nil)
@@ -1087,6 +1162,10 @@ func (a *Agent) Shutdown() error {
 
 	a.logger.Info("requesting shutdown")
 	if a.client != nil {
+		// Task API must be closed separately from other HTTP servers and should
+		// happen before the client is shutdown
+		a.taskAPIServer.Shutdown()
+
 		if err := a.client.Shutdown(); err != nil {
 			a.logger.Error("client shutdown failed", "error", err)
 		}
@@ -1258,6 +1337,11 @@ func (a *Agent) GetConfig() *Config {
 	defer a.configLock.Unlock()
 
 	return a.config
+}
+
+// GetMetricsSink returns the metrics sink.
+func (a *Agent) GetMetricsSink() *metrics.InmemSink {
+	return a.inmemSink
 }
 
 // setupConsul creates the Consul client and starts its main Run loop.

@@ -23,6 +23,12 @@ func (j *Job) enforceSubmitJob(override bool, job *structs.Job, nomadACLToken *s
 	return j.srv.enforceScope(override, structs.SentinelScopeSubmitJob, dataCB)
 }
 
+// multiregionCreateDeployment is used to create a deployment to register along
+// with the job, if required.
+func (j *Job) multiregionCreateDeployment(job *structs.Job, eval *structs.Evaluation) *structs.Deployment {
+	return nil
+}
+
 // multiregionRegister is used to send a job across multiple regions
 func (j *Job) multiregionRegister(args *structs.JobRegisterRequest, reply *structs.JobRegisterResponse, newVersion uint64) (bool, error) {
 	// only run this if the job is multiregion and the region provided is the global (that signals us as the runner region)

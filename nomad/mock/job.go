@@ -15,7 +15,7 @@ func Job() *structs.Job {
 		Name:        "my-job",
 		Namespace:   structs.DefaultNamespace,
 		Type:        structs.JobTypeService,
-		Priority:    50,
+		Priority:    structs.JobDefaultPriority,
 		AllAtOnce:   false,
 		Datacenters: []string{"dc1"},
 		Constraints: []*structs.Constraint{
@@ -117,6 +117,36 @@ func Job() *structs.Job {
 		CreateIndex:    42,
 		ModifyIndex:    99,
 		JobModifyIndex: 99,
+	}
+	job.Canonicalize()
+	return job
+}
+
+// MinJob returns a minimal service job with a mock driver task.
+func MinJob() *structs.Job {
+	job := &structs.Job{
+		ID:     "j" + uuid.Short(),
+		Name:   "j",
+		Region: "global",
+		Type:   "service",
+		TaskGroups: []*structs.TaskGroup{
+			{
+				Name:  "g",
+				Count: 1,
+				Tasks: []*structs.Task{
+					{
+						Name:   "t",
+						Driver: "mock_driver",
+						Config: map[string]any{
+							// An empty config actually causes an error, so set a reasonably
+							// long run_for duration.
+							"run_for": "10m",
+						},
+						LogConfig: structs.DefaultLogConfig(),
+					},
+				},
+			},
+		},
 	}
 	job.Canonicalize()
 	return job
@@ -294,7 +324,7 @@ func BatchJob() *structs.Job {
 		Name:        "batch-job",
 		Namespace:   structs.DefaultNamespace,
 		Type:        structs.JobTypeBatch,
-		Priority:    50,
+		Priority:    structs.JobDefaultPriority,
 		AllAtOnce:   false,
 		Datacenters: []string{"dc1"},
 		TaskGroups: []*structs.TaskGroup{
@@ -360,7 +390,7 @@ func SystemJob() *structs.Job {
 		ID:          fmt.Sprintf("mock-system-%s", uuid.Generate()),
 		Name:        "my-job",
 		Type:        structs.JobTypeSystem,
-		Priority:    100,
+		Priority:    structs.JobDefaultMaxPriority,
 		AllAtOnce:   false,
 		Datacenters: []string{"dc1"},
 		Constraints: []*structs.Constraint{
@@ -437,7 +467,7 @@ func MaxParallelJob() *structs.Job {
 		Name:        "my-job",
 		Namespace:   structs.DefaultNamespace,
 		Type:        structs.JobTypeService,
-		Priority:    50,
+		Priority:    structs.JobDefaultPriority,
 		AllAtOnce:   false,
 		Datacenters: []string{"dc1"},
 		Constraints: []*structs.Constraint{

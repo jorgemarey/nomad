@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"io/ioutil"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -109,7 +109,7 @@ func TestCommand_MetaConfigValidation(t *testing.T) {
 	}
 	for _, tc := range tcases {
 		configFile := filepath.Join(tmpDir, "conf1.hcl")
-		err := ioutil.WriteFile(configFile, []byte(`client{
+		err := os.WriteFile(configFile, []byte(`client{
 			enabled = true
 			meta = {
 				"valid" = "yes"
@@ -148,7 +148,7 @@ func TestCommand_MetaConfigValidation(t *testing.T) {
 	}
 }
 
-func TestCommand_NullCharInDatacenter(t *testing.T) {
+func TestCommand_InvalidCharInDatacenter(t *testing.T) {
 	ci.Parallel(t)
 
 	tmpDir := t.TempDir()
@@ -157,10 +157,13 @@ func TestCommand_NullCharInDatacenter(t *testing.T) {
 		"char-\\000-in-the-middle",
 		"ends-with-\\000",
 		"\\000-at-the-beginning",
+		"char-*-in-the-middle",
+		"ends-with-*",
+		"*-at-the-beginning",
 	}
 	for _, tc := range tcases {
 		configFile := filepath.Join(tmpDir, "conf1.hcl")
-		err := ioutil.WriteFile(configFile, []byte(`
+		err := os.WriteFile(configFile, []byte(`
         datacenter = "`+tc+`"
         client{
 			enabled = true
@@ -188,7 +191,7 @@ func TestCommand_NullCharInDatacenter(t *testing.T) {
 		}
 
 		out := ui.ErrorWriter.String()
-		exp := "Datacenter contains invalid characters"
+		exp := "Datacenter contains invalid characters (null or '*')"
 		if !strings.Contains(out, exp) {
 			t.Fatalf("expect to find %q\n\n%s", exp, out)
 		}
@@ -207,7 +210,7 @@ func TestCommand_NullCharInRegion(t *testing.T) {
 	}
 	for _, tc := range tcases {
 		configFile := filepath.Join(tmpDir, "conf1.hcl")
-		err := ioutil.WriteFile(configFile, []byte(`
+		err := os.WriteFile(configFile, []byte(`
         region = "`+tc+`"
         client{
 			enabled = true
@@ -398,7 +401,7 @@ func TestIsValidConfig(t *testing.T) {
 					},
 				},
 			},
-			err: "client.artifact stanza invalid: http_read_timeout must be > 0",
+			err: "client.artifact block invalid: http_read_timeout must be > 0",
 		},
 	}
 

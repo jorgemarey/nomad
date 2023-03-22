@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/hashicorp/go-multierror"
 )
 
 const (
@@ -288,7 +290,12 @@ func (a *AllocFS) Logs(alloc *Allocation, follow bool, task, logType, origin str
 				if err == io.EOF || err == io.ErrClosedPipe {
 					close(frames)
 				} else {
-					errCh <- err
+					buf, err2 := io.ReadAll(dec.Buffered())
+					if err2 != nil {
+						errCh <- fmt.Errorf("failed to decode and failed to read buffered data: %w", multierror.Append(err, err2))
+					} else {
+						errCh <- fmt.Errorf("failed to decode log endpoint response as JSON: %q", buf)
+					}
 				}
 				return
 			}

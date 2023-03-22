@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/hashicorp/nomad/ci"
-	"github.com/hashicorp/nomad/helper/freeport"
 	"github.com/hashicorp/nomad/helper/testlog"
+	"github.com/hashicorp/nomad/helper/useragent"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/shoenig/test/must"
@@ -215,12 +215,14 @@ func TestChecker_Do_HTTP_extras(t *testing.T) {
 		method  string
 		body    []byte
 		headers map[string][]string
+		host    string
 	)
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method = r.Method
 		body, _ = io.ReadAll(r.Body)
 		headers = maps.Clone(r.Header)
+		host = r.Host
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()
@@ -238,13 +240,13 @@ func TestChecker_Do_HTTP_extras(t *testing.T) {
 	}
 
 	encoding := [2]string{"Accept-Encoding", "gzip"}
-	agent := [2]string{"User-Agent", "Go-http-client/1.1"}
+	agent := [2]string{useragent.Header, useragent.String()}
 
 	cases := []struct {
 		name    string
 		method  string
 		body    string
-		headers map[string][]string
+		headers http.Header
 	}{
 		{
 			name:    "method GET",
@@ -268,6 +270,32 @@ func TestChecker_Do_HTTP_extras(t *testing.T) {
 				[2]string{"X-My-Header", "hello"},
 				[2]string{"Authorization", "Basic ZWxhc3RpYzpjaGFuZ2VtZQ=="},
 			),
+		},
+		{
+			name:   "user agent header",
+			method: "GET",
+			headers: makeHeaders(encoding,
+				[2]string{"User-Agent", "my-custom-agent"},
+			),
+		},
+		{
+			name:   "host header",
+			method: "GET",
+			headers: makeHeaders(encoding, agent,
+				[2]string{"Host", "hello"},
+				[2]string{"Test-Abc", "hello"},
+			),
+		},
+		{
+			name:   "host header without normalization",
+			method: "GET",
+			body:   "",
+			// This is needed to prevent header normalization by http.Header.Set
+			headers: func() map[string][]string {
+				h := makeHeaders(encoding, agent, [2]string{"Test-Abc", "hello"})
+				h["hoST"] = []string{"heLLO"}
+				return h
+			}(),
 		},
 		{
 			name:    "with body",
@@ -312,9 +340,25 @@ func TestChecker_Do_HTTP_extras(t *testing.T) {
 			must.Eq(t, http.StatusOK, result.StatusCode,
 				must.Sprintf("test.URL: %s", ts.URL),
 				must.Sprintf("headers: %v", tc.headers),
+				must.Sprintf("received headers: %v", tc.headers),
 			)
 			must.Eq(t, tc.method, method)
 			must.Eq(t, tc.body, string(body))
+
+			hostSent := false
+
+			for key, values := range tc.headers {
+				if strings.EqualFold(key, "Host") && len(values) > 0 {
+					must.Eq(t, values[0], host)
+					hostSent = true
+					delete(tc.headers, key)
+
+				}
+			}
+			if !hostSent {
+				must.Nil(t, tc.headers["Host"])
+			}
+
 			must.Eq(t, tc.headers, headers)
 		})
 	}
@@ -373,8 +417,7 @@ func TestChecker_Do_TCP(t *testing.T) {
 		}
 	}
 
-	ports := freeport.MustTake(3)
-	defer freeport.Return(ports)
+	ports := ci.PortAllocator.Grab(3)
 
 	cases := []struct {
 		name      string

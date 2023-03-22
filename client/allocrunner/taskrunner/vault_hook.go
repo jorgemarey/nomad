@@ -3,7 +3,6 @@ package taskrunner
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sync"
@@ -45,19 +44,19 @@ func (tr *TaskRunner) updatedVaultToken(token string) {
 }
 
 type vaultHookConfig struct {
-	vaultStanza *structs.Vault
-	client      vaultclient.VaultClient
-	events      ti.EventEmitter
-	lifecycle   ti.TaskLifecycle
-	updater     vaultTokenUpdateHandler
-	logger      log.Logger
-	alloc       *structs.Allocation
-	task        string
+	vaultBlock *structs.Vault
+	client     vaultclient.VaultClient
+	events     ti.EventEmitter
+	lifecycle  ti.TaskLifecycle
+	updater    vaultTokenUpdateHandler
+	logger     log.Logger
+	alloc      *structs.Allocation
+	task       string
 }
 
 type vaultHook struct {
-	// vaultStanza is the vault stanza for the task
-	vaultStanza *structs.Vault
+	// vaultBlock is the vault block for the task
+	vaultBlock *structs.Vault
 
 	// eventEmitter is used to emit events to the task
 	eventEmitter ti.EventEmitter
@@ -97,7 +96,7 @@ type vaultHook struct {
 func newVaultHook(config *vaultHookConfig) *vaultHook {
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &vaultHook{
-		vaultStanza:  config.vaultStanza,
+		vaultBlock:   config.vaultBlock,
 		client:       config.client,
 		eventEmitter: config.events,
 		lifecycle:    config.lifecycle,
@@ -130,7 +129,7 @@ func (h *vaultHook) Prestart(ctx context.Context, req *interfaces.TaskPrestartRe
 	// directory
 	recoveredToken := ""
 	h.tokenPath = filepath.Join(req.TaskDir.SecretsDir, vaultTokenFile)
-	data, err := ioutil.ReadFile(h.tokenPath)
+	data, err := os.ReadFile(h.tokenPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("failed to recover vault token: %v", err)
@@ -239,9 +238,9 @@ OUTER:
 		h.future.Set(token)
 
 		if updatedToken {
-			switch h.vaultStanza.ChangeMode {
+			switch h.vaultBlock.ChangeMode {
 			case structs.VaultChangeModeSignal:
-				s, err := signals.Parse(h.vaultStanza.ChangeSignal)
+				s, err := signals.Parse(h.vaultBlock.ChangeSignal)
 				if err != nil {
 					h.logger.Error("failed to parse signal", "error", err)
 					h.lifecycle.Kill(h.ctx,
@@ -252,7 +251,7 @@ OUTER:
 				}
 
 				event := structs.NewTaskEvent(structs.TaskSignaling).SetTaskSignal(s).SetDisplayMessage("Vault: new Vault token acquired")
-				if err := h.lifecycle.Signal(event, h.vaultStanza.ChangeSignal); err != nil {
+				if err := h.lifecycle.Signal(event, h.vaultBlock.ChangeSignal); err != nil {
 					h.logger.Error("failed to send signal", "error", err)
 					h.lifecycle.Kill(h.ctx,
 						structs.NewTaskEvent(structs.TaskKilling).
@@ -268,7 +267,7 @@ OUTER:
 			case structs.VaultChangeModeNoop:
 				fallthrough
 			default:
-				h.logger.Error("invalid Vault change mode", "mode", h.vaultStanza.ChangeMode)
+				h.logger.Error("invalid Vault change mode", "mode", h.vaultBlock.ChangeMode)
 			}
 
 			// We have handled it
@@ -343,7 +342,7 @@ func (h *vaultHook) deriveVaultToken() (token string, exit bool) {
 
 // writeToken writes the given token to disk
 func (h *vaultHook) writeToken(token string) error {
-	if err := ioutil.WriteFile(h.tokenPath, []byte(token), 0666); err != nil {
+	if err := os.WriteFile(h.tokenPath, []byte(token), 0666); err != nil {
 		return fmt.Errorf("failed to write vault token: %v", err)
 	}
 

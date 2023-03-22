@@ -10,8 +10,9 @@ type EnterpriseEndpoints struct {
 	Sentinel *Sentinel
 }
 
-// NewEnterpriseEndpoints returns the custom nomad endpoints
-func NewEnterpriseEndpoints(s *Server) *EnterpriseEndpoints {
+// NewEnterpriseEndpoints returns a stub of the enterprise endpoints since there
+// are none in oss
+func NewEnterpriseEndpoints(s *Server, ctx *RPCContext) *EnterpriseEndpoints {
 	return &EnterpriseEndpoints{
 		Sentinel: &Sentinel{s},
 	}

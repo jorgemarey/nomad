@@ -20,6 +20,7 @@ import (
 	hclog "github.com/hashicorp/go-hclog"
 	multierror "github.com/hashicorp/go-multierror"
 	plugin "github.com/hashicorp/go-plugin"
+	"github.com/hashicorp/go-set"
 	"github.com/hashicorp/nomad/client/lib/cgutil"
 	"github.com/hashicorp/nomad/client/taskenv"
 	"github.com/hashicorp/nomad/drivers/docker/docklog"
@@ -84,6 +85,35 @@ const (
 	dockerLabelNodeID        = "com.hashicorp.nomad.node_id"
 )
 
+type pauseContainerStore struct {
+	lock         sync.Mutex
+	containerIDs *set.Set[string]
+}
+
+func newPauseContainerStore() *pauseContainerStore {
+	return &pauseContainerStore{
+		containerIDs: set.New[string](10),
+	}
+}
+
+func (s *pauseContainerStore) add(id string) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.containerIDs.Insert(id)
+}
+
+func (s *pauseContainerStore) remove(id string) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.containerIDs.Remove(id)
+}
+
+func (s *pauseContainerStore) union(other *set.Set[string]) *set.Set[string] {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	return other.Union(s.containerIDs)
+}
+
 type Driver struct {
 	// eventer is used to handle multiplexing of TaskEvents calls such that an
 	// event can be broadcast to all callers
@@ -103,6 +133,9 @@ type Driver struct {
 
 	// tasks is the in memory datastore mapping taskIDs to taskHandles
 	tasks *taskStore
+
+	// pauseContainers keeps track of pause container IDs in use by allocations
+	pauseContainers *pauseContainerStore
 
 	// coordinator is what tracks multiple image pulls against the same docker image
 	coordinator *dockerCoordinator
@@ -130,13 +163,16 @@ type Driver struct {
 // NewDockerDriver returns a docker implementation of a driver plugin
 func NewDockerDriver(ctx context.Context, logger hclog.Logger) drivers.DriverPlugin {
 	logger = logger.Named(pluginName)
-	return &Driver{
-		eventer: eventer.NewEventer(ctx, logger),
-		config:  &DriverConfig{},
-		tasks:   newTaskStore(),
-		ctx:     ctx,
-		logger:  logger,
+	driver := &Driver{
+		eventer:         eventer.NewEventer(ctx, logger),
+		config:          &DriverConfig{},
+		tasks:           newTaskStore(),
+		pauseContainers: newPauseContainerStore(),
+		ctx:             ctx,
+		logger:          logger,
 	}
+	go driver.recoverPauseContainers(ctx)
+	return driver
 }
 
 func (d *Driver) reattachToDockerLogger(reattachConfig *pstructs.ReattachConfig) (docklog.DockerLogger, *plugin.Client, error) {
@@ -238,6 +274,9 @@ func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 	}
 
 	d.tasks.Set(handle.Config.ID, h)
+
+	// find a pause container?
+
 	go h.run()
 
 	return nil
@@ -709,6 +748,40 @@ func (d *Driver) containerBinds(task *drivers.TaskConfig, driverConfig *TaskConf
 	return binds, nil
 }
 
+func (d *Driver) recoverPauseContainers(ctx context.Context) {
+	// On Client restart, we must rebuild the set of pause containers
+	// we are tracking. Basically just scan all containers and pull the ID from
+	// anything that has the Nomad Label and has Name with prefix "/nomad_init_".
+
+	_, dockerClient, err := d.dockerClients()
+	if err != nil {
+		d.logger.Error("failed to recover pause containers", "error", err)
+		return
+	}
+
+	containers, listErr := dockerClient.ListContainers(docker.ListContainersOptions{
+		Context: ctx,
+		All:     false, // running only
+		Filters: map[string][]string{
+			"label": {dockerLabelAllocID},
+		},
+	})
+	if listErr != nil {
+		d.logger.Error("failed to list pause containers", "error", err)
+		return
+	}
+
+CONTAINER:
+	for _, c := range containers {
+		for _, name := range c.Names {
+			if strings.HasPrefix(name, "/nomad_init_") {
+				d.pauseContainers.add(c.ID)
+				continue CONTAINER
+			}
+		}
+	}
+}
+
 var userMountToUnixMount = map[string]string{
 	// Empty string maps to `rprivate` for backwards compatibility in restored
 	// older tasks, where mount propagation will not be present.
@@ -835,6 +908,12 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		return c, fmt.Errorf("requested runtime %q is not allowed", containerRuntime)
 	}
 
+	// Only windows supports alternative isolations modes
+	isolationMode := driverConfig.Isolation
+	if runtime.GOOS != "windows" && isolationMode != "" {
+		return c, fmt.Errorf("Failed to create container configuration, cannot use isolation mode \"%s\" on %s", isolationMode, runtime.GOOS)
+	}
+
 	memory, memoryReservation := memoryLimits(driverConfig.MemoryHardLimit, task.Resources.NomadResources.Memory)
 
 	var pidsLimit int64
@@ -865,6 +944,7 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		// used to share data between different tasks in the same task group.
 		Binds: binds,
 
+		Isolation:    driverConfig.Isolation,
 		StorageOpt:   driverConfig.StorageOpt,
 		VolumeDriver: driverConfig.VolumeDriver,
 
@@ -1133,7 +1213,7 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 			if mapping, ok := task.Resources.Ports.Get(port); ok {
 				ports.add(mapping.Label, mapping.HostIP, mapping.Value, mapping.To)
 			} else {
-				return c, fmt.Errorf("Port %q not found, check network stanza", port)
+				return c, fmt.Errorf("Port %q not found, check network block", port)
 			}
 		}
 	case len(task.Resources.NomadResources.Networks) > 0:

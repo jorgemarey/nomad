@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +28,7 @@ import (
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/nomad/testutil"
+	"github.com/shoenig/test/must"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -270,7 +270,7 @@ func TestWrapNonJSON(t *testing.T) {
 	req, _ := http.NewRequest("GET", "/v1/kv/key", nil)
 	s.Server.wrapNonJSON(handler)(resp, req)
 
-	respBody, _ := ioutil.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(resp.Body)
 	require.Equal(t, respBody, []byte("test response"))
 
 }
@@ -293,7 +293,7 @@ func TestWrapNonJSON_Error(t *testing.T) {
 		resp := httptest.NewRecorder()
 		req, _ := http.NewRequest("GET", "/v1/kv/key", nil)
 		s.Server.wrapNonJSON(handlerRPCErr)(resp, req)
-		respBody, _ := ioutil.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(resp.Body)
 		require.Equal(t, []byte("not found"), respBody)
 		require.Equal(t, 404, resp.Code)
 	}
@@ -303,7 +303,7 @@ func TestWrapNonJSON_Error(t *testing.T) {
 		resp := httptest.NewRecorder()
 		req, _ := http.NewRequest("GET", "/v1/kv/key", nil)
 		s.Server.wrapNonJSON(handlerCodedErr)(resp, req)
-		respBody, _ := ioutil.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(resp.Body)
 		require.Equal(t, []byte("unprocessable"), respBody)
 		require.Equal(t, 422, resp.Code)
 	}
@@ -353,7 +353,7 @@ func testPrettyPrint(pretty string, prettyFmt bool, t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to encode: %v", err)
 	}
-	actual, err := ioutil.ReadAll(resp.Body)
+	actual, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -476,29 +476,37 @@ func TestParseWait_InvalidIndex(t *testing.T) {
 func TestParseConsistency(t *testing.T) {
 	ci.Parallel(t)
 	var b structs.QueryOptions
+	var resp *httptest.ResponseRecorder
 
-	req, err := http.NewRequest("GET",
-		"/v1/catalog/nodes?stale", nil)
-	if err != nil {
-		t.Fatalf("err: %v", err)
+	testCases := [2]string{"/v1/catalog/nodes?stale", "/v1/catalog/nodes?stale=true"}
+	for _, urlPath := range testCases {
+		req, err := http.NewRequest("GET", urlPath, nil)
+		must.NoError(t, err)
+		resp = httptest.NewRecorder()
+		parseConsistency(resp, req, &b)
+		must.True(t, b.AllowStale)
 	}
 
-	parseConsistency(req, &b)
-	if !b.AllowStale {
-		t.Fatalf("Bad: %v", b)
-	}
+	req, err := http.NewRequest("GET", "/v1/catalog/nodes?stale=false", nil)
+	must.NoError(t, err)
+	resp = httptest.NewRecorder()
+	parseConsistency(resp, req, &b)
+	must.False(t, b.AllowStale)
+
+	req, err = http.NewRequest("GET", "/v1/catalog/nodes?stale=random", nil)
+	must.NoError(t, err)
+	resp = httptest.NewRecorder()
+	parseConsistency(resp, req, &b)
+	must.False(t, b.AllowStale)
+	must.EqOp(t, 400, resp.Code)
 
 	b = structs.QueryOptions{}
-	req, err = http.NewRequest("GET",
-		"/v1/catalog/nodes?consistent", nil)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
+	req, err = http.NewRequest("GET", "/v1/catalog/nodes?consistent", nil)
+	must.NoError(t, err)
 
-	parseConsistency(req, &b)
-	if b.AllowStale {
-		t.Fatalf("Bad: %v", b)
-	}
+	resp = httptest.NewRecorder()
+	parseConsistency(resp, req, &b)
+	must.False(t, b.AllowStale)
 }
 
 func TestParseRegion(t *testing.T) {
@@ -734,6 +742,7 @@ func TestHTTP_VerifyHTTPSClient(t *testing.T) {
 			CertFile:          foocert,
 			KeyFile:           fookey,
 		}
+		c.LogLevel = "off"
 	})
 	defer s.Shutdown()
 
@@ -749,7 +758,9 @@ func TestHTTP_VerifyHTTPSClient(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected a *url.Error but received: %T -> %v", err, err)
 	}
-	hostErr, ok := urlErr.Err.(x509.HostnameError)
+
+	cveErr := (urlErr.Err.(*tls.CertificateVerificationError)).Err
+	hostErr, ok := cveErr.(x509.HostnameError)
 	if !ok {
 		t.Fatalf("expected a x509.HostnameError but received: %T -> %v", urlErr.Err, urlErr.Err)
 	}
@@ -777,14 +788,16 @@ func TestHTTP_VerifyHTTPSClient(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected a *url.Error but received: %T -> %v", err, err)
 	}
-	_, ok = urlErr.Err.(x509.UnknownAuthorityError)
+
+	cveErr = (urlErr.Err.(*tls.CertificateVerificationError)).Err
+	_, ok = cveErr.(x509.UnknownAuthorityError)
 	if !ok {
 		t.Fatalf("expected a x509.UnknownAuthorityError but received: %T -> %v", urlErr.Err, urlErr.Err)
 	}
 
 	// FAIL: Requests that specify a valid hostname and CA cert but lack a
 	// client certificate should fail
-	cacertBytes, err := ioutil.ReadFile(cafile)
+	cacertBytes, err := os.ReadFile(cafile)
 	if err != nil {
 		t.Fatalf("error reading cacert: %v", err)
 	}
@@ -894,7 +907,7 @@ func TestHTTP_VerifyHTTPSClient_AfterConfigReload(t *testing.T) {
 	// HTTPS request should succeed
 	httpsReqURL := fmt.Sprintf("https://%s/v1/agent/self", s.Agent.config.AdvertiseAddrs.HTTP)
 
-	cacertBytes, err := ioutil.ReadFile(cafile)
+	cacertBytes, err := os.ReadFile(cafile)
 	assert.Nil(err)
 	tlsConf.RootCAs.AppendCertsFromPEM(cacertBytes)
 
@@ -925,7 +938,7 @@ func TestHTTP_VerifyHTTPSClient_AfterConfigReload(t *testing.T) {
 		},
 	}
 
-	cacertBytes, err = ioutil.ReadFile(cafile)
+	cacertBytes, err = os.ReadFile(cafile)
 	assert.Nil(err)
 	tlsConf.RootCAs.AppendCertsFromPEM(cacertBytes)
 
@@ -1302,9 +1315,7 @@ func TestHTTPServer_Limits_OK(t *testing.T) {
 				c.Limits.HTTPMaxConnsPerClient = tc.limit
 				c.LogLevel = "ERROR"
 			})
-			defer func() {
-				require.NoError(t, s.Shutdown())
-			}()
+			defer s.Shutdown()
 
 			assertTimeout(t, s, tc.assertTimeout, tc.timeout)
 
@@ -1406,7 +1417,7 @@ func Test_decodeBody(t *testing.T) {
 			name:          "empty input request body",
 		},
 		{
-			inputReq: &http.Request{Body: ioutil.NopCloser(strings.NewReader(`{"foo":"bar"}`))},
+			inputReq: &http.Request{Body: io.NopCloser(strings.NewReader(`{"foo":"bar"}`))},
 			inputOut: &struct {
 				Foo string `json:"foo"`
 			}{},
@@ -1484,5 +1495,5 @@ func encodeReq(obj interface{}) io.ReadCloser {
 	buf := bytes.NewBuffer(nil)
 	enc := json.NewEncoder(buf)
 	enc.Encode(obj)
-	return ioutil.NopCloser(buf)
+	return io.NopCloser(buf)
 }

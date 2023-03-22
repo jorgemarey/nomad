@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/rpc"
 	"os"
@@ -31,6 +30,7 @@ import (
 	"github.com/hashicorp/nomad/testutil"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/yamux"
+	"github.com/shoenig/test/must"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,6 +38,7 @@ import (
 // rpcClient is a test helper method to return a ClientCodec to use to make rpc
 // calls to the passed server.
 func rpcClient(t *testing.T, s *Server) rpc.ClientCodec {
+	t.Helper()
 	addr := s.config.RPCAddr
 	conn, err := net.DialTimeout("tcp", addr.String(), time.Second)
 	if err != nil {
@@ -46,6 +47,36 @@ func rpcClient(t *testing.T, s *Server) rpc.ClientCodec {
 	// Write the Nomad RPC byte to set the mode
 	conn.Write([]byte{byte(pool.RpcNomad)})
 	return pool.NewClientCodec(conn)
+}
+
+// rpcClientWithTLS is a test helper method to return a ClientCodec to use to
+// make RPC calls to the passed server via mTLS
+func rpcClientWithTLS(t *testing.T, srv *Server, cfg *config.TLSConfig) rpc.ClientCodec {
+	t.Helper()
+
+	// configure TLS, ignoring client-side validation
+	tlsConf, err := tlsutil.NewTLSConfiguration(cfg, true, true)
+	must.NoError(t, err)
+	outTLSConf, err := tlsConf.OutgoingTLSConfig()
+	must.NoError(t, err)
+	outTLSConf.InsecureSkipVerify = true
+
+	// make the TCP connection
+	conn, err := net.DialTimeout("tcp", srv.config.RPCAddr.String(), time.Second)
+
+	// write the TLS byte to set the mode
+	_, err = conn.Write([]byte{byte(pool.RpcTLS)})
+	must.NoError(t, err)
+
+	// connect w/ TLS
+	tlsConn := tls.Client(conn, outTLSConf)
+	must.NoError(t, tlsConn.Handshake())
+
+	// write the Nomad RPC byte to set the mode
+	_, err = tlsConn.Write([]byte{byte(pool.RpcNomad)})
+	must.NoError(t, err)
+
+	return pool.NewClientCodec(tlsConn)
 }
 
 func TestRPC_forwardLeader(t *testing.T) {
@@ -70,7 +101,7 @@ func TestRPC_forwardLeader(t *testing.T) {
 
 	if remote != nil {
 		var out struct{}
-		err := s1.forwardLeader(remote, "Status.Ping", struct{}{}, &out)
+		err := s1.forwardLeader(remote, "Status.Ping", &structs.GenericRequest{}, &out)
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -83,7 +114,7 @@ func TestRPC_forwardLeader(t *testing.T) {
 
 	if remote != nil {
 		var out struct{}
-		err := s2.forwardLeader(remote, "Status.Ping", struct{}{}, &out)
+		err := s2.forwardLeader(remote, "Status.Ping", &structs.GenericRequest{}, &out)
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -146,12 +177,12 @@ func TestRPC_forwardRegion(t *testing.T) {
 	testutil.WaitForLeader(t, s2.RPC)
 
 	var out struct{}
-	err := s1.forwardRegion("global", "Status.Ping", struct{}{}, &out)
+	err := s1.forwardRegion("global", "Status.Ping", &structs.GenericRequest{}, &out)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
-	err = s2.forwardRegion("global", "Status.Ping", struct{}{}, &out)
+	err = s2.forwardRegion("global", "Status.Ping", &structs.GenericRequest{}, &out)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -1119,7 +1150,7 @@ func TestRPC_TLS_Enforcement_RPC(t *testing.T) {
 	defer tlsHelper.cleanup()
 
 	standardRPCs := map[string]interface{}{
-		"Status.Ping": struct{}{},
+		"Status.Ping": &structs.GenericRequest{},
 	}
 
 	localServersOnlyRPCs := map[string]interface{}{
@@ -1338,7 +1369,7 @@ func newTLSTestHelper(t *testing.T) tlsTestHelper {
 	h.caPEM, h.pk, err = tlsutil.GenerateCA(tlsutil.CAOpts{Days: 5, Domain: "nomad"})
 	require.NoError(t, err)
 
-	err = ioutil.WriteFile(filepath.Join(h.dir, "ca.pem"), []byte(h.caPEM), 0600)
+	err = os.WriteFile(filepath.Join(h.dir, "ca.pem"), []byte(h.caPEM), 0600)
 	require.NoError(t, err)
 
 	// Generate servers and their certificate.
@@ -1377,6 +1408,7 @@ func newTLSTestHelper(t *testing.T) tlsTestHelper {
 			KeyFile:              h.serverCert + ".key",
 		}
 	})
+	testutil.WaitForLeader(t, h.nonVerifyServer.RPC)
 
 	return h
 }
@@ -1406,9 +1438,9 @@ func (h tlsTestHelper) newCert(t *testing.T, name string) string {
 	})
 	require.NoError(t, err)
 
-	err = ioutil.WriteFile(filepath.Join(h.dir, node+"-"+name+".pem"), []byte(pem), 0600)
+	err = os.WriteFile(filepath.Join(h.dir, node+"-"+name+".pem"), []byte(pem), 0600)
 	require.NoError(t, err)
-	err = ioutil.WriteFile(filepath.Join(h.dir, node+"-"+name+".key"), []byte(key), 0600)
+	err = os.WriteFile(filepath.Join(h.dir, node+"-"+name+".key"), []byte(key), 0600)
 	require.NoError(t, err)
 
 	return filepath.Join(h.dir, node+"-"+name)

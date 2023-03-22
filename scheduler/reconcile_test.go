@@ -1421,8 +1421,8 @@ func TestReconciler_MultiTG(t *testing.T) {
 }
 
 // Tests the reconciler properly handles jobs with multiple task groups with
-// only one having an update stanza and a deployment already being created
-func TestReconciler_MultiTG_SingleUpdateStanza(t *testing.T) {
+// only one having an update block and a deployment already being created
+func TestReconciler_MultiTG_SingleUpdateBlock(t *testing.T) {
 	ci.Parallel(t)
 
 	job := mock.Job()
@@ -1957,7 +1957,7 @@ func TestReconciler_RescheduleNow_Service(t *testing.T) {
 	tgName := job.TaskGroups[0].Name
 	now := time.Now()
 
-	// Set up reschedule policy and update stanza
+	// Set up reschedule policy and update block
 	job.TaskGroups[0].ReschedulePolicy = &structs.ReschedulePolicy{
 		Attempts:      1,
 		Interval:      24 * time.Hour,
@@ -2040,7 +2040,7 @@ func TestReconciler_RescheduleNow_WithinAllowedTimeWindow(t *testing.T) {
 	tgName := job.TaskGroups[0].Name
 	now := time.Now()
 
-	// Set up reschedule policy and update stanza
+	// Set up reschedule policy and update block
 	job.TaskGroups[0].ReschedulePolicy = &structs.ReschedulePolicy{
 		Attempts:      1,
 		Interval:      24 * time.Hour,
@@ -2122,7 +2122,7 @@ func TestReconciler_RescheduleNow_EvalIDMatch(t *testing.T) {
 	tgName := job.TaskGroups[0].Name
 	now := time.Now()
 
-	// Set up reschedule policy and update stanza
+	// Set up reschedule policy and update block
 	job.TaskGroups[0].ReschedulePolicy = &structs.ReschedulePolicy{
 		Attempts:      1,
 		Interval:      24 * time.Hour,
@@ -2206,7 +2206,7 @@ func TestReconciler_RescheduleNow_Service_WithCanaries(t *testing.T) {
 	tgName := job.TaskGroups[0].Name
 	now := time.Now()
 
-	// Set up reschedule policy and update stanza
+	// Set up reschedule policy and update block
 	job.TaskGroups[0].ReschedulePolicy = &structs.ReschedulePolicy{
 		Attempts:      1,
 		Interval:      24 * time.Hour,
@@ -2317,7 +2317,7 @@ func TestReconciler_RescheduleNow_Service_Canaries(t *testing.T) {
 	tgName := job.TaskGroups[0].Name
 	now := time.Now()
 
-	// Set up reschedule policy and update stanza
+	// Set up reschedule policy and update block
 	job.TaskGroups[0].ReschedulePolicy = &structs.ReschedulePolicy{
 		Delay:         5 * time.Second,
 		DelayFunction: "constant",
@@ -2445,7 +2445,7 @@ func TestReconciler_RescheduleNow_Service_Canaries_Limit(t *testing.T) {
 	tgName := job.TaskGroups[0].Name
 	now := time.Now()
 
-	// Set up reschedule policy and update stanza
+	// Set up reschedule policy and update block
 	job.TaskGroups[0].ReschedulePolicy = &structs.ReschedulePolicy{
 		Attempts:      1,
 		Interval:      24 * time.Hour,
@@ -4989,7 +4989,7 @@ func TestReconciler_ForceReschedule_Service(t *testing.T) {
 	job.TaskGroups[0].Count = 5
 	tgName := job.TaskGroups[0].Name
 
-	// Set up reschedule policy and update stanza
+	// Set up reschedule policy and update block
 	job.TaskGroups[0].ReschedulePolicy = &structs.ReschedulePolicy{
 		Attempts:      1,
 		Interval:      24 * time.Hour,
@@ -5068,7 +5068,7 @@ func TestReconciler_RescheduleNot_Service(t *testing.T) {
 	tgName := job.TaskGroups[0].Name
 	now := time.Now()
 
-	// Set up reschedule policy and update stanza
+	// Set up reschedule policy and update block
 	job.TaskGroups[0].ReschedulePolicy = &structs.ReschedulePolicy{
 		Attempts:      0,
 		Interval:      24 * time.Hour,
@@ -6074,22 +6074,6 @@ func TestReconciler_ComputeDeploymentPaused(t *testing.T) {
 			expected:        true,
 		},
 		{
-			name:            "multiregion periodic service is not paused",
-			jobType:         structs.JobTypeService,
-			isMultiregion:   true,
-			isPeriodic:      true,
-			isParameterized: false,
-			expected:        false,
-		},
-		{
-			name:            "multiregion parameterized service is not paused",
-			jobType:         structs.JobTypeService,
-			isMultiregion:   true,
-			isPeriodic:      false,
-			isParameterized: true,
-			expected:        false,
-		},
-		{
 			name:            "single region batch job is not paused",
 			jobType:         structs.JobTypeBatch,
 			isMultiregion:   false,
@@ -6102,6 +6086,22 @@ func TestReconciler_ComputeDeploymentPaused(t *testing.T) {
 			jobType:         structs.JobTypeBatch,
 			isMultiregion:   false,
 			isPeriodic:      false,
+			isParameterized: false,
+			expected:        false,
+		},
+		{
+			name:            "multiregion parameterized batch is not paused",
+			jobType:         structs.JobTypeBatch,
+			isMultiregion:   true,
+			isPeriodic:      false,
+			isParameterized: true,
+			expected:        false,
+		},
+		{
+			name:            "multiregion periodic batch is not paused",
+			jobType:         structs.JobTypeBatch,
+			isMultiregion:   true,
+			isPeriodic:      true,
 			isParameterized: false,
 			expected:        false,
 		},
@@ -6119,8 +6119,18 @@ func TestReconciler_ComputeDeploymentPaused(t *testing.T) {
 
 			require.NotNil(t, job, "invalid job type", tc.jobType)
 
+			var deployment *structs.Deployment
 			if tc.isMultiregion {
 				job.Multiregion = multiregionCfg
+
+				// This deployment is created by the Job.Register RPC and
+				// fetched by the scheduler before handing it to the
+				// reconciler.
+				if job.UsesDeployments() {
+					deployment = structs.NewDeployment(job, 100)
+					deployment.Status = structs.DeploymentStatusInitializing
+					deployment.StatusDescription = structs.DeploymentStatusDescriptionPendingForPeer
+				}
 			}
 
 			if tc.isPeriodic {
@@ -6132,8 +6142,8 @@ func TestReconciler_ComputeDeploymentPaused(t *testing.T) {
 			}
 
 			reconciler := NewAllocReconciler(
-				testlog.HCLogger(t), allocUpdateFnIgnore, false, job.ID, job,
-				nil, nil, nil, "", job.Priority, true)
+				testlog.HCLogger(t), allocUpdateFnIgnore, false, job.ID, job, deployment,
+				nil, nil, "", job.Priority, true)
 
 			_ = reconciler.Compute()
 

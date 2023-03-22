@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"sort"
 	"strings"
@@ -31,7 +30,7 @@ Usage: nomad var <subcommand> [options] [args]
 
   This command groups subcommands for interacting with variables. Variables
   allow operators to provide credentials and otherwise sensitive material to
-  Nomad jobs at runtime via the template stanza or directly through
+  Nomad jobs at runtime via the template block or directly through
   the Nomad API and CLI.
 
   Users can create new variables; list, inspect, and delete existing
@@ -235,7 +234,7 @@ func (b *KVBuilder) add(raw string) error {
 
 	if len(value) > 0 {
 		if value[0] == '@' {
-			contents, err := ioutil.ReadFile(value[1:])
+			contents, err := os.ReadFile(value[1:])
 			if err != nil {
 				return fmt.Errorf("error reading file: %w", err)
 			}

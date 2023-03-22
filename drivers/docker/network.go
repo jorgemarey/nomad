@@ -83,10 +83,19 @@ func (d *Driver) CreateNetwork(allocID string, createSpec *drivers.NetworkCreate
 		return nil, false, err
 	}
 
+	// keep track of this pause container for reconciliation
+	d.pauseContainers.add(container.ID)
+
 	return specFromContainer(container, createSpec.Hostname), true, nil
 }
 
 func (d *Driver) DestroyNetwork(allocID string, spec *drivers.NetworkIsolationSpec) error {
+	id := spec.Labels[dockerNetSpecLabelKey]
+
+	// no longer tracking this pause container; even if we fail here we should
+	// let the background reconciliation keep trying
+	d.pauseContainers.remove(id)
+
 	client, _, err := d.dockerClients()
 	if err != nil {
 		return fmt.Errorf("failed to connect to docker daemon: %s", err)
@@ -94,7 +103,7 @@ func (d *Driver) DestroyNetwork(allocID string, spec *drivers.NetworkIsolationSp
 
 	if err := client.RemoveContainer(docker.RemoveContainerOptions{
 		Force: true,
-		ID:    spec.Labels[dockerNetSpecLabelKey],
+		ID:    id,
 	}); err != nil {
 		return err
 	}
@@ -119,17 +128,25 @@ func (d *Driver) DestroyNetwork(allocID string, spec *drivers.NetworkIsolationSp
 // createSandboxContainerConfig creates a docker container configuration which
 // starts a container with an empty network namespace.
 func (d *Driver) createSandboxContainerConfig(allocID string, createSpec *drivers.NetworkCreateRequest) (*docker.CreateContainerOptions, error) {
-
 	return &docker.CreateContainerOptions{
 		Name: fmt.Sprintf("nomad_init_%s", allocID),
 		Config: &docker.Config{
 			Image:    d.config.InfraImage,
 			Hostname: createSpec.Hostname,
+			Labels: map[string]string{
+				dockerLabelAllocID: allocID,
+			},
 		},
 		HostConfig: &docker.HostConfig{
 			// Set the network mode to none which creates a network namespace
 			// with only a loopback interface.
 			NetworkMode: "none",
+
+			// Set the restart policy to unless-stopped. The pause container should
+			// never not be running until Nomad issues a stop.
+			//
+			// https://docs.docker.com/engine/reference/run/#restart-policies---restart
+			RestartPolicy: docker.RestartUnlessStopped(),
 		},
 	}, nil
 }

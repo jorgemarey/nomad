@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"reflect"
@@ -130,9 +129,9 @@ test`,
 	}
 
 	for i, c := range cases {
-		in := ioutil.NopCloser(strings.NewReader(c.Input))
+		in := io.NopCloser(strings.NewReader(c.Input))
 		limit := NewLineLimitReader(in, c.Lines, c.SearchLimit, 0)
-		outBytes, err := ioutil.ReadAll(limit)
+		outBytes, err := io.ReadAll(limit)
 		if err != nil {
 			t.Fatalf("case %d failed: %v", i, err)
 		}
@@ -182,7 +181,7 @@ func TestHelpers_LineLimitReader_TimeLimit(t *testing.T) {
 	go func() {
 		defer close(resultCh)
 		defer close(errCh)
-		outBytes, err := ioutil.ReadAll(limit)
+		outBytes, err := io.ReadAll(limit)
 		if err != nil {
 			errCh <- fmt.Errorf("ReadAll failed: %v", err)
 			return
@@ -209,7 +208,7 @@ func TestHelpers_LineLimitReader_TimeLimit(t *testing.T) {
 }
 
 const (
-	job = `job "job1" {
+	job1 = `job "job1" {
   type        = "service"
   datacenters = ["dc1"]
   group "group1" {
@@ -258,12 +257,12 @@ var (
 // Test APIJob with local jobfile
 func TestJobGetter_LocalFile(t *testing.T) {
 	ci.Parallel(t)
-	fh, err := ioutil.TempFile("", "nomad")
+	fh, err := os.CreateTemp("", "nomad")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
 	defer os.Remove(fh.Name())
-	_, err = fh.WriteString(job)
+	_, err = fh.WriteString(job1)
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -307,7 +306,7 @@ func TestJobGetter_LocalFile_InvalidHCL2(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			fh, err := ioutil.TempFile("", "nomad")
+			fh, err := os.CreateTemp("", "nomad")
 			require.NoError(t, err)
 			defer os.Remove(fh.Name())
 			defer fh.Close()
@@ -351,7 +350,7 @@ job "example" {
 	fileVars := `var3 = "from-varfile"`
 	expected := []string{"default-val", "from-cli", "from-varfile", "from-envvar"}
 
-	hclf, err := ioutil.TempFile("", "hcl")
+	hclf, err := os.CreateTemp("", "hcl")
 	require.NoError(t, err)
 	defer os.Remove(hclf.Name())
 	defer hclf.Close()
@@ -359,7 +358,7 @@ job "example" {
 	_, err = hclf.WriteString(hcl)
 	require.NoError(t, err)
 
-	vf, err := ioutil.TempFile("", "var.hcl")
+	vf, err := os.CreateTemp("", "var.hcl")
 	require.NoError(t, err)
 	defer os.Remove(vf.Name())
 	defer vf.Close()
@@ -400,7 +399,7 @@ unsedVar2 = "from-varfile"
 `
 	expected := []string{"default-val", "from-cli", "from-varfile", "from-envvar"}
 
-	hclf, err := ioutil.TempFile("", "hcl")
+	hclf, err := os.CreateTemp("", "hcl")
 	require.NoError(t, err)
 	defer os.Remove(hclf.Name())
 	defer hclf.Close()
@@ -408,7 +407,7 @@ unsedVar2 = "from-varfile"
 	_, err = hclf.WriteString(hcl)
 	require.NoError(t, err)
 
-	vf, err := ioutil.TempFile("", "var.hcl")
+	vf, err := os.CreateTemp("", "var.hcl")
 	require.NoError(t, err)
 	defer os.Remove(vf.Name())
 	defer vf.Close()
@@ -427,7 +426,7 @@ unsedVar2 = "from-varfile"
 func TestJobGetter_HTTPServer(t *testing.T) {
 	ci.Parallel(t)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, job)
+		fmt.Fprintf(w, job1)
 	})
 	go http.ListenAndServe("127.0.0.1:12345", nil)
 

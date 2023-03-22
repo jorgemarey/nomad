@@ -67,7 +67,7 @@ module('Acceptance | exec', function (hooks) {
       region: 'region-2',
     });
 
-    assert.equal(document.title, 'Exec - region-2 - Nomad');
+    assert.equal(document.title, 'Exec - region-2 - Mirage - Nomad');
 
     assert.equal(Exec.header.region.text, this.job.region);
     assert.equal(Exec.header.namespace.text, this.job.namespace);
@@ -297,7 +297,11 @@ module('Acceptance | exec', function (hooks) {
       } /bin/bash`
     );
 
-    await percySnapshot(assert);
+    const terminalTextRendered = assert.async();
+    setTimeout(async () => {
+      await percySnapshot(assert);
+      terminalTextRendered();
+    }, 1000);
   });
 
   test('an allocation can be specified', async function (assert) {

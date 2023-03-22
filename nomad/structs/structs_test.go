@@ -30,7 +30,6 @@ func TestJob_Validate(t *testing.T) {
 		"job region",
 		"job type",
 		"namespace",
-		"priority",
 		"task groups",
 	)
 
@@ -57,8 +56,8 @@ func TestJob_Validate(t *testing.T) {
 		Namespace:   "test",
 		Name:        "my-job",
 		Type:        JobTypeService,
-		Priority:    50,
-		Datacenters: []string{"dc1"},
+		Priority:    JobDefaultPriority,
+		Datacenters: []string{"*"},
 		TaskGroups: []*TaskGroup{
 			{
 				Name: "web",
@@ -91,7 +90,7 @@ func TestJob_Validate(t *testing.T) {
 		"group 3 missing name",
 		"Task group web validation failed",
 	)
-	// test for empty datacenters
+	// test for invalid datacenters
 	j = &Job{
 		Datacenters: []string{""},
 	}
@@ -180,7 +179,7 @@ func TestJob_Warnings(t *testing.T) {
 		Expected []string
 	}{
 		{
-			Name:     "Higher counts for update stanza",
+			Name:     "Higher counts for update block",
 			Expected: []string{"max parallel count is greater"},
 			Job: &Job{
 				Type: JobTypeService,
@@ -237,7 +236,7 @@ func TestJob_Warnings(t *testing.T) {
 		},
 		{
 			Name:     "Template.VaultGrace Deprecated",
-			Expected: []string{"VaultGrace has been deprecated as of Nomad 0.11 and ignored since Vault 0.5. Please remove VaultGrace / vault_grace from template stanza."},
+			Expected: []string{"VaultGrace has been deprecated as of Nomad 0.11 and ignored since Vault 0.5. Please remove VaultGrace / vault_grace from template block."},
 			Job: &Job{
 				Type: JobTypeService,
 				TaskGroups: []*TaskGroup{
@@ -370,9 +369,9 @@ func testJob() *Job {
 		Namespace:   "test",
 		Name:        "my-job",
 		Type:        JobTypeService,
-		Priority:    50,
+		Priority:    JobDefaultPriority,
 		AllAtOnce:   false,
-		Datacenters: []string{"dc1"},
+		Datacenters: []string{"*"},
 		Constraints: []*Constraint{
 			{
 				LTarget: "$attr.kernel.name",
@@ -428,6 +427,10 @@ func testJob() *Job {
 							{
 								GetterSource: "http://foo.com",
 							},
+						},
+						Identity: &WorkloadIdentity{
+							Env:  true,
+							File: true,
 						},
 						Resources: &Resources{
 							CPU:      500,
@@ -577,7 +580,7 @@ func TestJob_SystemJob_Validate(t *testing.T) {
 	}}
 	err = j.Validate()
 	require.NotNil(t, err)
-	require.Contains(t, err.Error(), "System jobs may not have an affinity stanza")
+	require.Contains(t, err.Error(), "System jobs may not have an affinity block")
 
 	// Add spread at job and task group level, that should fail validation
 	j.Spreads = []*Spread{{
@@ -591,7 +594,7 @@ func TestJob_SystemJob_Validate(t *testing.T) {
 
 	err = j.Validate()
 	require.NotNil(t, err)
-	require.Contains(t, err.Error(), "System jobs may not have a spread stanza")
+	require.Contains(t, err.Error(), "System jobs may not have a spread block")
 
 }
 
@@ -863,12 +866,12 @@ func TestJob_PartEqual(t *testing.T) {
 	ci.Parallel(t)
 
 	ns := &Networks{}
-	require.True(t, ns.Equals(&Networks{}))
+	require.True(t, ns.Equal(&Networks{}))
 
 	ns = &Networks{
 		&NetworkResource{Device: "eth0"},
 	}
-	require.True(t, ns.Equals(&Networks{
+	require.True(t, ns.Equal(&Networks{
 		&NetworkResource{Device: "eth0"},
 	}))
 
@@ -877,7 +880,7 @@ func TestJob_PartEqual(t *testing.T) {
 		&NetworkResource{Device: "eth1"},
 		&NetworkResource{Device: "eth2"},
 	}
-	require.True(t, ns.Equals(&Networks{
+	require.True(t, ns.Equal(&Networks{
 		&NetworkResource{Device: "eth2"},
 		&NetworkResource{Device: "eth0"},
 		&NetworkResource{Device: "eth1"},
@@ -888,7 +891,7 @@ func TestJob_PartEqual(t *testing.T) {
 		&Constraint{"left1", "right1", "="},
 		&Constraint{"left2", "right2", "="},
 	}
-	require.True(t, cs.Equals(&Constraints{
+	require.True(t, cs.Equal(&Constraints{
 		&Constraint{"left0", "right0", "="},
 		&Constraint{"left2", "right2", "="},
 		&Constraint{"left1", "right1", "="},
@@ -899,7 +902,7 @@ func TestJob_PartEqual(t *testing.T) {
 		&Affinity{"left1", "right1", "=", 0},
 		&Affinity{"left2", "right2", "=", 0},
 	}
-	require.True(t, as.Equals(&Affinities{
+	require.True(t, as.Equal(&Affinities{
 		&Affinity{"left0", "right0", "=", 0},
 		&Affinity{"left2", "right2", "=", 0},
 		&Affinity{"left1", "right1", "=", 0},
@@ -2400,7 +2403,7 @@ func TestTask_Validate_ConnectProxyKind(t *testing.T) {
 			Service: &Service{
 				Name: "redis",
 			},
-			ErrContains: "Connect proxy task must not have a service stanza",
+			ErrContains: "Connect proxy task must not have a service block",
 		},
 		{
 			Desc:   "Leader should not be set",
@@ -2425,7 +2428,7 @@ func TestTask_Validate_ConnectProxyKind(t *testing.T) {
 			ErrContains: `No Connect services in task group with Connect proxy ("redis")`,
 		},
 		{
-			Desc: "Connect stanza not configured in group",
+			Desc: "Connect block not configured in group",
 			Kind: "connect-proxy:redis",
 			TgService: []*Service{{
 				Name: "redis",
@@ -2484,31 +2487,31 @@ func TestLogConfig_Equals(t *testing.T) {
 	t.Run("both nil", func(t *testing.T) {
 		a := (*LogConfig)(nil)
 		b := (*LogConfig)(nil)
-		require.True(t, a.Equals(b))
+		require.True(t, a.Equal(b))
 	})
 
 	t.Run("one nil", func(t *testing.T) {
 		a := new(LogConfig)
 		b := (*LogConfig)(nil)
-		require.False(t, a.Equals(b))
+		require.False(t, a.Equal(b))
 	})
 
 	t.Run("max files", func(t *testing.T) {
 		a := &LogConfig{MaxFiles: 1, MaxFileSizeMB: 200}
 		b := &LogConfig{MaxFiles: 2, MaxFileSizeMB: 200}
-		require.False(t, a.Equals(b))
+		require.False(t, a.Equal(b))
 	})
 
 	t.Run("max file size", func(t *testing.T) {
 		a := &LogConfig{MaxFiles: 1, MaxFileSizeMB: 100}
 		b := &LogConfig{MaxFiles: 1, MaxFileSizeMB: 200}
-		require.False(t, a.Equals(b))
+		require.False(t, a.Equal(b))
 	})
 
 	t.Run("same", func(t *testing.T) {
 		a := &LogConfig{MaxFiles: 1, MaxFileSizeMB: 200}
 		b := &LogConfig{MaxFiles: 1, MaxFileSizeMB: 200}
-		require.True(t, a.Equals(b))
+		require.True(t, a.Equal(b))
 	})
 }
 
@@ -2886,7 +2889,7 @@ func TestTaskWaitConfig_Equals(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.True(t, tc.config.Equals(tc.expected))
+			require.True(t, tc.config.Equal(tc.expected))
 		})
 	}
 }
@@ -6330,7 +6333,7 @@ func TestNetworkResourcesEquals(t *testing.T) {
 	for _, testCase := range networkResourcesTest {
 		first := testCase.input[0]
 		second := testCase.input[1]
-		require.Equal(testCase.expected, first.Equals(second), testCase.errorMsg)
+		require.Equal(testCase.expected, first.Equal(second), testCase.errorMsg)
 	}
 }
 
@@ -6536,7 +6539,7 @@ func TestSpread_Validate(t *testing.T) {
 				Attribute: "${node.datacenter}",
 				Weight:    -1,
 			},
-			err:  fmt.Errorf("Spread stanza must have a positive weight from 0 to 100"),
+			err:  fmt.Errorf("Spread block must have a positive weight from 0 to 100"),
 			name: "Invalid weight",
 		},
 		{
@@ -6544,7 +6547,7 @@ func TestSpread_Validate(t *testing.T) {
 				Attribute: "${node.datacenter}",
 				Weight:    110,
 			},
-			err:  fmt.Errorf("Spread stanza must have a positive weight from 0 to 100"),
+			err:  fmt.Errorf("Spread block must have a positive weight from 0 to 100"),
 			name: "Invalid weight",
 		},
 		{
