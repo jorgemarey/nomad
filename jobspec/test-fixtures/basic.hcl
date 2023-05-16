@@ -191,6 +191,7 @@ job "binstore-storagelocker" {
       }
 
       logs {
+        disabled      = false
         max_files     = 14
         max_file_size = 101
       }

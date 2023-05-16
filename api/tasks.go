@@ -638,12 +638,19 @@ func (g *TaskGroup) AddSpread(s *Spread) *TaskGroup {
 type LogConfig struct {
 	MaxFiles      *int `mapstructure:"max_files" hcl:"max_files,optional"`
 	MaxFileSizeMB *int `mapstructure:"max_file_size" hcl:"max_file_size,optional"`
+
+	// COMPAT(1.6.0): Enabled had to be swapped for Disabled to fix a backwards
+	// compatibility bug when restoring pre-1.5.4 jobs. Remove in 1.6.0
+	Enabled *bool `mapstructure:"enabled" hcl:"enabled,optional"`
+
+	Disabled *bool `mapstructure:"disabled" hcl:"disabled,optional"`
 }
 
 func DefaultLogConfig() *LogConfig {
 	return &LogConfig{
 		MaxFiles:      pointerOf(10),
 		MaxFileSizeMB: pointerOf(10),
+		Disabled:      pointerOf(false),
 	}
 }
 
@@ -653,6 +660,9 @@ func (l *LogConfig) Canonicalize() {
 	}
 	if l.MaxFileSizeMB == nil {
 		l.MaxFileSizeMB = pointerOf(10)
+	}
+	if l.Disabled == nil {
+		l.Disabled = pointerOf(false)
 	}
 }
 
@@ -973,6 +983,12 @@ func (t *Task) AddAffinity(a *Affinity) *Task {
 // SetLogConfig sets a log config to a task
 func (t *Task) SetLogConfig(l *LogConfig) *Task {
 	t.LogConfig = l
+	return t
+}
+
+// SetLifecycle is used to set lifecycle config to a task.
+func (t *Task) SetLifecycle(l *TaskLifecycle) *Task {
+	t.Lifecycle = l
 	return t
 }
 

@@ -2557,6 +2557,9 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 								Tags:                   []string{"f", "g"},
 								Port:                   "9000",
 								DisableDefaultTCPCheck: true,
+								Meta: map[string]string{
+									"test-key": "test-value",
+								},
 							},
 						},
 					},
@@ -2704,6 +2707,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						KillTimeout: pointer.Of(10 * time.Second),
 						KillSignal:  "SIGQUIT",
 						LogConfig: &api.LogConfig{
+							Disabled:      pointer.Of(true),
 							MaxFiles:      pointer.Of(10),
 							MaxFileSizeMB: pointer.Of(100),
 						},
@@ -2965,6 +2969,9 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 								Tags:                   []string{"f", "g"},
 								Port:                   "9000",
 								DisableDefaultTCPCheck: true,
+								Meta: map[string]string{
+									"test-key": "test-value",
+								},
 							},
 						},
 					},
@@ -3118,6 +3125,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						KillTimeout: 10 * time.Second,
 						KillSignal:  "SIGQUIT",
 						LogConfig: &structs.LogConfig{
+							Disabled:      true,
 							MaxFiles:      10,
 							MaxFileSizeMB: 100,
 						},
@@ -3274,6 +3282,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						KillTimeout: pointer.Of(10 * time.Second),
 						KillSignal:  "SIGQUIT",
 						LogConfig: &api.LogConfig{
+							Disabled:      pointer.Of(true),
 							MaxFiles:      pointer.Of(10),
 							MaxFileSizeMB: pointer.Of(100),
 						},
@@ -3399,6 +3408,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						KillTimeout: 10 * time.Second,
 						KillSignal:  "SIGQUIT",
 						LogConfig: &structs.LogConfig{
+							Disabled:      true,
 							MaxFiles:      10,
 							MaxFileSizeMB: 100,
 						},
@@ -3569,14 +3579,39 @@ func TestConversion_dereferenceInt(t *testing.T) {
 
 func TestConversion_apiLogConfigToStructs(t *testing.T) {
 	ci.Parallel(t)
-	require.Nil(t, apiLogConfigToStructs(nil))
-	require.Equal(t, &structs.LogConfig{
+	must.Nil(t, apiLogConfigToStructs(nil))
+	must.Eq(t, &structs.LogConfig{
+		Disabled:      true,
 		MaxFiles:      2,
 		MaxFileSizeMB: 8,
 	}, apiLogConfigToStructs(&api.LogConfig{
+		Disabled:      pointer.Of(true),
 		MaxFiles:      pointer.Of(2),
 		MaxFileSizeMB: pointer.Of(8),
 	}))
+
+	// COMPAT(1.6.0): verify backwards compatibility fixes
+	// Note: we're intentionally ignoring the Enabled: false case
+	must.Eq(t, &structs.LogConfig{Disabled: false},
+		apiLogConfigToStructs(&api.LogConfig{
+			Enabled: pointer.Of(false),
+		}))
+	must.Eq(t, &structs.LogConfig{Disabled: false},
+		apiLogConfigToStructs(&api.LogConfig{
+			Enabled: pointer.Of(true),
+		}))
+	must.Eq(t, &structs.LogConfig{Disabled: false},
+		apiLogConfigToStructs(&api.LogConfig{}))
+	must.Eq(t, &structs.LogConfig{Disabled: false},
+		apiLogConfigToStructs(&api.LogConfig{
+			Disabled: pointer.Of(false),
+		}))
+	must.Eq(t, &structs.LogConfig{Disabled: false},
+		apiLogConfigToStructs(&api.LogConfig{
+			Enabled:  pointer.Of(false),
+			Disabled: pointer.Of(false),
+		}))
+
 }
 
 func TestConversion_apiResourcesToStructs(t *testing.T) {
@@ -3647,6 +3682,7 @@ func TestConversion_apiConnectSidecarTaskToStructs(t *testing.T) {
 		Meta:        meta,
 		KillTimeout: &timeout,
 		LogConfig: &structs.LogConfig{
+			Disabled:      true,
 			MaxFiles:      2,
 			MaxFileSizeMB: 8,
 		},
@@ -3665,6 +3701,7 @@ func TestConversion_apiConnectSidecarTaskToStructs(t *testing.T) {
 		Meta:        meta,
 		KillTimeout: &timeout,
 		LogConfig: &api.LogConfig{
+			Disabled:      pointer.Of(true),
 			MaxFiles:      pointer.Of(2),
 			MaxFileSizeMB: pointer.Of(8),
 		},
@@ -3766,11 +3803,17 @@ func TestConversion_apiConnectSidecarServiceToStructs(t *testing.T) {
 		Proxy: &structs.ConsulProxy{
 			LocalServiceAddress: "192.168.30.1",
 		},
+		Meta: map[string]string{
+			"test-key": "test-value",
+		},
 	}, apiConnectSidecarServiceToStructs(&api.ConsulSidecarService{
 		Tags: []string{"foo"},
 		Port: "myPort",
 		Proxy: &api.ConsulProxy{
 			LocalServiceAddress: "192.168.30.1",
+		},
+		Meta: map[string]string{
+			"test-key": "test-value",
 		},
 	}))
 }

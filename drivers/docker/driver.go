@@ -171,7 +171,7 @@ func NewDockerDriver(ctx context.Context, logger hclog.Logger) drivers.DriverPlu
 		ctx:             ctx,
 		logger:          logger,
 	}
-	go driver.recoverPauseContainers(ctx)
+
 	return driver
 }
 
@@ -251,7 +251,7 @@ func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 		net:                   handleState.DriverNetwork,
 	}
 
-	if !d.config.DisableLogCollection {
+	if loggingIsEnabled(d.config, handle.Config) {
 		h.dlogger, h.dloggerPluginClient, err = d.reattachToDockerLogger(handleState.ReattachConfig)
 		if err != nil {
 			d.logger.Warn("failed to reattach to docker logger process", "error", err)
@@ -280,6 +280,16 @@ func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 	go h.run()
 
 	return nil
+}
+
+func loggingIsEnabled(driverCfg *DriverConfig, taskCfg *drivers.TaskConfig) bool {
+	if driverCfg.DisableLogCollection {
+		return false
+	}
+	if taskCfg.StderrPath == os.DevNull && taskCfg.StdoutPath == os.DevNull {
+		return false
+	}
+	return true
 }
 
 func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drivers.DriverNetwork, error) {
@@ -397,7 +407,7 @@ CREATE:
 		}
 	}
 
-	collectingLogs := !d.config.DisableLogCollection
+	collectingLogs := loggingIsEnabled(d.config, cfg)
 
 	var dlogger docklog.DockerLogger
 	var pluginClient *plugin.Client
@@ -748,11 +758,11 @@ func (d *Driver) containerBinds(task *drivers.TaskConfig, driverConfig *TaskConf
 	return binds, nil
 }
 
+// recoverPauseContainers gets called when we start up the plugin. On client
+// restarts we need to rebuild the set of pause containers we are
+// tracking. Basically just scan all containers and pull the ID from anything
+// that has the Nomad Label and has Name with prefix "/nomad_init_".
 func (d *Driver) recoverPauseContainers(ctx context.Context) {
-	// On Client restart, we must rebuild the set of pause containers
-	// we are tracking. Basically just scan all containers and pull the ID from
-	// anything that has the Nomad Label and has Name with prefix "/nomad_init_".
-
 	_, dockerClient, err := d.dockerClients()
 	if err != nil {
 		d.logger.Error("failed to recover pause containers", "error", err)
@@ -766,8 +776,8 @@ func (d *Driver) recoverPauseContainers(ctx context.Context) {
 			"label": {dockerLabelAllocID},
 		},
 	})
-	if listErr != nil {
-		d.logger.Error("failed to list pause containers", "error", err)
+	if listErr != nil && listErr != ctx.Err() {
+		d.logger.Error("failed to list pause containers", "error", listErr)
 		return
 	}
 
@@ -1036,7 +1046,7 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		hostConfig.ShmSize = driverConfig.ShmSize
 	}
 
-	// Setup devices
+	// Setup devices from Docker-specific config
 	for _, device := range driverConfig.Devices {
 		dd, err := device.toDockerDevice()
 		if err != nil {
@@ -1044,6 +1054,8 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		}
 		hostConfig.Devices = append(hostConfig.Devices, dd)
 	}
+
+	// Setup devices from Nomad device plugins
 	for _, device := range task.Devices {
 		hostConfig.Devices = append(hostConfig.Devices, docker.Device{
 			PathOnHost:        device.HostPath,

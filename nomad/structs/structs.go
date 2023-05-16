@@ -524,15 +524,15 @@ func (ai *AuthenticatedIdentity) String() string {
 		return "unauthenticated"
 	}
 	if ai.ACLToken != nil {
-		return fmt.Sprintf("token:%s", ai.ACLToken.AccessorID)
+		return "token:" + ai.ACLToken.AccessorID
 	}
 	if ai.Claims != nil {
-		return fmt.Sprintf("alloc:%s", ai.Claims.AllocationID)
+		return "alloc:" + ai.Claims.AllocationID
 	}
 	if ai.ClientID != "" {
-		return fmt.Sprintf("client:%s", ai.ClientID)
+		return "client:" + ai.ClientID
 	}
-	return fmt.Sprintf("%s:%s", ai.TLSName, ai.RemoteIP.String())
+	return ai.TLSName + ":" + ai.RemoteIP.String()
 }
 
 func (ai *AuthenticatedIdentity) IsExpired(now time.Time) bool {
@@ -7188,6 +7188,7 @@ const (
 type LogConfig struct {
 	MaxFiles      int
 	MaxFileSizeMB int
+	Disabled      bool
 }
 
 func (l *LogConfig) Equal(o *LogConfig) bool {
@@ -7203,6 +7204,10 @@ func (l *LogConfig) Equal(o *LogConfig) bool {
 		return false
 	}
 
+	if l.Disabled != o.Disabled {
+		return false
+	}
+
 	return true
 }
 
@@ -7213,6 +7218,7 @@ func (l *LogConfig) Copy() *LogConfig {
 	return &LogConfig{
 		MaxFiles:      l.MaxFiles,
 		MaxFileSizeMB: l.MaxFileSizeMB,
+		Disabled:      l.Disabled,
 	}
 }
 
@@ -7221,11 +7227,13 @@ func DefaultLogConfig() *LogConfig {
 	return &LogConfig{
 		MaxFiles:      10,
 		MaxFileSizeMB: 10,
+		Disabled:      false,
 	}
 }
 
-// Validate returns an error if the log config specified are less than
-// the minimum allowed.
+// Validate returns an error if the log config specified are less than the
+// minimum allowed. Note that because we have a non-zero default MaxFiles and
+// MaxFileSizeMB, we can't validate that they're unset if Disabled=true
 func (l *LogConfig) Validate() error {
 	var mErr multierror.Error
 	if l.MaxFiles < 1 {
@@ -9821,6 +9829,14 @@ func (d *Deployment) GoString() string {
 	return base
 }
 
+// GetNamespace implements the NamespaceGetter interface, required for pagination.
+func (d *Deployment) GetNamespace() string {
+	if d == nil {
+		return ""
+	}
+	return d.Namespace
+}
+
 // DeploymentState tracks the state of a deployment for a given task group.
 type DeploymentState struct {
 	// AutoRevert marks whether the task group has indicated the job should be
@@ -10658,13 +10674,8 @@ func (a *Allocation) ShouldMigrate() bool {
 		return false
 	}
 
-	// We won't migrate any data is the user hasn't enabled migration or the
-	// disk is not marked as sticky
-	if !tg.EphemeralDisk.Migrate || !tg.EphemeralDisk.Sticky {
-		return false
-	}
-
-	return true
+	// We won't migrate any data if the user hasn't enabled migration
+	return tg.EphemeralDisk.Migrate
 }
 
 // SetEventDisplayMessages populates the display message if its not already set,

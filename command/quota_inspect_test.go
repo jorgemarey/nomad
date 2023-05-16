@@ -4,9 +4,10 @@
 package command
 
 import (
-	"strings"
+	"encoding/json"
 	"testing"
 
+	"github.com/hashicorp/nomad/api"
 	"github.com/hashicorp/nomad/ci"
 	"github.com/mitchellh/cli"
 	"github.com/posener/complete"
@@ -24,7 +25,7 @@ func TestQuotaInspectCommand_Fails(t *testing.T) {
 	cmd := &QuotaInspectCommand{Meta: Meta{Ui: ui}}
 
 	// Fails on misuse
-	code = cmd.Run([]string{"some", "bad", "args"})
+	code := cmd.Run([]string{"some", "bad", "args"})
 	must.One(t, code)
 
 	must.StrContains(t, ui.ErrorWriter.String(), commandErrorText(cmd))
@@ -50,39 +51,38 @@ func TestQuotaInspectCommand_Run(t *testing.T) {
 	// Create a quota to delete
 	qs := testQuotaSpec()
 	_, err := client.Quotas().Register(qs, nil)
-	must.NoError(t, err)
+	must.NoError(t, err, must.Sprint("unexpected error:", err))
 
 	// Delete a quota
 	code := cmd.Run([]string{"-address=" + url, qs.Name})
 	must.Zero(t, code)
 
 	out := ui.OutputWriter.String()
-	if !strings.Contains(out, "Usages") || !strings.Contains(out, qs.Name) {
-		t.Fatalf("expected quota, got: %s", out)
-	}
+	must.StrContains(t, out, "Usages")
+	must.StrContains(t, out, qs.Name)
 
+	ui.OutputWriter.Reset()
 	// List json
-	must.Zero(t, cmd.Run([]string{"-address=" + url, "-json", allocID}))
+	must.Zero(t, cmd.Run([]string{"-address=" + url, "-json", qs.Name}))
 
-	outJson := *api.Quotas{}
+	outJson := api.QuotaSpec{}
 	err = json.Unmarshal(ui.OutputWriter.Bytes(), &outJson)
-	must.NoError(t, err)
+	must.NoError(t, err, must.Sprint("unexpected error:", err))
 
 	ui.OutputWriter.Reset()
 
 	// Go template to format the output
-	code = cmd.Run([]string{"-address=" + url, "-t", "{{ .Name }}", allocID})
+	code = cmd.Run([]string{"-address=" + url, "-t", "{{ .Name }}", qs.Name})
 	must.Zero(t, code)
 
 	out = ui.OutputWriter.String()
-	must.StrContains(t, out, "test-quota")
+	must.StrContains(t, out, qs.Name)
 
 	ui.OutputWriter.Reset()
 }
 
 func TestQuotaInspectCommand_AutocompleteArgs(t *testing.T) {
 	ci.Parallel(t)
-	assert := assert.New(t)
 
 	srv, client, url := testServer(t, true, nil)
 	defer srv.Shutdown()
@@ -95,7 +95,7 @@ func TestQuotaInspectCommand_AutocompleteArgs(t *testing.T) {
 	_, err := client.Quotas().Register(qs, nil)
 	must.NoError(t, err)
 
-	args := complete.Args{Last: "t"}
+	args := complete.Args{Last: "q"}
 	predictor := cmd.AutocompleteArgs()
 
 	res := predictor.Predict(args)

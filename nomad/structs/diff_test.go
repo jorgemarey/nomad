@@ -4417,6 +4417,7 @@ func TestTaskDiff(t *testing.T) {
 				LogConfig: &LogConfig{
 					MaxFiles:      1,
 					MaxFileSizeMB: 10,
+					Disabled:      true,
 				},
 			},
 			Expected: &TaskDiff{
@@ -4426,6 +4427,12 @@ func TestTaskDiff(t *testing.T) {
 						Type: DiffTypeAdded,
 						Name: "LogConfig",
 						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeAdded,
+								Name: "Disabled",
+								Old:  "",
+								New:  "true",
+							},
 							{
 								Type: DiffTypeAdded,
 								Name: "MaxFileSizeMB",
@@ -4449,6 +4456,7 @@ func TestTaskDiff(t *testing.T) {
 				LogConfig: &LogConfig{
 					MaxFiles:      1,
 					MaxFileSizeMB: 10,
+					Disabled:      true,
 				},
 			},
 			New: &Task{},
@@ -4459,6 +4467,12 @@ func TestTaskDiff(t *testing.T) {
 						Type: DiffTypeDeleted,
 						Name: "LogConfig",
 						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeDeleted,
+								Name: "Disabled",
+								Old:  "true",
+								New:  "",
+							},
 							{
 								Type: DiffTypeDeleted,
 								Name: "MaxFileSizeMB",
@@ -4482,12 +4496,14 @@ func TestTaskDiff(t *testing.T) {
 				LogConfig: &LogConfig{
 					MaxFiles:      1,
 					MaxFileSizeMB: 10,
+					Disabled:      false,
 				},
 			},
 			New: &Task{
 				LogConfig: &LogConfig{
 					MaxFiles:      2,
 					MaxFileSizeMB: 20,
+					Disabled:      true,
 				},
 			},
 			Expected: &TaskDiff{
@@ -4497,6 +4513,12 @@ func TestTaskDiff(t *testing.T) {
 						Type: DiffTypeEdited,
 						Name: "LogConfig",
 						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeEdited,
+								Name: "Disabled",
+								Old:  "false",
+								New:  "true",
+							},
 							{
 								Type: DiffTypeEdited,
 								Name: "MaxFileSizeMB",
@@ -4521,12 +4543,14 @@ func TestTaskDiff(t *testing.T) {
 				LogConfig: &LogConfig{
 					MaxFiles:      1,
 					MaxFileSizeMB: 10,
+					Disabled:      false,
 				},
 			},
 			New: &Task{
 				LogConfig: &LogConfig{
 					MaxFiles:      1,
 					MaxFileSizeMB: 20,
+					Disabled:      true,
 				},
 			},
 			Expected: &TaskDiff{
@@ -4536,6 +4560,12 @@ func TestTaskDiff(t *testing.T) {
 						Type: DiffTypeEdited,
 						Name: "LogConfig",
 						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeEdited,
+								Name: "Disabled",
+								Old:  "false",
+								New:  "true",
+							},
 							{
 								Type: DiffTypeEdited,
 								Name: "MaxFileSizeMB",
@@ -8254,6 +8284,84 @@ func TestServicesDiff(t *testing.T) {
 											},
 										},
 									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}, {
+			Name:       "SidecarService with different meta",
+			Contextual: false,
+			Old: []*Service{
+				{
+					Name:      "webapp",
+					Provider:  "consul",
+					PortLabel: "http",
+					Connect: &ConsulConnect{
+						SidecarService: &ConsulSidecarService{
+							Port:  "http",
+							Proxy: &ConsulProxy{},
+							Meta: map[string]string{
+								"foo": "qux",
+							},
+						},
+						Gateway: &ConsulGateway{
+							Ingress: &ConsulIngressConfigEntry{},
+						},
+					},
+				},
+			},
+			New: []*Service{
+				{
+					Name:      "webapp",
+					Provider:  "consul",
+					PortLabel: "http",
+					Connect: &ConsulConnect{
+						SidecarService: &ConsulSidecarService{
+							Port:  "http",
+							Proxy: &ConsulProxy{},
+							Meta: map[string]string{
+								"foo":     "var",
+								"testKey": "testValue",
+							},
+						},
+						Gateway: &ConsulGateway{
+							Ingress: &ConsulIngressConfigEntry{},
+						},
+					},
+				},
+			},
+			Expected: []*ObjectDiff{
+				{
+					Type: DiffTypeEdited,
+					Name: "Service",
+					Objects: []*ObjectDiff{
+						{
+							Type:   "Edited",
+							Name:   "ConsulConnect",
+							Fields: nil,
+							Objects: []*ObjectDiff{
+								{
+									Type: "Edited",
+									Name: "SidecarService",
+									Fields: []*FieldDiff{
+										{
+											Type:        "Edited",
+											Name:        "Meta[foo]",
+											Old:         "qux",
+											New:         "var",
+											Annotations: nil,
+										},
+										{
+											Type:        "Added",
+											Name:        "Meta[testKey]",
+											Old:         "",
+											New:         "testValue",
+											Annotations: nil,
+										},
+									},
+									Objects: nil,
 								},
 							},
 						},
