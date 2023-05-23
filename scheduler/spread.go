@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
@@ -30,6 +31,9 @@ type SpreadIterator struct {
 	// blocks
 	sumSpreadWeights int32
 
+	// lowestSpreadBoost tracks the lowest spread boost across all spread blocks
+	lowestSpreadBoost float64
+
 	// hasSpread is used to early return when the job/task group
 	// does not have spread configured
 	hasSpread bool
@@ -53,6 +57,7 @@ func NewSpreadIterator(ctx Context, source RankIterator) *SpreadIterator {
 		source:            source,
 		groupPropertySets: make(map[string][]*propertySet),
 		tgSpreadInfo:      make(map[string]spreadAttributeMap),
+		lowestSpreadBoost: -1.0,
 	}
 	return iter
 }
@@ -88,6 +93,8 @@ func (iter *SpreadIterator) SetTaskGroup(tg *structs.TaskGroup) {
 		for _, spread := range iter.jobSpreads {
 			pset := NewPropertySet(iter.ctx, iter.job)
 			pset.SetTargetAttribute(spread.Attribute, tg.Name)
+			pset.SetTargetValues(helper.ConvertSlice(spread.SpreadTarget,
+				func(t *structs.SpreadTarget) string { return t.Value }))
 			iter.groupPropertySets[tg.Name] = append(iter.groupPropertySets[tg.Name], pset)
 		}
 
@@ -95,6 +102,8 @@ func (iter *SpreadIterator) SetTaskGroup(tg *structs.TaskGroup) {
 		for _, spread := range tg.Spreads {
 			pset := NewPropertySet(iter.ctx, iter.job)
 			pset.SetTargetAttribute(spread.Attribute, tg.Name)
+			pset.SetTargetValues(helper.ConvertSlice(spread.SpreadTarget,
+				func(t *structs.SpreadTarget) string { return t.Value }))
 			iter.groupPropertySets[tg.Name] = append(iter.groupPropertySets[tg.Name], pset)
 		}
 	}
@@ -114,6 +123,7 @@ func (iter *SpreadIterator) hasSpreads() bool {
 }
 
 func (iter *SpreadIterator) Next() *RankedNode {
+
 	for {
 		option := iter.source.Next()
 
@@ -162,7 +172,7 @@ func (iter *SpreadIterator) Next() *RankedNode {
 					desiredCount, ok = spreadDetails.desiredCounts[implicitTarget]
 					if !ok {
 						// The desired count for this attribute is zero if it gets here
-						// so use the maximum possible penalty for this node
+						// so use the default negative penalty for this node
 						totalSpreadScore -= 1.0
 						continue
 					}
@@ -171,12 +181,20 @@ func (iter *SpreadIterator) Next() *RankedNode {
 				// Calculate the relative weight of this specific spread attribute
 				spreadWeight := float64(spreadDetails.weight) / float64(iter.sumSpreadWeights)
 
+				if desiredCount == 0 {
+					totalSpreadScore += iter.lowestSpreadBoost
+					continue
+				}
+
 				// Score Boost is proportional the difference between current and desired count
 				// It is negative when the used count is greater than the desired count
 				// It is multiplied with the spread weight to account for cases where the job has
 				// more than one spread attribute
 				scoreBoost := ((desiredCount - float64(usedCount)) / desiredCount) * spreadWeight
 				totalSpreadScore += scoreBoost
+				if scoreBoost < iter.lowestSpreadBoost {
+					iter.lowestSpreadBoost = scoreBoost
+				}
 			}
 		}
 

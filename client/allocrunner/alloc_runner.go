@@ -8,12 +8,12 @@ import (
 
 	log "github.com/hashicorp/go-hclog"
 	multierror "github.com/hashicorp/go-multierror"
+
 	"github.com/hashicorp/nomad/client/allocdir"
 	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
 	"github.com/hashicorp/nomad/client/allocrunner/state"
 	"github.com/hashicorp/nomad/client/allocrunner/tasklifecycle"
 	"github.com/hashicorp/nomad/client/allocrunner/taskrunner"
-	"github.com/hashicorp/nomad/client/allocwatcher"
 	"github.com/hashicorp/nomad/client/config"
 	"github.com/hashicorp/nomad/client/consul"
 	"github.com/hashicorp/nomad/client/devicemanager"
@@ -143,10 +143,10 @@ type allocRunner struct {
 
 	// prevAllocWatcher allows waiting for any previous or preempted allocations
 	// to exit
-	prevAllocWatcher allocwatcher.PrevAllocWatcher
+	prevAllocWatcher config.PrevAllocWatcher
 
 	// prevAllocMigrator allows the migration of a previous allocations alloc dir.
-	prevAllocMigrator allocwatcher.PrevAllocMigrator
+	prevAllocMigrator config.PrevAllocMigrator
 
 	// dynamicRegistry contains all locally registered dynamic plugins (e.g csi
 	// plugins).
@@ -181,7 +181,7 @@ type allocRunner struct {
 
 	// rpcClient is the RPC Client that should be used by the allocrunner and its
 	// hooks to communicate with Nomad Servers.
-	rpcClient RPCer
+	rpcClient config.RPCer
 
 	// serviceRegWrapper is the handler wrapper that is used by service hooks
 	// to perform service and check registration and deregistration.
@@ -194,13 +194,8 @@ type allocRunner struct {
 	getter cinterfaces.ArtifactGetter
 }
 
-// RPCer is the interface needed by hooks to make RPC calls.
-type RPCer interface {
-	RPC(method string, args interface{}, reply interface{}) error
-}
-
 // NewAllocRunner returns a new allocation runner.
-func NewAllocRunner(config *Config) (*allocRunner, error) {
+func NewAllocRunner(config *config.AllocRunnerConfig) (interfaces.AllocRunner, error) {
 	alloc := config.Alloc
 	tg := alloc.Job.LookupTaskGroup(alloc.TaskGroup)
 	if tg == nil {
@@ -344,17 +339,15 @@ func (ar *allocRunner) Run() {
 			ar.logger.Error("prerun failed", "error", err)
 
 			for _, tr := range ar.tasks {
-				tr.MarkFailedDead(fmt.Sprintf("failed to setup alloc: %v", err))
+				// emit event and mark task to be cleaned up during runTasks()
+				tr.MarkFailedKill(fmt.Sprintf("failed to setup alloc: %v", err))
 			}
-
-			goto POST
 		}
 	}
 
 	// Run the runners (blocks until they exit)
 	ar.runTasks()
 
-POST:
 	if ar.isShuttingDown() {
 		return
 	}
@@ -1271,6 +1264,12 @@ func (ar *allocRunner) RestartAll(event *structs.TaskEvent) error {
 
 // restartTasks restarts all task runners concurrently.
 func (ar *allocRunner) restartTasks(ctx context.Context, event *structs.TaskEvent, failure bool, force bool) error {
+
+	// ensure we are not trying to restart an alloc that is terminal
+	if !ar.shouldRun() {
+		return fmt.Errorf("restart of an alloc that should not run")
+	}
+
 	waitCh := make(chan struct{})
 	var err *multierror.Error
 	var errMutex sync.Mutex
