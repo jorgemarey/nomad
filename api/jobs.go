@@ -25,6 +25,9 @@ const (
 	// on all clients.
 	JobTypeSysbatch = "sysbatch"
 
+	// JobDefaultPriority is the default priority if not specified.
+	JobDefaultPriority = 50
+
 	// PeriodicSpecCron is used for a cron spec.
 	PeriodicSpecCron = "cron"
 
@@ -423,6 +426,9 @@ func (j *Jobs) Plan(job *Job, diff bool, q *WriteOptions) (*JobPlanResponse, *Wr
 func (j *Jobs) PlanOpts(job *Job, opts *PlanOptions, q *WriteOptions) (*JobPlanResponse, *WriteMeta, error) {
 	if job == nil {
 		return nil, nil, errors.New("must pass non-nil job")
+	}
+	if job.ID == nil {
+		return nil, nil, errors.New("job is missing ID")
 	}
 
 	// Setup the request
@@ -938,7 +944,7 @@ func (j *Job) Canonicalize() {
 		j.Namespace = pointerOf(DefaultNamespace)
 	}
 	if j.Priority == nil {
-		j.Priority = pointerOf(0)
+		j.Priority = pointerOf(JobDefaultPriority)
 	}
 	if j.Stop == nil {
 		j.Stop = pointerOf(false)

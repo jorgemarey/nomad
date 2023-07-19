@@ -15,12 +15,7 @@ BUILD_DATE_FLAG = $(GO_MODULE)/version.BuildDate=$(BUILD_DATE)
 
 GO_LDFLAGS = -X $(GIT_COMMIT_FLAG) -X $(BUILD_DATE_FLAG)
 
-ifneq (MSYS_NT,$(THIS_OS))
-# GOPATH supports PATH style multi-paths; assume the first entry is favorable.
-# Necessary because new Circle images override GOPATH with multiple values.
-# See: https://discuss.circleci.com/t/gopath-is-set-to-multiple-directories/7174
-GOPATH := $(shell go env GOPATH | cut -d: -f1)
-endif
+GOPATH := $(shell go env GOPATH)
 
 # Respect $GOBIN if set in environment or via $GOENV file.
 BIN := $(shell go env GOBIN)
@@ -49,7 +44,7 @@ PROTO_COMPARE_TAG ?= v1.0.3$(if $(findstring ent,$(GO_TAGS)),+ent,)
 
 # LAST_RELEASE is the git sha of the latest release corresponding to this branch. main should have the latest
 # published release, and release branches should point to the latest published release in the X.Y release line.
-LAST_RELEASE ?= v1.5.5
+LAST_RELEASE ?= v1.5.6
 
 default: help
 
