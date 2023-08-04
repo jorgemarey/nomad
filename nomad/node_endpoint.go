@@ -133,6 +133,8 @@ func (n *Node) Register(args *structs.NodeRegisterRequest, reply *structs.NodeUp
 		return fmt.Errorf("missing node secret ID for client registration")
 	}
 
+	n.logger.Info("node register", "node_id", args.Node.ID, "name", args.Node.Name, "status", args.Node.Status)
+
 	// Default the status if none is given
 	if args.Node.Status == "" {
 		args.Node.Status = structs.NodeStatusInit
