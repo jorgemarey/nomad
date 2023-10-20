@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package state
 
 import (
@@ -9,6 +12,7 @@ import (
 	"github.com/hashicorp/nomad/client/dynamicplugins"
 	driverstate "github.com/hashicorp/nomad/client/pluginmanager/drivermanager/state"
 	"github.com/hashicorp/nomad/client/serviceregistration/checks"
+	cstructs "github.com/hashicorp/nomad/client/structs"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
@@ -48,6 +52,14 @@ func (m *ErrDB) GetNetworkStatus(allocID string) (*structs.AllocNetworkStatus, e
 
 func (m *ErrDB) PutNetworkStatus(allocID string, ns *structs.AllocNetworkStatus, opts ...WriteOption) error {
 	return fmt.Errorf("Error!")
+}
+
+func (m *ErrDB) PutAcknowledgedState(allocID string, state *arstate.State, opts ...WriteOption) error {
+	return fmt.Errorf("Error!")
+}
+
+func (m *ErrDB) GetAcknowledgedState(allocID string) (*arstate.State, error) {
+	return nil, fmt.Errorf("Error!")
 }
 
 func (m *ErrDB) PutAllocVolumes(allocID string, state *arstate.AllocVolumes, opts ...WriteOption) error {
@@ -123,6 +135,14 @@ func (m *ErrDB) PutNodeMeta(map[string]*string) error {
 }
 
 func (m *ErrDB) GetNodeMeta() (map[string]*string, error) {
+	return nil, fmt.Errorf("Error!")
+}
+
+func (m *ErrDB) PutNodeRegistration(reg *cstructs.NodeRegistration) error {
+	return fmt.Errorf("Error!")
+}
+
+func (m *ErrDB) GetNodeRegistration() (*cstructs.NodeRegistration, error) {
 	return nil, fmt.Errorf("Error!")
 }
 

@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 /* eslint-disable ember/no-observers */
 /* eslint-disable ember/no-incorrect-calls-with-inline-anonymous-functions */
 import { alias } from '@ember/object/computed';
@@ -24,7 +29,7 @@ export default class ClientController extends Controller.extend(
   Sortable,
   Searchable
 ) {
-  @service flashMessages;
+  @service notifications;
 
   queryParams = [
     {
@@ -200,7 +205,7 @@ export default class ClientController extends Controller.extend(
 
   @action
   gotoAllocation(allocation) {
-    this.transitionToRoute('allocations.allocation', allocation);
+    this.transitionToRoute('allocations.allocation', allocation.id);
   }
 
   @action
@@ -316,21 +321,18 @@ export default class ClientController extends Controller.extend(
       e.preventDefault();
       await this.model.addMeta({ [key]: value });
 
-      this.flashMessages.add({
+      this.notifications.add({
         title: 'Metadata added',
         message: `${key} successfully saved`,
-        type: 'success',
-        destroyOnClick: false,
-        timeout: 3000,
+        color: 'success',
       });
     } catch (err) {
       const error =
         messageFromAdapterError(err) || 'Could not save new dynamic metadata';
-      this.flashMessages.add({
+      this.notifications.add({
         title: `Error saving Metadata`,
         message: error,
-        type: 'error',
-        destroyOnClick: false,
+        color: 'critical',
         sticky: true,
       });
     }

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package state
 
 import (
@@ -10,6 +13,7 @@ import (
 	"github.com/hashicorp/nomad/client/dynamicplugins"
 	driverstate "github.com/hashicorp/nomad/client/pluginmanager/drivermanager/state"
 	"github.com/hashicorp/nomad/client/serviceregistration/checks"
+	cstructs "github.com/hashicorp/nomad/client/structs"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"golang.org/x/exp/maps"
 )
@@ -25,6 +29,9 @@ type MemDB struct {
 
 	// alloc_id -> value
 	networkStatus map[string]*structs.AllocNetworkStatus
+
+	// alloc_id -> value
+	acknowledgedState map[string]*arstate.State
 
 	// alloc_id -> value
 	allocVolumeStates map[string]*arstate.AllocVolumes
@@ -48,6 +55,8 @@ type MemDB struct {
 	// key -> value or nil
 	nodeMeta map[string]*string
 
+	nodeRegistration *cstructs.NodeRegistration
+
 	logger hclog.Logger
 
 	mu sync.RWMutex
@@ -56,13 +65,14 @@ type MemDB struct {
 func NewMemDB(logger hclog.Logger) *MemDB {
 	logger = logger.Named("memdb")
 	return &MemDB{
-		allocs:         make(map[string]*structs.Allocation),
-		deployStatus:   make(map[string]*structs.AllocDeploymentStatus),
-		networkStatus:  make(map[string]*structs.AllocNetworkStatus),
-		localTaskState: make(map[string]map[string]*state.LocalState),
-		taskState:      make(map[string]map[string]*structs.TaskState),
-		checks:         make(checks.ClientResults),
-		logger:         logger,
+		allocs:            make(map[string]*structs.Allocation),
+		deployStatus:      make(map[string]*structs.AllocDeploymentStatus),
+		networkStatus:     make(map[string]*structs.AllocNetworkStatus),
+		acknowledgedState: make(map[string]*arstate.State),
+		localTaskState:    make(map[string]map[string]*state.LocalState),
+		taskState:         make(map[string]map[string]*structs.TaskState),
+		checks:            make(checks.ClientResults),
+		logger:            logger,
 	}
 }
 
@@ -117,6 +127,19 @@ func (m *MemDB) PutNetworkStatus(allocID string, ns *structs.AllocNetworkStatus,
 	m.networkStatus[allocID] = ns
 	defer m.mu.Unlock()
 	return nil
+}
+
+func (m *MemDB) PutAcknowledgedState(allocID string, state *arstate.State, opts ...WriteOption) error {
+	m.mu.Lock()
+	m.acknowledgedState[allocID] = state
+	defer m.mu.Unlock()
+	return nil
+}
+
+func (m *MemDB) GetAcknowledgedState(allocID string) (*arstate.State, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.acknowledgedState[allocID], nil
 }
 
 func (m *MemDB) PutAllocVolumes(allocID string, state *arstate.AllocVolumes, opts ...WriteOption) error {
@@ -298,6 +321,19 @@ func (m *MemDB) GetNodeMeta() (map[string]*string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.nodeMeta, nil
+}
+
+func (m *MemDB) PutNodeRegistration(reg *cstructs.NodeRegistration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nodeRegistration = reg
+	return nil
+}
+
+func (m *MemDB) GetNodeRegistration() (*cstructs.NodeRegistration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.nodeRegistration, nil
 }
 
 func (m *MemDB) Close() error {

@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 /* eslint-disable qunit/require-expect */
 import { get } from '@ember/object';
 import { currentURL, typeIn, click } from '@ember/test-helpers';
@@ -24,6 +29,7 @@ module('Acceptance | topology', function (hooks) {
   setupMirage(hooks);
 
   hooks.beforeEach(function () {
+    server.createList('node-pool', 5);
     server.create('job', { createAllocations: false });
   });
 
@@ -39,6 +45,7 @@ module('Acceptance | topology', function (hooks) {
 
   test('by default the info panel shows cluster aggregate stats', async function (assert) {
     faker.seed(1);
+    server.create('node-pool', { name: 'all' });
     server.createList('node', 3);
     server.createList('allocation', 5);
 
@@ -61,6 +68,15 @@ module('Acceptance | topology', function (hooks) {
     assert.equal(
       Topology.clusterInfoPanel.allocCount,
       `${scheduledAllocs.length} Allocations`
+    );
+
+    // Node pool count ignores 'all'.
+    const nodePools = server.schema.nodePools
+      .all()
+      .models.filter((p) => p.name !== 'all');
+    assert.equal(
+      Topology.clusterInfoPanel.nodePoolCount,
+      `${nodePools.length} Node Pools`
     );
 
     const nodeResources = server.schema.nodes
@@ -324,6 +340,12 @@ module('Acceptance | topology', function (hooks) {
     });
     server.create('node', 'draining');
 
+    // Create node pool exclusive for these nodes.
+    server.create('node-pool', { name: 'test-node-pool' });
+    server.createList('node', 3, {
+      nodePool: 'test-node-pool',
+    });
+
     server.createList('allocation', 5);
 
     // Count draining and ineligible nodes.
@@ -341,7 +363,7 @@ module('Acceptance | topology', function (hooks) {
     });
 
     await Topology.visit();
-    assert.dom('[data-test-topo-viz-node]').exists({ count: 14 });
+    assert.dom('[data-test-topo-viz-node]').exists({ count: 17 });
 
     // Test search.
     await typeIn('input.node-search', server.schema.nodes.first().name);
@@ -349,7 +371,7 @@ module('Acceptance | topology', function (hooks) {
     await typeIn('input.node-search', server.schema.nodes.first().name);
     assert.dom('[data-test-topo-viz-node]').doesNotExist();
     await click('[title="Clear search"]');
-    assert.dom('[data-test-topo-viz-node]').exists({ count: 14 });
+    assert.dom('[data-test-topo-viz-node]').exists({ count: 17 });
 
     // Test node class filter.
     await Topology.facets.class.toggle();
@@ -382,5 +404,15 @@ module('Acceptance | topology', function (hooks) {
       .exists({ count: counts['draining'] });
     await Topology.facets.state.options.findOneBy('label', 'Draining').toggle();
     await Topology.facets.state.toggle();
+
+    // Test node pool filter.
+    await Topology.facets.nodePool.toggle();
+    await Topology.facets.nodePool.options
+      .findOneBy('label', 'test-node-pool')
+      .toggle();
+    assert.dom('[data-test-topo-viz-node]').exists({ count: 3 });
+    await Topology.facets.nodePool.options
+      .findOneBy('label', 'test-node-pool')
+      .toggle();
   });
 });

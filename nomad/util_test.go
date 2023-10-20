@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package nomad
 
 import (
@@ -194,7 +197,7 @@ func TestServersMeetMinimumVersionIncludingFailed(t *testing.T) {
 }
 
 func TestServersMeetMinimumVersionSuffix(t *testing.T) {
-	t.Parallel()
+	ci.Parallel(t)
 
 	cases := []struct {
 		members  []serf.Member

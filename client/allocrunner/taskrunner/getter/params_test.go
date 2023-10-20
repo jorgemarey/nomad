@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package getter
 
 import (
@@ -131,6 +134,14 @@ func TestParameters_Equal_headers(t *testing.T) {
 
 	// equal
 	must.Equal(t, p1, p2)
+
+	// equal
+	must.Equal(t, p1, &parameters{
+		Headers: map[string][]string{
+			"West": {"California"},
+			"East": {"Florida", "New York"},
+		},
+	})
 
 	// not equal
 	p2.Headers["East"] = []string{"New York"}

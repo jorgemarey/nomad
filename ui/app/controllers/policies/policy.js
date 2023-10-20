@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 // @ts-check
 import Controller from '@ember/controller';
 import { action } from '@ember/object';
@@ -7,7 +12,7 @@ import { alias } from '@ember/object/computed';
 import { task } from 'ember-concurrency';
 
 export default class PoliciesPolicyController extends Controller {
-  @service flashMessages;
+  @service notifications;
   @service router;
   @service store;
 
@@ -37,19 +42,18 @@ export default class PoliciesPolicyController extends Controller {
     try {
       yield this.policy.deleteRecord();
       yield this.policy.save();
-      this.flashMessages.add({
+      this.notifications.add({
         title: 'Policy Deleted',
-        type: 'success',
+        color: 'success',
+        type: `success`,
         destroyOnClick: false,
-        timeout: 5000,
       });
       this.router.transitionTo('policies');
     } catch (err) {
-      this.flashMessages.add({
+      this.notifications.add({
         title: `Error deleting Policy ${this.policy.name}`,
         message: err,
-        type: 'error',
-        destroyOnClick: false,
+        color: 'critical',
         sticky: true,
       });
     }
@@ -75,11 +79,10 @@ export default class PoliciesPolicyController extends Controller {
       });
       yield newToken.save();
       yield this.refreshTokens();
-      this.flashMessages.add({
+      this.notifications.add({
         title: 'Example Token Created',
         message: `${newToken.secret}`,
-        type: 'success',
-        destroyOnClick: false,
+        color: 'success',
         timeout: 30000,
         customAction: {
           label: 'Copy to Clipboard',
@@ -104,11 +107,9 @@ export default class PoliciesPolicyController extends Controller {
       yield token.deleteRecord();
       yield token.save();
       yield this.refreshTokens();
-      this.flashMessages.add({
+      this.notifications.add({
         title: 'Token successfully deleted',
-        type: 'success',
-        destroyOnClick: false,
-        timeout: 5000,
+        color: 'success',
       });
     } catch (err) {
       this.error = {

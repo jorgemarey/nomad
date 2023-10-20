@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package getter
 
 import (
@@ -140,10 +143,11 @@ func (s *Sandbox) runCmd(env *parameters) error {
 
 	// start & wait for the subprocess to terminate
 	if err := cmd.Run(); err != nil {
-		subproc.Log(output, s.logger.Error)
+		msg := subproc.Log(output, s.logger.Error)
+
 		return &Error{
 			URL:         env.Source,
-			Err:         fmt.Errorf("getter subprocess failed: %v", err),
+			Err:         fmt.Errorf("getter subprocess failed: %v: %v", err, msg),
 			Recoverable: true,
 		}
 	}

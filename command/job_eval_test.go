@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package command
 
 import (
@@ -77,7 +80,7 @@ func TestJobEvalCommand_Run(t *testing.T) {
 
 	// Create a job
 	job := mock.Job()
-	err := state.UpsertJob(structs.MsgTypeTestSetup, 11, job)
+	err := state.UpsertJob(structs.MsgTypeTestSetup, 11, nil, job)
 	require.Nil(err)
 
 	job, err = state.JobByID(nil, structs.DefaultNamespace, job.ID)
@@ -118,7 +121,7 @@ func TestJobEvalCommand_AutocompleteArgs(t *testing.T) {
 	// Create a fake job
 	state := srv.Agent.Server().State()
 	j := mock.Job()
-	assert.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 1000, j))
+	assert.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 1000, nil, j))
 
 	prefix := j.ID[:len(j.ID)-5]
 	args := complete.Args{Last: prefix}
@@ -141,7 +144,7 @@ func TestJobEvalCommand_ACL(t *testing.T) {
 	// Create a job.
 	job := mock.MinJob()
 	state := srv.Agent.Server().State()
-	err := state.UpsertJob(structs.MsgTypeTestSetup, 100, job)
+	err := state.UpsertJob(structs.MsgTypeTestSetup, 100, nil, job)
 	must.NoError(t, err)
 
 	testCases := []struct {
@@ -156,7 +159,7 @@ func TestJobEvalCommand_ACL(t *testing.T) {
 			expectedErr: api.PermissionDeniedErrorContent,
 		},
 		{
-			name: "missing read-job",
+			name: "missing submit-job",
 			aclPolicy: `
 namespace "default" {
 	capabilities = ["list-jobs"]
@@ -165,29 +168,48 @@ namespace "default" {
 			expectedErr: api.PermissionDeniedErrorContent,
 		},
 		{
-			name: "read-job allowed",
+			name: "submit-job allowed but can't monitor eval without read-job",
 			aclPolicy: `
 namespace "default" {
-	capabilities = ["read-job"]
+	capabilities = ["submit-job"]
+}
+`,
+			expectedErr: "No evaluation with id",
+		},
+		{
+			name: "submit-job allowed and can monitor eval with read-job",
+			aclPolicy: `
+namespace "default" {
+	capabilities = ["read-job", "submit-job"]
 }
 `,
 		},
 		{
-			name:      "job prefix requires list-job",
+			name:      "job prefix requires list-jobs",
 			jobPrefix: true,
 			aclPolicy: `
 namespace "default" {
-	capabilities = ["read-job"]
+	capabilities = ["submit-job"]
 }
 `,
 			expectedErr: "job not found",
 		},
 		{
-			name:      "job prefix works with list-job",
+			name:      "job prefix works with list-jobs but can't monitor eval without read-job",
 			jobPrefix: true,
 			aclPolicy: `
 namespace "default" {
-	capabilities = ["read-job", "list-jobs"]
+	capabilities = ["list-jobs", "submit-job"]
+}
+`,
+			expectedErr: "No evaluation with id",
+		},
+		{
+			name:      "job prefix works with list-jobs and can monitor eval with read-job",
+			jobPrefix: true,
+			aclPolicy: `
+namespace "default" {
+	capabilities = ["read-job", "list-jobs", "submit-job"]
 }
 `,
 		},

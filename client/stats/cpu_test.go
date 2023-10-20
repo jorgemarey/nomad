@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package stats
 
 import (
@@ -37,12 +40,14 @@ func TestHostStats_CPU(t *testing.T) {
 
 	for _, cpu := range stats.CPU {
 		assert.False(math.IsNaN(cpu.Idle))
-		assert.False(math.IsNaN(cpu.Total))
+		assert.False(math.IsNaN(cpu.TotalPercent))
+		assert.False(math.IsNaN(cpu.TotalTicks))
 		assert.False(math.IsNaN(cpu.System))
 		assert.False(math.IsNaN(cpu.User))
 
 		assert.False(math.IsInf(cpu.Idle, 0))
-		assert.False(math.IsInf(cpu.Total, 0))
+		assert.False(math.IsInf(cpu.TotalPercent, 0))
+		assert.False(math.IsInf(cpu.TotalTicks, 0))
 		assert.False(math.IsInf(cpu.System, 0))
 		assert.False(math.IsInf(cpu.User, 0))
 	}

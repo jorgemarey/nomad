@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package fingerprint
 
 import (
@@ -79,7 +82,7 @@ func (f *EnvAzureFingerprint) Get(attribute string, format string) (string, erro
 	}
 
 	req := &http.Request{
-		Method: "GET",
+		Method: http.MethodGet,
 		URL:    parsedURL,
 		Header: http.Header{
 			"Metadata":   []string{"true"},

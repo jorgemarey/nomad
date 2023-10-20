@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package drainer
 
 import (
@@ -132,7 +135,7 @@ func TestDrainingJobWatcher_DrainJobs(t *testing.T) {
 		jnss[i] = structs.NamespacedID{Namespace: job.Namespace, ID: job.ID}
 		job.TaskGroups[0].Migrate.MaxParallel = 3
 		job.TaskGroups[0].Count = count
-		must.NoError(t, store.UpsertJob(structs.MsgTypeTestSetup, index, job))
+		must.NoError(t, store.UpsertJob(structs.MsgTypeTestSetup, index, nil, job))
 		index++
 
 		var allocs []*structs.Allocation
@@ -596,7 +599,7 @@ func TestDrainingJobWatcher_HandleTaskGroup(t *testing.T) {
 			if tc.maxParallel > 0 {
 				job.TaskGroups[0].Migrate.MaxParallel = tc.maxParallel
 			}
-			must.NoError(t, store.UpsertJob(structs.MsgTypeTestSetup, 102, job))
+			must.NoError(t, store.UpsertJob(structs.MsgTypeTestSetup, 102, nil, job))
 
 			var allocs []*structs.Allocation
 			for i := 0; i < 10; i++ {
@@ -648,7 +651,7 @@ func TestHandleTaskGroup_Migrations(t *testing.T) {
 	require.Nil(state.UpsertNode(structs.MsgTypeTestSetup, 100, n))
 
 	job := mock.Job()
-	require.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 101, job))
+	require.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 101, nil, job))
 
 	// Create 10 done allocs
 	var allocs []*structs.Allocation
@@ -718,7 +721,7 @@ func TestHandleTaskGroup_GarbageCollectedNode(t *testing.T) {
 	require.Nil(state.UpsertNode(structs.MsgTypeTestSetup, 100, n))
 
 	job := mock.Job()
-	require.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 101, job))
+	require.Nil(state.UpsertJob(structs.MsgTypeTestSetup, 101, nil, job))
 
 	// Create 10 done allocs
 	var allocs []*structs.Allocation

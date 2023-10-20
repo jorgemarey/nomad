@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package taskrunner
 
 import (
@@ -108,14 +111,15 @@ func (tr *TaskRunner) initHooks() {
 	// If there are templates is enabled, add the hook
 	if len(task.Templates) != 0 {
 		tr.runnerHooks = append(tr.runnerHooks, newTemplateHook(&templateHookConfig{
-			logger:          hookLogger,
-			lifecycle:       tr,
-			events:          tr,
-			templates:       task.Templates,
-			clientConfig:    tr.clientConfig,
-			envBuilder:      tr.envBuilder,
-			consulNamespace: consulNamespace,
-			nomadNamespace:  tr.alloc.Job.Namespace,
+			logger:              hookLogger,
+			lifecycle:           tr,
+			events:              tr,
+			templates:           task.Templates,
+			clientConfig:        tr.clientConfig,
+			envBuilder:          tr.envBuilder,
+			consulNamespace:     consulNamespace,
+			nomadNamespace:      tr.alloc.Job.Namespace,
+			renderOnTaskRestart: task.RestartPolicy.RenderTemplates,
 		}))
 	}
 

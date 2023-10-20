@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 /* eslint-disable qunit/require-expect */
 import { currentURL, find, findAll, visit, click } from '@ember/test-helpers';
 import { module, skip, test } from 'qunit';
@@ -33,6 +38,7 @@ module('Acceptance | tokens', function (hooks) {
     faker.seed(1);
 
     server.create('agent');
+    server.create('node-pool');
     node = server.create('node');
     job = server.create('job');
     managementToken = server.create('token');
@@ -55,7 +61,7 @@ module('Acceptance | tokens', function (hooks) {
       null,
       'No token secret set'
     );
-    assert.equal(document.title, 'Authorization - Mirage - Nomad');
+    assert.ok(document.title.includes('Authorization'));
 
     await Tokens.secret(secretId).submit();
     assert.equal(
@@ -217,10 +223,10 @@ module('Acceptance | tokens', function (hooks) {
     // TTL Action
     await Jobs.visit();
     assert
-      .dom('.flash-message.alert-error button')
+      .dom('.flash-message.alert-warning button')
       .exists('A global alert exists and has a clickable button');
 
-    await click('.flash-message.alert-error button');
+    await click('.flash-message.alert-warning button');
     assert.equal(
       currentURL(),
       '/settings/tokens',
@@ -317,7 +323,7 @@ module('Acceptance | tokens', function (hooks) {
     // short-circuiting our Ember Concurrency loop.
     setTimeout(() => {
       assert
-        .dom('.flash-message.alert-error')
+        .dom('.flash-message.alert-warning')
         .doesNotExist('No notification yet for a token with 10m5s left');
       notificationNotRendered();
       setTimeout(async () => {
@@ -326,7 +332,7 @@ module('Acceptance | tokens', function (hooks) {
         });
 
         assert
-          .dom('.flash-message.alert-error')
+          .dom('.flash-message.alert-warning')
           .exists('Notification is rendered at the 10m mark');
         notificationRendered();
         run.cancelTimers();

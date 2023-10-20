@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package fingerprint
 
 import (
@@ -74,7 +77,7 @@ func TestFingerprint_DigitalOcean(t *testing.T) {
 		}
 
 		if !found {
-			w.WriteHeader(404)
+			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer ts.Close()

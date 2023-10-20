@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package nomad
 
 import (
@@ -1151,6 +1154,9 @@ func (v *CSIVolume) Delete(args *structs.CSIVolumeDeleteRequest, reply *structs.
 			} else {
 				return err
 			}
+		}
+		if plugin == nil {
+			return fmt.Errorf("plugin %q for volume %q not found", vol.PluginID, volID)
 		}
 
 		// NOTE: deleting the volume in the external storage provider can't be

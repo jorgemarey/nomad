@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package consul
 
 import (
@@ -339,6 +342,14 @@ func proxyUpstreamsDifferent(wanted *api.AgentServiceConnect, sidecar *api.Agent
 			case A.LocalBindPort != B.LocalBindPort:
 				return true
 			case A.MeshGateway.Mode != B.MeshGateway.Mode:
+				return true
+			case A.DestinationPeer != B.DestinationPeer:
+				return true
+			case A.DestinationType != B.DestinationType:
+				return true
+			case A.LocalBindSocketPath != B.LocalBindSocketPath:
+				return true
+			case A.LocalBindSocketMode != B.LocalBindSocketMode:
 				return true
 			case !reflect.DeepEqual(A.Config, B.Config):
 				return true
@@ -1169,6 +1180,7 @@ func apiCheckRegistrationToCheck(r *api.AgentCheckRegistration) *api.AgentServic
 		Body:                   r.Body,
 		TCP:                    r.TCP,
 		Status:                 r.Status,
+		TLSServerName:          r.TLSServerName,
 		TLSSkipVerify:          r.TLSSkipVerify,
 		GRPC:                   r.GRPC,
 		GRPCUseTLS:             r.GRPCUseTLS,
@@ -1658,6 +1670,7 @@ func createCheckReg(serviceID, checkID string, check *structs.ServiceCheck, host
 		if check.TLSSkipVerify {
 			chkReg.TLSSkipVerify = true
 		}
+		chkReg.TLSServerName = check.TLSServerName
 		base := url.URL{
 			Scheme: proto,
 			Host:   net.JoinHostPort(host, strconv.Itoa(port)),
@@ -1686,6 +1699,7 @@ func createCheckReg(serviceID, checkID string, check *structs.ServiceCheck, host
 		if check.TLSSkipVerify {
 			chkReg.TLSSkipVerify = true
 		}
+		chkReg.TLSServerName = check.TLSServerName
 
 	default:
 		return nil, fmt.Errorf("check type %+q not valid", check.Type)

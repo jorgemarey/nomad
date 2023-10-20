@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package csimanager
 
 import (
@@ -17,7 +20,7 @@ import (
 	"github.com/hashicorp/nomad/plugins/csi"
 )
 
-var _ VolumeMounter = &volumeManager{}
+var _ VolumeManager = &volumeManager{}
 
 const (
 	DefaultMountActionTimeout = 2 * time.Minute

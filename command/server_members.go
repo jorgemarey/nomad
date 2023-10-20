@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package command
 
 import (
@@ -128,6 +131,20 @@ func (c *ServerMembersCommand) Run(args []string) int {
 
 	// Determine the leaders per region.
 	leaders, leaderErr := regionLeaders(client, srvMembers.Members)
+
+	if json || len(tmpl) > 0 {
+		for _, member := range srvMembers.Members {
+			member.Tags["Leader"] = fmt.Sprintf("%t", isLeader(member, leaders))
+		}
+		out, err := Format(json, tmpl, srvMembers.Members)
+		if err != nil {
+			c.Ui.Error(err.Error())
+			return 1
+		}
+
+		c.Ui.Output(out)
+		return 0
+	}
 
 	// Format the list
 	var out []string

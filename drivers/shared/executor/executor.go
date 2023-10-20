@@ -1,10 +1,12 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package executor
 
 import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -185,7 +187,7 @@ func (c *ExecCommand) Stdout() (io.WriteCloser, error) {
 			}
 			c.stdout = f
 		} else {
-			c.stdout = nopCloser{ioutil.Discard}
+			c.stdout = nopCloser{io.Discard}
 		}
 	}
 	return c.stdout, nil
@@ -201,7 +203,7 @@ func (c *ExecCommand) Stderr() (io.WriteCloser, error) {
 			}
 			c.stderr = f
 		} else {
-			c.stderr = nopCloser{ioutil.Discard}
+			c.stderr = nopCloser{io.Discard}
 		}
 	}
 	return c.stderr, nil

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package nomad
 
 import (
@@ -321,6 +324,11 @@ func NewServer(config *Config, consulCatalog consul.CatalogAPI, consulConfigEntr
 
 	// Create the logger
 	logger := config.Logger.ResetNamedIntercept("nomad")
+
+	// Validate enterprise license before anything stateful happens
+	if err = config.LicenseConfig.Validate(); err != nil {
+		return nil, err
+	}
 
 	// Create the server
 	s := &Server{
@@ -846,8 +854,11 @@ func (s *Server) Reload(newConfig *Config) error {
 		}
 	}
 
-	if newConfig.LicenseEnv != "" || newConfig.LicensePath != "" {
-		s.EnterpriseState.ReloadLicense(newConfig)
+	if newConfig.LicenseConfig.LicenseEnvBytes != "" || newConfig.LicenseConfig.LicensePath != "" {
+		if err = s.EnterpriseState.ReloadLicense(newConfig); err != nil {
+			s.logger.Error("error reloading license", "error", err)
+			_ = multierror.Append(&mErr, err)
+		}
 	}
 
 	// Because this is a new configuration, we extract the worker pool arguments without acquiring a lock
@@ -912,7 +923,7 @@ func (s *Server) setupBootstrapHandler() error {
 	// correct number of servers required for quorum are present).
 	bootstrapFn := func() error {
 		// If there is a raft leader, do nothing
-		if s.raft.Leader() != "" {
+		if leader, _ := s.raft.LeaderWithID(); leader != "" {
 			peersTimeout.Reset(maxStaleLeadership)
 			return nil
 		}
@@ -966,7 +977,7 @@ func (s *Server) setupBootstrapHandler() error {
 			// walk all datacenter until it finds enough hosts to
 			// form a quorum.
 			shuffleStrings(dcs[1:])
-			dcs = dcs[0:helper.Min(len(dcs), datacenterQueryLimit)]
+			dcs = dcs[0:min(len(dcs), datacenterQueryLimit)]
 		}
 
 		nomadServerServiceName := s.config.ConsulConfig.ServerServiceName
@@ -1253,6 +1264,7 @@ func (s *Server) setupRpcServer(server *rpc.Server, ctx *RPCContext) {
 	_ = server.Register(NewKeyringEndpoint(s, ctx, s.encrypter))
 	_ = server.Register(NewNamespaceEndpoint(s, ctx))
 	_ = server.Register(NewNodeEndpoint(s, ctx))
+	_ = server.Register(NewNodePoolEndpoint(s, ctx))
 	_ = server.Register(NewPeriodicEndpoint(s, ctx))
 	_ = server.Register(NewPlanEndpoint(s, ctx))
 	_ = server.Register(NewRegionEndpoint(s, ctx))
@@ -1283,13 +1295,14 @@ func (s *Server) setupRaft() error {
 
 	// Create the FSM
 	fsmConfig := &FSMConfig{
-		EvalBroker:        s.evalBroker,
-		Periodic:          s.periodicDispatcher,
-		Blocked:           s.blockedEvals,
-		Logger:            s.logger,
-		Region:            s.Region(),
-		EnableEventBroker: s.config.EnableEventBroker,
-		EventBufferSize:   s.config.EventBufferSize,
+		EvalBroker:         s.evalBroker,
+		Periodic:           s.periodicDispatcher,
+		Blocked:            s.blockedEvals,
+		Logger:             s.logger,
+		Region:             s.Region(),
+		EnableEventBroker:  s.config.EnableEventBroker,
+		EventBufferSize:    s.config.EventBufferSize,
+		JobTrackedVersions: s.config.JobTrackedVersions,
 	}
 	var err error
 	s.fsm, err = NewFSM(fsmConfig)
@@ -1935,11 +1948,12 @@ func (s *Server) Stats() map[string]map[string]string {
 	toString := func(v uint64) string {
 		return strconv.FormatUint(v, 10)
 	}
+	leader, _ := s.raft.LeaderWithID()
 	stats := map[string]map[string]string{
 		"nomad": {
 			"server":        "true",
 			"leader":        fmt.Sprintf("%v", s.IsLeader()),
-			"leader_addr":   string(s.raft.Leader()),
+			"leader_addr":   string(leader),
 			"bootstrap":     fmt.Sprintf("%v", s.isSingleServerCluster()),
 			"known_regions": toString(uint64(len(s.peers))),
 		},
@@ -1997,7 +2011,7 @@ func (s *Server) setReplyQueryMeta(stateStore *state.StateStore, table string, r
 	if err != nil {
 		return err
 	}
-	reply.Index = helper.Max(1, index)
+	reply.Index = max(1, index)
 
 	// Set the query response.
 	s.setQueryMeta(reply)

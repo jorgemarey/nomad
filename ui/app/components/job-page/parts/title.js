@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: MPL-2.0
+ */
+
 // @ts-check
 import Component from '@ember/component';
 import { task } from 'ember-concurrency';
@@ -10,6 +15,7 @@ import classic from 'ember-classic-decorator';
 @tagName('')
 export default class Title extends Component {
   @service router;
+  @service notifications;
 
   job = null;
   title = null;
@@ -17,18 +23,18 @@ export default class Title extends Component {
   handleError() {}
 
   /**
-   * @param {boolean} withNNotifications - Whether to show a toast on success, as when triggered by keyboard shortcut
+   * @param {boolean} withNotifications - Whether to show a toast on success, as when triggered by keyboard shortcut
    */
-  @task(function* (withNNotifications = false) {
+  @task(function* (withNotifications = false) {
     try {
       const job = this.job;
       yield job.stop();
       // Eagerly update the job status to avoid flickering
-      this.job.set('status', 'dead');
-      if (withNNotifications) {
+      job.set('status', 'dead');
+      if (withNotifications) {
         this.notifications.add({
           title: 'Job Stopped',
-          message: `${this.job.name} has been stopped`,
+          message: `${job.name} has been stopped`,
           color: 'success',
         });
       }
@@ -45,12 +51,10 @@ export default class Title extends Component {
     try {
       const job = this.job;
       yield job.purge();
-      this.flashMessages.add({
+      this.notifications.add({
         title: 'Job Purged',
-        message: `You have purged ${this.job.name}`,
-        type: 'success',
-        destroyOnClick: false,
-        timeout: 5000,
+        message: `You have purged ${job.name}`,
+        color: 'success',
       });
       this.router.transitionTo('jobs');
     } catch (err) {
@@ -67,10 +71,8 @@ export default class Title extends Component {
    */
   @task(function* (withNotifications = false) {
     const job = this.job;
-    const definition = yield job.fetchRawDefinition();
-
-    delete definition.Stop;
-    job.set('_newDefinition', JSON.stringify(definition));
+    const specification = yield job.fetchRawSpecification();
+    job.set('_newDefinition', specification.Source);
 
     try {
       yield job.parse();
@@ -80,7 +82,7 @@ export default class Title extends Component {
       if (withNotifications) {
         this.notifications.add({
           title: 'Job Started',
-          message: `${this.job.name} has started`,
+          message: `${job.name} has started`,
           color: 'success',
         });
       }

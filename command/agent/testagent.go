@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package agent
 
 import (
@@ -200,7 +203,7 @@ RETRY:
 		})
 	} else {
 		testutil.WaitForResult(func() (bool, error) {
-			req, _ := http.NewRequest("GET", "/v1/agent/self", nil)
+			req, _ := http.NewRequest(http.MethodGet, "/v1/agent/self", nil)
 			resp := httptest.NewRecorder()
 			_, err := a.Server.AgentSelfRequest(resp, req)
 			return err == nil && resp.Code == 200, err
@@ -340,6 +343,7 @@ func (a *TestAgent) pickRandomPorts(c *Config) {
 // TestConfig returns a unique default configuration for testing an agent.
 func (a *TestAgent) config() *Config {
 	conf := DevConfig(nil)
+	conf.Version.BuildDate = time.Now()
 
 	// Customize the server configuration
 	config := nomad.DefaultConfig()

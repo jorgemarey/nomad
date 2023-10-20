@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package agent
 
 import (
@@ -14,6 +17,7 @@ import (
 	"time"
 
 	metrics "github.com/armon/go-metrics"
+	"github.com/dustin/go-humanize"
 	consulapi "github.com/hashicorp/consul/api"
 	log "github.com/hashicorp/go-hclog"
 	uuidparse "github.com/hashicorp/go-uuid"
@@ -26,6 +30,7 @@ import (
 	"github.com/hashicorp/nomad/helper/bufconndialer"
 	"github.com/hashicorp/nomad/helper/escapingfs"
 	"github.com/hashicorp/nomad/helper/pluginutils/loader"
+	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/lib/cpuset"
 	"github.com/hashicorp/nomad/nomad"
@@ -160,7 +165,7 @@ func NewAgent(config *Config, logger log.InterceptLogger, logOutput io.Writer, i
 
 // convertServerConfig takes an agent config and log output and returns a Nomad
 // Config. There may be missing fields that must be set by the agent. To do this
-// call finalizeServerConfig
+// call finalizeServerConfig.
 func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 	conf := agentConfig.NomadConfig
 	if conf == nil {
@@ -170,7 +175,6 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 	conf.EnableDebug = agentConfig.EnableDebug
 
 	conf.Build = agentConfig.Version.VersionNumber()
-	conf.BuildDate = agentConfig.Version.BuildDate
 	conf.Revision = agentConfig.Version.Revision
 	if agentConfig.Region != "" {
 		conf.Region = agentConfig.Region
@@ -338,6 +342,13 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 	}
 	conf.JobMaxPriority = jobMaxPriority
 	conf.JobDefaultPriority = jobDefaultPriority
+
+	if agentConfig.Server.JobTrackedVersions != nil {
+		if *agentConfig.Server.JobTrackedVersions <= 0 {
+			return nil, fmt.Errorf("job_tracked_versions must be greater than 0")
+		}
+		conf.JobTrackedVersions = *agentConfig.Server.JobTrackedVersions
+	}
 
 	// Set up the bind addresses
 	rpcAddr, err := net.ResolveTCPAddr("tcp", agentConfig.normalizedAddrs.RPC)
@@ -550,9 +561,12 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 	}
 
 	// Add Enterprise license configs
-	conf.LicenseEnv = agentConfig.Server.LicenseEnv
-	conf.LicensePath = agentConfig.Server.LicensePath
-	conf.LicenseConfig.AdditionalPubKeys = agentConfig.Server.licenseAdditionalPublicKeys
+	conf.LicenseConfig = &nomad.LicenseConfig{
+		BuildDate:         agentConfig.Version.BuildDate,
+		AdditionalPubKeys: agentConfig.Server.licenseAdditionalPublicKeys,
+		LicenseEnvBytes:   agentConfig.Server.LicenseEnv,
+		LicensePath:       agentConfig.Server.LicensePath,
+	}
 
 	// Add the search configuration
 	if search := agentConfig.Server.Search; search != nil {
@@ -568,6 +582,16 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 	if bolt := agentConfig.Server.RaftBoltConfig; bolt != nil {
 		conf.RaftBoltNoFreelistSync = bolt.NoFreelistSync
 	}
+
+	// Interpret job_max_source_size as bytes from string value
+	if agentConfig.Server.JobMaxSourceSize == nil {
+		agentConfig.Server.JobMaxSourceSize = pointer.Of("1M")
+	}
+	jobMaxSourceBytes, err := humanize.ParseBytes(*agentConfig.Server.JobMaxSourceSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse max job source bytes: %w", err)
+	}
+	conf.JobMaxSourceSize = int(jobMaxSourceBytes)
 
 	return conf, nil
 }
@@ -601,7 +625,7 @@ func (a *Agent) clientConfig() (*clientconfig.Config, error) {
 		return nil, err
 	}
 
-	if err := a.finalizeClientConfig(c); err != nil {
+	if err = a.finalizeClientConfig(c); err != nil {
 		return nil, err
 	}
 
@@ -733,6 +757,7 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	conf.Node.Name = agentConfig.NodeName
 	conf.Node.Meta = agentConfig.Client.Meta
 	conf.Node.NodeClass = agentConfig.Client.NodeClass
+	conf.Node.NodePool = agentConfig.Client.NodePool
 
 	// Set up the HTTP advertise address
 	conf.Node.HTTPAddr = agentConfig.AdvertiseAddrs.HTTP

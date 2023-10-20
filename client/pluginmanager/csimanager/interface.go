@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package csimanager
 
 import (
@@ -50,7 +53,7 @@ func (u *UsageOptions) ToFS() string {
 	return sb.String()
 }
 
-type VolumeMounter interface {
+type VolumeManager interface {
 	MountVolume(ctx context.Context, vol *structs.CSIVolume, alloc *structs.Allocation, usageOpts *UsageOptions, publishContext map[string]string) (*MountInfo, error)
 	UnmountVolume(ctx context.Context, volID, remoteID, allocID string, usageOpts *UsageOptions) error
 	HasMount(ctx context.Context, mountInfo *MountInfo) (bool, error)
@@ -65,9 +68,9 @@ type Manager interface {
 	// or until its context is canceled or times out.
 	WaitForPlugin(ctx context.Context, pluginType, pluginID string) error
 
-	// MounterForPlugin returns a VolumeMounter for the plugin ID associated
+	// ManagerForPlugin returns a VolumeManager for the plugin ID associated
 	// with the volume.	Returns an error if this plugin isn't registered.
-	MounterForPlugin(ctx context.Context, pluginID string) (VolumeMounter, error)
+	ManagerForPlugin(ctx context.Context, pluginID string) (VolumeManager, error)
 
 	// Shutdown shuts down the Manager and unmounts any locally attached volumes.
 	Shutdown()

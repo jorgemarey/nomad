@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package scheduler
 
 import (
@@ -41,9 +44,9 @@ func (d *diffResult) Append(other *diffResult) {
 	d.reconnecting = append(d.reconnecting, other.reconnecting...)
 }
 
-// readyNodesInDCs returns all the ready nodes in the given datacenters and a
-// mapping of each data center to the count of ready nodes.
-func readyNodesInDCs(state State, dcs []string) ([]*structs.Node, map[string]struct{}, map[string]int, error) {
+// readyNodesInDCsAndPool returns all the ready nodes in the given datacenters
+// and pool, and a mapping of each data center to the count of ready nodes.
+func readyNodesInDCsAndPool(state State, dcs []string, pool string) ([]*structs.Node, map[string]struct{}, map[string]int, error) {
 	// Index the DCs
 	dcMap := make(map[string]int)
 
@@ -51,7 +54,15 @@ func readyNodesInDCs(state State, dcs []string) ([]*structs.Node, map[string]str
 	ws := memdb.NewWatchSet()
 	var out []*structs.Node
 	notReady := map[string]struct{}{}
-	iter, err := state.Nodes(ws)
+
+	var iter memdb.ResultIterator
+	var err error
+
+	if pool == structs.NodePoolAll || pool == "" {
+		iter, err = state.Nodes(ws)
+	} else {
+		iter, err = state.NodesByNodePool(ws, pool)
+	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -247,6 +258,13 @@ func tasksUpdated(jobA, jobB *structs.Job, taskGroup string) comparison {
 		return difference("volume request", a.Volumes, b.Volumes)
 	}
 
+	// Check if restart.render_templates is updated
+	// this requires a destructive update for template hook to receive the new config
+	if c := renderTemplatesUpdated(a.RestartPolicy, b.RestartPolicy,
+		"group restart render_templates"); c.modified {
+		return c
+	}
+
 	// Check each task
 	for _, at := range a.Tasks {
 		bt := b.LookupTask(at.Name)
@@ -308,6 +326,13 @@ func tasksUpdated(jobA, jobB *structs.Job, taskGroup string) comparison {
 		if at.LogConfig.Disabled != bt.LogConfig.Disabled {
 			return difference("task log disabled", at.LogConfig.Disabled, bt.LogConfig.Disabled)
 		}
+
+		// Check if restart.render_templates is updated
+		if c := renderTemplatesUpdated(at.RestartPolicy, bt.RestartPolicy,
+			"task restart render_templates"); c.modified {
+			return c
+		}
+
 	}
 
 	// none of the fields that trigger a destructive update were modified,
@@ -552,6 +577,23 @@ func spreadsUpdated(jobA, jobB *structs.Job, taskGroup string) comparison {
 	return same
 }
 
+// renderTemplatesUpdated returns the difference in the RestartPolicy's
+// render_templates field, if set
+func renderTemplatesUpdated(a, b *structs.RestartPolicy, msg string) comparison {
+
+	noRenderA := a == nil || !a.RenderTemplates
+	noRenderB := b == nil || !b.RenderTemplates
+
+	if noRenderA && !noRenderB {
+		return difference(msg, false, true)
+	}
+	if !noRenderA && noRenderB {
+		return difference(msg, true, false)
+	}
+
+	return same // both nil, or one nil and the other false
+}
+
 // setStatus is used to update the status of the evaluation
 func setStatus(logger log.Logger, planner Planner,
 	eval, nextEval, spawnedBlocked *structs.Evaluation,
@@ -626,6 +668,10 @@ func inplaceUpdate(ctx Context, eval *structs.Evaluation, job *structs.Job,
 
 		// The alloc is on a node that's now in an ineligible DC
 		if !node.IsInAnyDC(job.Datacenters) {
+			continue
+		}
+		// The alloc is on a node that's now in an ineligible node pool
+		if !node.IsInPool(job.NodePool) {
 			continue
 		}
 
@@ -870,6 +916,9 @@ func genericAllocUpdateFn(ctx Context, stack Stack, evalID string) allocUpdateTy
 
 		// The alloc is on a node that's now in an ineligible DC
 		if !node.IsInAnyDC(newJob.Datacenters) {
+			return false, true, nil
+		}
+		if !node.IsInPool(newJob.NodePool) {
 			return false, true, nil
 		}
 

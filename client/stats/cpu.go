@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package stats
 
 import (
@@ -129,11 +132,12 @@ func (h *HostStatsCollector) collectCPUStats() (cpus []*CPUStats, totalTicks flo
 		idle, user, system, total := percentCalculator.Calculate(cpuStat)
 		ticks := (total / 100.0) * (float64(stats.CpuTotalTicks()) / float64(len(cpuStats)))
 		cs[idx] = &CPUStats{
-			CPU:    cpuStat.CPU,
-			User:   user,
-			System: system,
-			Idle:   idle,
-			Total:  total,
+			CPU:          cpuStat.CPU,
+			User:         user,
+			System:       system,
+			Idle:         idle,
+			TotalPercent: total,
+			TotalTicks:   ticks,
 		}
 		ticksConsumed += ticks
 	}

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package nomad
 
 import (
@@ -783,11 +786,4 @@ func isValidForDisconnectedNode(plan *structs.Plan, nodeID string) bool {
 	}
 
 	return true
-}
-
-func max(a, b uint64) uint64 {
-	if a > b {
-		return a
-	}
-	return b
 }
