@@ -9888,25 +9888,6 @@ func (v *Vault) Equal(o *Vault) bool {
 	return true
 }
 
-func (v *Vault) Equal(o *Vault) bool {
-	if v == nil || o == nil {
-		return v == o
-	}
-	switch {
-	case !slices.Equal(v.Policies, o.Policies):
-		return false
-	case v.Namespace != o.Namespace:
-		return false
-	case v.Env != o.Env:
-		return false
-	case v.ChangeMode != o.ChangeMode:
-		return false
-	case v.ChangeSignal != o.ChangeSignal:
-		return false
-	}
-	return true
-}
-
 // Copy returns a copy of this Vault block.
 func (v *Vault) Copy() *Vault {
 	if v == nil {

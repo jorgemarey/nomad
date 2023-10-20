@@ -4,7 +4,6 @@
 package nomad
 
 import (
-	"errors"
 	"fmt"
 	"math/rand"
 	"net"

@@ -43,6 +43,7 @@ import (
 	"github.com/hashicorp/nomad/client/serviceregistration/wrapper"
 	"github.com/hashicorp/nomad/client/state"
 	"github.com/hashicorp/nomad/client/stats"
+	cstructs "github.com/hashicorp/nomad/client/structs"
 	"github.com/hashicorp/nomad/client/vaultclient"
 	"github.com/hashicorp/nomad/command/agent/consul"
 	"github.com/hashicorp/nomad/helper"
@@ -2020,11 +2021,6 @@ func (c *Client) registerNode(authToken string) error {
 		}
 		close(c.registeredCh)
 	})
-
-	err := c.handleNodeUpdateResponse(resp)
-	if err != nil {
-		return err
-	}
 
 	err := c.handleNodeUpdateResponse(resp)
 	if err != nil {
