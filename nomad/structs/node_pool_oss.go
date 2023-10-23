@@ -6,13 +6,24 @@
 
 package structs
 
-import "errors"
+import "fmt"
 
 // Validate returns an error if the node pool scheduler configuration is
 // invalid.
 func (n *NodePoolSchedulerConfiguration) Validate() error {
-	if n != nil {
-		return errors.New("Node Pools Governance is unlicensed.")
+	if n == nil {
+		return nil
 	}
-	return nil
+
+	if n.SchedulerAlgorithm == "" {
+		return nil
+	}
+
+	switch n.SchedulerAlgorithm {
+	case SchedulerAlgorithmBinpack, SchedulerAlgorithmSpread:
+		return nil
+	default:
+	}
+
+	return fmt.Errorf("Node Pools Scheduler Algorithm must be one either '%s' or '%s'", SchedulerAlgorithmBinpack, SchedulerAlgorithmSpread)
 }

@@ -13,14 +13,29 @@ import (
 	multierror "github.com/hashicorp/go-multierror"
 )
 
-func (n *Namespace) Canonicalize() {}
+func (n *Namespace) Canonicalize() {
+	if n.NodePoolConfiguration == nil {
+		n.NodePoolConfiguration = &NamespaceNodePoolConfiguration{}
+	}
+	n.NodePoolConfiguration.Canonicalize()
+}
 
-func (n *NamespaceNodePoolConfiguration) Canonicalize() {}
+func (n *NamespaceNodePoolConfiguration) Canonicalize() {
+	if n.Default == "" {
+		n.Default = NodePoolDefault
+	}
+}
 
 func (n *NamespaceNodePoolConfiguration) Validate() error {
-	if n != nil {
-		return errors.New("Node Pools Governance is unlicensed.")
+	if n == nil {
+		return nil
 	}
+
+	if n.Allowed != nil && n.Denied != nil {
+		return errors.New("only one of 'Allowed', 'Denied' can be set")
+	}
+
+	// TODO: check for allowed to be a valid string?
 	return nil
 }
 
