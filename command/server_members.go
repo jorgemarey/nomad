@@ -118,17 +118,6 @@ func (c *ServerMembersCommand) Run(args []string) int {
 	// Sort the members
 	sort.Sort(api.AgentMembersNameSort(srvMembers.Members))
 
-	if json || len(tmpl) > 0 {
-		out, err := Format(json, tmpl, srvMembers.Members)
-		if err != nil {
-			c.Ui.Error(err.Error())
-			return 1
-		}
-
-		c.Ui.Output(out)
-		return 0
-	}
-
 	// Determine the leaders per region.
 	leaders, leaderErr := regionLeaders(client, srvMembers.Members)
 

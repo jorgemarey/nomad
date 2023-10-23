@@ -47,6 +47,7 @@ require (
 	github.com/hashicorp/consul/api v1.23.0
 	github.com/hashicorp/consul/sdk v0.14.0
 	github.com/hashicorp/cronexpr v1.1.2
+	github.com/hashicorp/eventlogger v0.2.5
 	github.com/hashicorp/go-bexpr v0.1.12
 	github.com/hashicorp/go-checkpoint v0.0.0-20171009173528-1545e56e46de
 	github.com/hashicorp/go-cleanhttp v0.5.2
@@ -190,7 +191,7 @@ require (
 	github.com/docker/go-metrics v0.0.1 // indirect
 	github.com/docker/libtrust v0.0.0-20160708172513-aabc10ec26b7 // indirect
 	github.com/fatih/color v1.15.0
-	github.com/felixge/httpsnoop v1.0.3 // indirect
+	github.com/felixge/httpsnoop v1.0.3
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect

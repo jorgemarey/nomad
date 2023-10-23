@@ -6988,23 +6988,11 @@ func (tg *TaskGroup) Validate(j *Job) error {
 		mErr.Errors = append(mErr.Errors, outer)
 	}
 
-	isTypeService := j.Type == JobTypeService
-
 	// Validate the tasks
 	for _, task := range tg.Tasks {
 		if err := task.Validate(j.Type, tg); err != nil {
 			outer := fmt.Errorf("Task %s validation failed: %v", task.Name, err)
 			mErr.Errors = append(mErr.Errors, outer)
-		}
-
-		// Validate the group's Update Strategy does not conflict with the Task's kill_timeout for service type jobs
-		if isTypeService && tg.Update != nil {
-			// progress_deadline = 0 has a special meaning so it should not be
-			// validated against the task's kill_timeout.
-			if tg.Update.ProgressDeadline > 0 && task.KillTimeout > tg.Update.ProgressDeadline {
-				mErr.Errors = append(mErr.Errors, fmt.Errorf("Task %s has a kill timout (%s) longer than the group's progress deadline (%s)",
-					task.Name, task.KillTimeout.String(), tg.Update.ProgressDeadline.String()))
-			}
 		}
 	}
 
