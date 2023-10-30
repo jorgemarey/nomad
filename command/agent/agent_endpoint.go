@@ -179,14 +179,26 @@ func (s *HTTPServer) AgentMonitor(resp http.ResponseWriter, req *http.Request) (
 		plainText = parsed
 	}
 
+	logIncludeLocation := false
+	logIncludeLocationStr := req.URL.Query().Get("log_include_location")
+	if logIncludeLocationStr != "" {
+		parsed, err := strconv.ParseBool(logIncludeLocationStr)
+		if err != nil {
+			return nil, CodedError(http.StatusBadRequest,
+				fmt.Sprintf("Unknown option for log_include_location: %v", err))
+		}
+		logIncludeLocation = parsed
+	}
+
 	nodeID := req.URL.Query().Get("node_id")
 	// Build the request and parse the ACL token
 	args := cstructs.MonitorRequest{
-		NodeID:    nodeID,
-		ServerID:  req.URL.Query().Get("server_id"),
-		LogLevel:  logLevel,
-		LogJSON:   logJSON,
-		PlainText: plainText,
+		NodeID:             nodeID,
+		ServerID:           req.URL.Query().Get("server_id"),
+		LogLevel:           logLevel,
+		LogJSON:            logJSON,
+		LogIncludeLocation: logIncludeLocation,
+		PlainText:          plainText,
 	}
 
 	// if node and server were requested return error
@@ -322,8 +334,17 @@ func (s *HTTPServer) AgentForceLeaveRequest(resp http.ResponseWriter, req *http.
 		return nil, CodedError(400, "missing node to force leave")
 	}
 
+	prune, err := parseBool(req, "prune")
+	if err != nil {
+		return nil, CodedError(400, "invalid prune value")
+	}
+
 	// Attempt remove
-	err := srv.RemoveFailedNode(node)
+	if prune != nil && *prune {
+		err = srv.RemoveFailedNodePrune(node)
+	} else {
+		err = srv.RemoveFailedNode(node)
+	}
 	return nil, err
 }
 

@@ -2421,25 +2421,17 @@ func (s *StateStore) UpsertCSIVolume(index uint64, volumes []*structs.CSIVolume)
 		}
 		if obj != nil {
 			// Allow some properties of a volume to be updated in place, but
-			// prevent accidentally overwriting important properties, or
-			// overwriting a volume in use
+			// prevent accidentally overwriting important properties.
 			old := obj.(*structs.CSIVolume)
 			if old.ExternalID != v.ExternalID ||
 				old.PluginID != v.PluginID ||
 				old.Provider != v.Provider {
 				return fmt.Errorf("volume identity cannot be updated: %s", v.ID)
 			}
-			s.CSIVolumeDenormalize(nil, old.Copy())
-			if old.InUse() {
-				return fmt.Errorf("volume cannot be updated while in use")
-			}
-
-			v.CreateIndex = old.CreateIndex
-			v.ModifyIndex = index
 		} else {
 			v.CreateIndex = index
-			v.ModifyIndex = index
 		}
+		v.ModifyIndex = index
 
 		// Allocations are copy on write, so we want to keep the Allocation ID
 		// but we need to clear the pointer so that we don't store it when we

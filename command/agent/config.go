@@ -68,6 +68,11 @@ type Config struct {
 	// LogFile enables logging to a file
 	LogFile string `hcl:"log_file"`
 
+	// LogIncludeLocation dictates whether the logger includes file and line
+	// information on each log line. This is useful for Nomad development and
+	// debugging.
+	LogIncludeLocation bool `hcl:"log_include_location"`
+
 	// LogRotateDuration is the time period that logs should be rotated in
 	LogRotateDuration string `hcl:"log_rotate_duration"`
 
@@ -1410,6 +1415,9 @@ func (c *Config) Merge(b *Config) *Config {
 	if b.LogFile != "" {
 		result.LogFile = b.LogFile
 	}
+	if b.LogIncludeLocation {
+		result.LogIncludeLocation = true
+	}
 	if b.LogRotateDuration != "" {
 		result.LogRotateDuration = b.LogRotateDuration
 	}
@@ -2036,6 +2044,18 @@ func (s *ServerConfig) Merge(b *ServerConfig) *ServerConfig {
 		result.RaftBoltConfig = &RaftBoltConfig{
 			NoFreelistSync: b.RaftBoltConfig.NoFreelistSync,
 		}
+	}
+
+	if b.RaftSnapshotThreshold != nil {
+		result.RaftSnapshotThreshold = pointer.Of(*b.RaftSnapshotThreshold)
+	}
+
+	if b.RaftSnapshotInterval != nil {
+		result.RaftSnapshotInterval = pointer.Of(*b.RaftSnapshotInterval)
+	}
+
+	if b.RaftTrailingLogs != nil {
+		result.RaftTrailingLogs = pointer.Of(*b.RaftTrailingLogs)
 	}
 
 	if b.JobTrackedVersions != nil {
