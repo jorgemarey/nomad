@@ -28,7 +28,7 @@ func (j jobNodePoolValidatingHook) enterpriseValidation(job *structs.Job, pool *
 
 	// If an empty list is provided only the namespace's default node pool is allowed
 	if allowed := ns.NodePoolConfiguration.Allowed; allowed != nil {
-		if len(allowed) == 0 && pool.Name == structs.NodePoolDefault {
+		if pool.Name == ns.NodePoolConfiguration.Default {
 			return nil, nil
 		}
 		for _, np := range allowed {
