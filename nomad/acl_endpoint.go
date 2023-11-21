@@ -2967,7 +2967,7 @@ func formatTokenName(format, authType, authName string, claims map[string]string
 		claimMappings["value."+k] = v
 	}
 
-	tokenName, err := auth.InterpolateHIL(format, claimMappings, true)
+	tokenName, err := auth.InterpolateHIL(format, claimMappings, false)
 	if err != nil {
 		return "", err
 	}
