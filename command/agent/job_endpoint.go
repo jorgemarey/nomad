@@ -1457,6 +1457,7 @@ func ApiServicesToStructs(in []*api.Service, group bool) []*structs.Service {
 	for i, s := range in {
 		out[i] = &structs.Service{
 			Name:              s.Name,
+			Kind:              s.Kind,
 			PortLabel:         s.PortLabel,
 			TaskName:          s.TaskName,
 			Tags:              s.Tags,

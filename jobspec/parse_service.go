@@ -42,6 +42,7 @@ func parseService(o *ast.ObjectItem) (*api.Service, error) {
 	// Check for invalid keys
 	valid := []string{
 		"name",
+		"kind",
 		"tags",
 		"canary_tags",
 		"enable_tag_override",

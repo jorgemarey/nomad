@@ -561,6 +561,8 @@ type Service struct {
 	// as one of the seed values when generating a Consul ServiceID.
 	Name string
 
+	Kind string
+
 	// Name of the Task associated with this service.
 	// Group services do not have a task name, unless they are a connect native
 	// service specifying the task implementing the service.
@@ -841,6 +843,7 @@ func (s *Service) Hash(allocID, taskName string, canary bool) string {
 	hashString(h, allocID)
 	hashString(h, taskName)
 	hashString(h, s.Name)
+	hashString(h, s.Kind)
 	hashString(h, s.PortLabel)
 	hashString(h, s.AddressMode)
 	hashString(h, s.Address)
@@ -954,6 +957,10 @@ func (s *Service) Equal(o *Service) bool {
 	}
 
 	if s.Name != o.Name {
+		return false
+	}
+
+	if s.Kind != o.Kind {
 		return false
 	}
 
