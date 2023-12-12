@@ -44,7 +44,7 @@ PROTO_COMPARE_TAG ?= v1.0.3$(if $(findstring ent,$(GO_TAGS)),+ent,)
 
 # LAST_RELEASE is the git sha of the latest release corresponding to this branch. main should have the latest
 # published release, and release branches should point to the latest published release in the X.Y release line.
-LAST_RELEASE ?= v1.6.2
+LAST_RELEASE ?= v1.6.3
 
 default: help
 
@@ -140,7 +140,8 @@ deps:  ## Install build and development dependencies
 	go install github.com/bufbuild/buf/cmd/buf@v0.36.0
 	go install github.com/hashicorp/go-changelog/cmd/changelog-build@latest
 	go install golang.org/x/tools/cmd/stringer@v0.1.12
-	go install github.com/hashicorp/hc-install/cmd/hc-install@v0.5.0
+	go install github.com/hashicorp/hc-install/cmd/hc-install@v0.6.1
+	go install github.com/shoenig/go-modtool@v0.1.1
 
 .PHONY: lint-deps
 lint-deps: ## Install linter dependencies

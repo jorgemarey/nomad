@@ -222,7 +222,7 @@ var (
 	// ValidACLAuthMethod is used to validate an ACL auth method name.
 	ValidACLAuthMethod = regexp.MustCompile("^[a-zA-Z0-9-]{1,128}$")
 
-	// ValitACLAuthMethodTypes lists supported auth method types.
+	// ValidACLAuthMethodTypes lists supported auth method types.
 	ValidACLAuthMethodTypes = []string{ACLAuthMethodTypeOIDC, ACLAuthMethodTypeJWT}
 )
 
@@ -931,7 +931,7 @@ func (a *ACLAuthMethod) Validate(minTTL, maxTTL time.Duration) error {
 		mErr.Errors = append(mErr.Errors, fmt.Errorf("invalid name '%s'", a.Name))
 	}
 
-	if !slices.Contains([]string{"local", "global"}, a.TokenLocality) {
+	if !slices.Contains([]string{ACLAuthMethodTokenLocalityLocal, ACLAuthMethodTokenLocalityGlobal}, a.TokenLocality) {
 		mErr.Errors = append(
 			mErr.Errors, fmt.Errorf("invalid token locality '%s'", a.TokenLocality))
 	}
@@ -952,7 +952,9 @@ func (a *ACLAuthMethod) Validate(minTTL, maxTTL time.Duration) error {
 
 // TokenLocalityIsGlobal returns whether the auth method creates global ACL
 // tokens or not.
-func (a *ACLAuthMethod) TokenLocalityIsGlobal() bool { return a.TokenLocality == "global" }
+func (a *ACLAuthMethod) TokenLocalityIsGlobal() bool {
+	return a.TokenLocality == ACLAuthMethodTokenLocalityGlobal
+}
 
 // ACLAuthMethodConfig is used to store configuration of an auth method
 type ACLAuthMethodConfig struct {

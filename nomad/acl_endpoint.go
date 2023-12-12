@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/armon/go-metrics"
 	capOIDC "github.com/hashicorp/cap/oidc"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
+	"github.com/hashicorp/go-metrics"
 	"github.com/hashicorp/go-set"
 
 	policy "github.com/hashicorp/nomad/acl"
@@ -389,28 +389,33 @@ func (a *ACL) GetPolicies(args *structs.ACLPolicySetRequest, reply *structs.ACLP
 	// Add the token policies which are directly referenced into the set.
 	tokenPolicyNames.InsertAll(token.Policies)
 
-	// Ensure the token has enough permissions to query the named policies.
-	if token.Type != structs.ACLManagementToken && !tokenPolicyNames.ContainsAll(args.Names) {
-		return structs.ErrPermissionDenied
-	}
-
 	// Setup the blocking query
 	opts := blockingOptions{
 		queryOpts: &args.QueryOptions,
 		queryMeta: &reply.QueryMeta,
 		run: func(ws memdb.WatchSet, state *state.StateStore) error {
 			// Setup the output
-			reply.Policies = make(map[string]*structs.ACLPolicy, len(args.Names))
+			reply.Policies = make(map[string]*structs.ACLPolicy)
 
-			// Look for the policy
+			// Look for the policy and check whether the caller has the
+			// permission to view it. This endpoint is used by the replication
+			// process, or Nomad clients looking up a callers policies. It is
+			// therefore safe, to perform auth checks here and ensures we do
+			// not return erroneous permission denied errors when a caller uses
+			// a token with dangling policies.
 			for _, policyName := range args.Names {
 				out, err := state.ACLPolicyByName(ws, policyName)
 				if err != nil {
 					return err
 				}
-				if out != nil {
-					reply.Policies[policyName] = out
+				if out == nil {
+					continue
 				}
+
+				if token.Type != structs.ACLManagementToken && !tokenPolicyNames.Contains(policyName) {
+					return structs.ErrPermissionDenied
+				}
+				reply.Policies[policyName] = out
 			}
 
 			// Use the last index that affected the policy table

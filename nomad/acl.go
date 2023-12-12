@@ -9,7 +9,7 @@ import (
 	"net"
 	"time"
 
-	metrics "github.com/armon/go-metrics"
+	"github.com/hashicorp/go-metrics"
 	"github.com/hashicorp/nomad/acl"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/nomad/state"
@@ -247,7 +247,7 @@ func (s *Server) VerifyClaim(token string) (*structs.IdentityClaims, error) {
 	}
 
 	// the claims for terminal allocs are always treated as expired
-	if alloc.TerminalStatus() {
+	if alloc.ClientTerminalStatus() {
 		return nil, fmt.Errorf("allocation is terminal")
 	}
 

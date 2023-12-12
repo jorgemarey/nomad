@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	metrics "github.com/armon/go-metrics"
 	hclog "github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-metrics"
 	"github.com/hashicorp/nomad/helper/useragent"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
@@ -391,6 +391,7 @@ func (c *vaultClient) renew(req *vaultClientRenewalRequest) error {
 	fatal := false
 	if renewalErr != nil &&
 		(strings.Contains(renewalErr.Error(), "lease not found or lease is not renewable") ||
+			strings.Contains(renewalErr.Error(), "invalid lease ID") ||
 			strings.Contains(renewalErr.Error(), "lease is not renewable") ||
 			strings.Contains(renewalErr.Error(), "token not found") ||
 			strings.Contains(renewalErr.Error(), "permission denied")) {

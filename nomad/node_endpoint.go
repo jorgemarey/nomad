@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
+	"github.com/hashicorp/go-metrics"
 	"github.com/hashicorp/go-multierror"
 	vapi "github.com/hashicorp/vault/api"
 	"golang.org/x/sync/errgroup"
@@ -1864,7 +1864,7 @@ func (n *Node) DeriveVaultToken(args *structs.DeriveVaultTokenRequest, reply *st
 		setError(fmt.Errorf("Allocation %q not running on Node %q", args.AllocID, args.NodeID), false)
 		return nil
 	}
-	if alloc.TerminalStatus() {
+	if alloc.ClientTerminalStatus() {
 		setError(fmt.Errorf("Can't request Vault token for terminal allocation"), false)
 		return nil
 	}
