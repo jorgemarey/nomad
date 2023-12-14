@@ -16,9 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/armon/go-metrics"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/go-metrics"
 	"github.com/hashicorp/go-set"
 	"github.com/hashicorp/nomad/client/serviceregistration"
 	"github.com/hashicorp/nomad/helper"
@@ -1498,6 +1498,15 @@ func (c *ServiceClient) AllocRegistrations(allocID string) (*serviceregistration
 			for checkID := range sreg.CheckIDs {
 				if check, ok := checks[checkID]; ok {
 					sreg.Checks = append(sreg.Checks, check)
+				}
+			}
+
+			if sidecarService := getNomadSidecar(serviceID, services); sidecarService != nil {
+				sreg.SidecarService = sidecarService
+				for _, check := range checks {
+					if check.ServiceID == sidecarService.ID {
+						sreg.SidecarChecks = append(sreg.SidecarChecks, check)
+					}
 				}
 			}
 		}
