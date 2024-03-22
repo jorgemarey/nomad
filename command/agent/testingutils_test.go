@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package agent
 
@@ -76,6 +76,19 @@ func MockJob() *api.Job {
 							{
 								Name:      "${TASK}-admin",
 								PortLabel: "admin",
+							},
+						},
+						// actions
+						Actions: []*api.Action{
+							{
+								Name:    "date-test",
+								Command: "/bin/date",
+								Args:    []string{"-u"},
+							},
+							{
+								Name:    "echo-test",
+								Command: "/bin/echo",
+								Args:    []string{"hello world"},
 							},
 						},
 						LogConfig: api.DefaultLogConfig(),

@@ -1,0 +1,29 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+
+//go:build !ent
+// +build !ent
+
+package structs
+
+import "fmt"
+
+// Validate returns an error if the node pool scheduler configuration is
+// invalid.
+func (n *NodePoolSchedulerConfiguration) Validate() error {
+	if n == nil {
+		return nil
+	}
+
+	if n.SchedulerAlgorithm == "" {
+		return nil
+	}
+
+	switch n.SchedulerAlgorithm {
+	case SchedulerAlgorithmBinpack, SchedulerAlgorithmSpread:
+		return nil
+	default:
+	}
+
+	return fmt.Errorf("Node Pools Scheduler Algorithm must be one either '%s' or '%s'", SchedulerAlgorithmBinpack, SchedulerAlgorithmSpread)
+}

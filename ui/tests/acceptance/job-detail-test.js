@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 /* eslint-disable ember/no-test-module-for */
@@ -56,14 +56,16 @@ moduleForJob('Acceptance | job detail (sysbatch)', 'allocations', () =>
 
 moduleForJobWithClientStatus(
   'Acceptance | job detail with client status (sysbatch)',
-  () =>
-    server.create('job', {
+  () => {
+    server.create('namespace', { id: 'test' });
+    return server.create('job', {
       status: 'running',
       datacenters: ['dc1'],
       type: 'sysbatch',
       createAllocations: false,
       noActiveDeployment: true,
-    })
+    });
+  }
 );
 
 moduleForJobWithClientStatus(
@@ -113,6 +115,7 @@ moduleForJob('Acceptance | job detail (sysbatch child)', 'allocations', () => {
 moduleForJobWithClientStatus(
   'Acceptance | job detail with client status (sysbatch child)',
   () => {
+    server.create('namespace', { id: 'test' });
     const parent = server.create('job', 'periodicSysbatch', {
       childrenCount: 1,
       shallow: true,
@@ -278,6 +281,8 @@ moduleForJob(
       allocStatusDistribution: {
         running: 1,
       },
+      // Child's gotta be non-queued to be able to run
+      status: 'running', //  TODO: TEMP
     });
     return server.db.jobs.where({ parentId: parent.id })[0];
   }
@@ -627,7 +632,7 @@ module('Acceptance | job detail (with namespaces)', function (hooks) {
       noActiveDeployment: true,
       createAllocations: true,
       groupsCount: 1,
-      groupTaskCount: 1,
+      groupAllocCount: 1,
       allocStatusDistribution: {
         running: 1,
       },
@@ -645,7 +650,7 @@ module('Acceptance | job detail (with namespaces)', function (hooks) {
     await settled();
 
     // User should be booted off the page
-    assert.equal(currentURL(), '/jobs?namespace=*');
+    assert.equal(currentURL(), '/jobs');
 
     // A notification should be present
     assert
@@ -665,7 +670,7 @@ module('Acceptance | job detail (with namespaces)', function (hooks) {
       noActiveDeployment: true,
       createAllocations: true,
       groupsCount: 1,
-      groupTaskCount: 1,
+      groupAllocCount: 1,
       allocStatusDistribution: {
         running: 1,
       },
@@ -684,7 +689,7 @@ module('Acceptance | job detail (with namespaces)', function (hooks) {
     await settled();
 
     // User should be booted off the page
-    assert.equal(currentURL(), '/jobs?namespace=*');
+    assert.equal(currentURL(), '/jobs');
 
     // A notification should be present
     assert

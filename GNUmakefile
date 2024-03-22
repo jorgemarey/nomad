@@ -44,7 +44,7 @@ PROTO_COMPARE_TAG ?= v1.0.3$(if $(findstring ent,$(GO_TAGS)),+ent,)
 
 # LAST_RELEASE is the git sha of the latest release corresponding to this branch. main should have the latest
 # published release, and release branches should point to the latest published release in the X.Y release line.
-LAST_RELEASE ?= v1.6.4
+LAST_RELEASE ?= v1.7.5
 
 default: help
 
@@ -136,19 +136,19 @@ deps:  ## Install build and development dependencies
 	go install gotest.tools/gotestsum@v1.10.0
 	go install github.com/hashicorp/hcl/v2/cmd/hclfmt@d0c4fa8b0bbc2e4eeccd1ed2a32c2089ed8c5cf1
 	go install github.com/golang/protobuf/protoc-gen-go@v1.3.4
-	go install github.com/hashicorp/go-msgpack/codec/codecgen@v1.1.5
+	go install github.com/hashicorp/go-msgpack/codec/codecgen@v1.1.5+base32
 	go install github.com/bufbuild/buf/cmd/buf@v0.36.0
 	go install github.com/hashicorp/go-changelog/cmd/changelog-build@latest
-	go install golang.org/x/tools/cmd/stringer@v0.1.12
+	go install golang.org/x/tools/cmd/stringer@v0.18.0
 	go install github.com/hashicorp/hc-install/cmd/hc-install@v0.6.1
-	go install github.com/shoenig/go-modtool@v0.1.1
+	go install github.com/shoenig/go-modtool@v0.2.0
 
 .PHONY: lint-deps
 lint-deps: ## Install linter dependencies
 	@echo "==> Updating linter dependencies..."
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.54.0
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.56.2
 	go install github.com/client9/misspell/cmd/misspell@v0.3.4
-	go install github.com/hashicorp/go-hclog/hclogvet@v0.1.6
+	go install github.com/hashicorp/go-hclog/hclogvet@v0.2.0
 
 .PHONY: git-hooks
 git-dir = $(shell git rev-parse --git-dir)
@@ -162,11 +162,14 @@ check: ## Lint the source code
 	@echo "==> Linting source code..."
 	@golangci-lint run
 
+	@echo "==> Linting ./api source code..."
+	@cd ./api && golangci-lint run --config ../.golangci.yml
+
 	@echo "==> Linting hclog statements..."
 	@hclogvet .
 
 	@echo "==> Spell checking website..."
-	@misspell -error -source=text website/pages/
+	@misspell -error -source=text website/content/
 
 	@echo "==> Checking for breaking changes in protos..."
 	@buf breaking --config tools/buf/buf.yaml --against-config tools/buf/buf.yaml --against .git#tag=$(PROTO_COMPARE_TAG)
@@ -179,13 +182,13 @@ check: ## Lint the source code
 	@$(MAKE) hclfmt
 	@if (git status -s | grep -q -e '\.hcl$$' -e '\.nomad$$' -e '\.tf$$'); then echo the following HCL files are out of sync; git status -s | grep -e '\.hcl$$' -e '\.nomad$$' -e '\.tf$$'; exit 1; fi
 
-	@echo "==> Check API package is isolated from rest"
+	@echo "==> Check API package is isolated from rest..."
 	@cd ./api && if go list --test -f '{{ join .Deps "\n" }}' . | grep github.com/hashicorp/nomad/ | grep -v -e /nomad/api/ -e nomad/api.test; then echo "  /api package depends the ^^ above internal nomad packages.  Remove such dependency"; exit 1; fi
 
-	@echo "==> Check command package does not import structs"
+	@echo "==> Check command package does not import structs..."
 	@cd ./command && if go list -f '{{ join .Imports "\n" }}' . | grep github.com/hashicorp/nomad/nomad/structs; then echo "  /command package imports the structs pkg. Remove such import"; exit 1; fi
 
-	@echo "==> Checking Go mod.."
+	@echo "==> Checking Go mod..."
 	@GO111MODULE=on $(MAKE) tidy
 	@if (git status --porcelain | grep -Eq "go\.(mod|sum)"); then \
 		echo go.mod or go.sum needs updating; \
@@ -250,6 +253,7 @@ tidy: ## Tidy up the go mod files
 	@cd tools && go mod tidy
 	@cd api && go mod tidy
 	@echo "==> Tidy nomad module"
+	@go-modtool -config=ci/modtool.toml fmt go.mod
 	@go mod tidy
 
 .PHONY: dev
@@ -322,6 +326,17 @@ integration-test: dev ## Run Nomad integration tests
 		-count=1 \
 		-tags "$(GO_TAGS)" \
 		github.com/hashicorp/nomad/e2e/vaultcompat
+
+.PHONY: integration-test-consul
+integration-test-consul: dev ## Run Nomad integration tests
+	@echo "==> Running Nomad integration test suite for Consul:"
+	NOMAD_E2E_CONSULCOMPAT=1 go test \
+		-v \
+		-race \
+		-timeout=900s \
+		-count=1 \
+		-tags "$(GO_TAGS)" \
+		github.com/hashicorp/nomad/e2e/consulcompat
 
 .PHONY: clean
 clean: GOPATH=$(shell go env GOPATH)
@@ -410,11 +425,6 @@ missing: ## Check for packages not being tested
 	@echo "==> Checking for packages not being tested ..."
 	@go run -modfile tools/go.mod tools/missing/main.go ci/test-core.json
 
-.PHONY: ec2info
-ec2info: ## Generate AWS EC2 CPU specification table
-	@echo "==> Generating AWS EC2 specifications ..."
-	@go run -modfile tools/go.mod tools/ec2info/main.go
-
 .PHONY: cl
 cl: ## Create a new Changelog entry
 	@go run -modfile tools/go.mod tools/cl-entry/main.go
@@ -430,3 +440,20 @@ test: ## Use this target as a smoke test
 		-count=1 \
 		-tags "$(GO_TAGS)" \
 		$(GOTEST_PKGS)
+
+.PHONY: copywriteheaders
+copywriteheaders:
+	copywrite headers --plan
+	# Special case for MPL headers in /api, /drivers/shared, /plugins, /jobspec, /jobspec2, and /demo
+	cd api && $(CURDIR)/scripts/copywrite-exceptions.sh
+	cd drivers/shared && $(CURDIR)/scripts/copywrite-exceptions.sh
+	cd plugins && $(CURDIR)/scripts/copywrite-exceptions.sh
+	cd jobspec && $(CURDIR)/scripts/copywrite-exceptions.sh
+	cd jobspec2 && $(CURDIR)/scripts/copywrite-exceptions.sh
+	cd demo && $(CURDIR)/scripts/copywrite-exceptions.sh
+
+.PHONY: cni
+cni: ## Install CNI plugins. Run this as root.
+	mkdir -p /opt/cni/bin
+	curl --fail -LsO "https://github.com/containernetworking/plugins/releases/download/v1.3.0/cni-plugins-linux-amd64-v1.3.0.tgz"
+	tar -C /opt/cni/bin -xf cni-plugins-linux-amd64-v1.3.0.tgz

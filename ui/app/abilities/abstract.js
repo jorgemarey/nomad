@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { Ability } from 'ember-can';
@@ -80,6 +80,7 @@ export default class Abstract extends Ability {
   }
 
   featureIsPresent(featureName) {
+    // See the hashicorp/nomad-licensing repo for canonical feature names
     return this.features.includes(featureName);
   }
 

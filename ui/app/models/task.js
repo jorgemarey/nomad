@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { attr } from '@ember-data/model';
@@ -18,6 +18,8 @@ export default class Task extends Fragment {
   @attr('string') name;
   @attr('string') driver;
   @attr('string') kind;
+  @fragmentArray('action', { defaultValue: () => [] })
+  actions;
 
   @attr() meta;
 

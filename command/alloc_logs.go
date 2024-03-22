@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package command
 
@@ -173,7 +173,7 @@ func (l *AllocLogsCommand) Run(args []string) int {
 			return 1
 		}
 
-		allocID, err = getRandomJobAllocID(client, jobID, ns)
+		allocID, err = getRandomJobAllocID(client, jobID, "", ns)
 		if err != nil {
 			l.Ui.Error(fmt.Sprintf("Error fetching allocations: %v", err))
 			return 1

@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package ci
 
@@ -43,6 +43,7 @@ var TinyChroot = map[string]string{
 	"/usr/bin/dash":  "/bin/sh",
 	"/usr/bin/bash":  "/bin/bash",
 	"/usr/bin/cat":   "/bin/cat",
+	"/usr/bin/tail":  "/bin/tail",
 
 	// destination: /usr/bin
 	"/usr/bin/stty":   "/usr/bin/stty",

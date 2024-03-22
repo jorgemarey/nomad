@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package nomad
 
@@ -66,6 +66,7 @@ const (
 	ACLAuthMethodSnapshot                SnapshotType = 26
 	ACLBindingRuleSnapshot               SnapshotType = 27
 	NodePoolSnapshot                     SnapshotType = 28
+	JobSubmissionSnapshot                SnapshotType = 29
 
 	// Namespace appliers were moved from enterprise and therefore start at 64
 	NamespaceSnapshot SnapshotType = 64
@@ -1934,6 +1935,18 @@ func (n *nomadFSM) restoreImpl(old io.ReadCloser, filter *FSMFilter) error {
 				return err
 			}
 
+		case JobSubmissionSnapshot:
+			jobSubmissions := new(structs.JobSubmission)
+
+			if err := dec.Decode(jobSubmissions); err != nil {
+				return err
+			}
+
+			// Perform the restoration.
+			if err := restore.JobSubmissionRestore(jobSubmissions); err != nil {
+				return err
+			}
+
 		default:
 			// Check if this is an enterprise only object being restored
 			restorer, ok := n.enterpriseRestorers[snapType]
@@ -2309,7 +2322,8 @@ func (f *FSMFilter) Include(item interface{}) bool {
 	return true
 }
 
-func (n *nomadFSM) applyVariableOperation(msgType structs.MessageType, buf []byte, index uint64) interface{} {
+func (n *nomadFSM) applyVariableOperation(msgType structs.MessageType, buf []byte,
+	index uint64) any {
 	var req structs.VarApplyStateRequest
 	if err := structs.Decode(buf, &req); err != nil {
 		panic(fmt.Errorf("failed to decode request: %v", err))
@@ -2325,6 +2339,10 @@ func (n *nomadFSM) applyVariableOperation(msgType structs.MessageType, buf []byt
 		return n.state.VarDeleteCAS(index, &req)
 	case structs.VarOpCAS:
 		return n.state.VarSetCAS(index, &req)
+	case structs.VarOpLockAcquire:
+		return n.state.VarLockAcquire(index, &req)
+	case structs.VarOpLockRelease:
+		return n.state.VarLockRelease(index, &req)
 	default:
 		err := fmt.Errorf("Invalid variable operation '%s'", req.Op)
 		n.logger.Warn("Invalid variable operation", "operation", req.Op)
@@ -2497,6 +2515,10 @@ func (s *nomadSnapshot) Persist(sink raft.SnapshotSink) error {
 		return err
 	}
 	if err := s.persistACLBindingRules(sink, encoder); err != nil {
+		sink.Cancel()
+		return err
+	}
+	if err := s.persistJobSubmissions(sink, encoder); err != nil {
 		sink.Cancel()
 		return err
 	}
@@ -3210,6 +3232,27 @@ func (s *nomadSnapshot) persistACLBindingRules(sink raft.SnapshotSink, encoder *
 		// write the snapshot
 		sink.Write([]byte{byte(ACLBindingRuleSnapshot)})
 		if err := encoder.Encode(bindingRule); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *nomadSnapshot) persistJobSubmissions(sink raft.SnapshotSink, encoder *codec.Encoder) error {
+
+	// Get all the job submissions.
+	ws := memdb.NewWatchSet()
+	jobSubmissionsIter, err := s.snap.GetJobSubmissions(ws)
+	if err != nil {
+		return err
+	}
+
+	for raw := jobSubmissionsIter.Next(); raw != nil; raw = jobSubmissionsIter.Next() {
+		jobSubmission := raw.(*structs.JobSubmission)
+
+		// write the snapshot
+		sink.Write([]byte{byte(JobSubmissionSnapshot)})
+		if err := encoder.Encode(jobSubmission); err != nil {
 			return err
 		}
 	}

@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package exec
 
@@ -76,7 +76,6 @@ func (h *taskHandle) run() {
 	h.procState = drivers.TaskStateExited
 	h.exitResult.ExitCode = ps.ExitCode
 	h.exitResult.Signal = ps.Signal
+	h.exitResult.OOMKilled = ps.OOMKilled
 	h.completedAt = ps.Time
-
-	// TODO: detect if the task OOMed
 }

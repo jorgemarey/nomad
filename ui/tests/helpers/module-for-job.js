@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 /* eslint-disable qunit/require-expect */
@@ -44,7 +44,7 @@ export default function moduleForJob(
       server.create('node-pool');
       server.create('node');
       job = jobFactory();
-      if (!job.namespace || job.namespace === 'default') {
+      if (!job.namespace) {
         await JobDetail.visit({ id: job.id });
       } else {
         await JobDetail.visit({ id: `${job.id}@${job.namespace}` });
@@ -199,9 +199,9 @@ export default function moduleForJob(
         const encodedStatus = encodeURIComponent(JSON.stringify([status]));
         const expectedURL = new URL(
           urlWithNamespace(
-            `/jobs/${encodeURIComponent(
-              job.name
-            )}/allocations?status=${encodedStatus}`,
+            `/jobs/${encodeURIComponent(job.name)}@${
+              job.namespace
+            }/allocations?status=${encodedStatus}`,
             job.namespace
           ),
           window.location

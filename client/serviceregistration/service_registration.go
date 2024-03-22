@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package serviceregistration
 
@@ -47,6 +47,8 @@ type Handler interface {
 	// registration check.
 	UpdateTTL(id, namespace, output, status string) error
 }
+
+type HandlerFunc func(string) Handler
 
 // WorkloadRestarter allows the checkWatcher to restart tasks or entire task
 // groups.

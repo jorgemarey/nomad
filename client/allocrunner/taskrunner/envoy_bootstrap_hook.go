@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package taskrunner
 
@@ -235,8 +235,6 @@ func (h *envoyBootstrapHook) lookupService(svcKind, svcName string, taskEnv *tas
 // Must be aware of both launching envoy as a sidecar proxy, as well as a connect gateway.
 func (h *envoyBootstrapHook) Prestart(ctx context.Context, req *ifs.TaskPrestartRequest, resp *ifs.TaskPrestartResponse) error {
 	if !req.Task.Kind.IsConnectProxy() && !req.Task.Kind.IsAnyConnectGateway() {
-		// Not a Connect proxy sidecar
-		resp.Done = true
 		return nil
 	}
 
@@ -358,8 +356,8 @@ func (h *envoyBootstrapHook) Prestart(ctx context.Context, req *ifs.TaskPrestart
 
 		// Command succeeded, exit.
 		if cmdErr == nil {
-			// Bootstrap written. Mark as done and move on.
-			resp.Done = true
+			// Bootstrap written. Move on without marking as Done as Prestart needs
+			// to rerun after node reboots.
 			return false, nil
 		}
 
@@ -379,7 +377,7 @@ func (h *envoyBootstrapHook) Prestart(ctx context.Context, req *ifs.TaskPrestart
 		// Wrap the last error from Consul and set that as our status.
 		_, recoverable := cmdErr.(*exec.ExitError)
 		return structs.NewRecoverableError(
-			fmt.Errorf("%w: %v; see: <https://www.nomadproject.io/s/envoy-bootstrap-error>",
+			fmt.Errorf("%w: %v; see: <https://developer.hashicorp.com/nomad/s/envoy-bootstrap-error>",
 				errEnvoyBootstrapError,
 				cmdErr,
 			),

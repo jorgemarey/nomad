@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package structs
 
@@ -9,19 +9,19 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 
 	"github.com/hashicorp/go-bexpr"
 	"github.com/hashicorp/go-multierror"
-	"github.com/hashicorp/go-set"
+	"github.com/hashicorp/go-set/v2"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/lib/lang"
 	"golang.org/x/crypto/blake2b"
-	"golang.org/x/exp/slices"
 	"oss.indeed.com/go/libtime"
 )
 
@@ -213,6 +213,8 @@ const (
 	// ACLAuthMethodTypeJWT the ACLAuthMethod.Type and represents an auth-method
 	// which uses the JWT type.
 	ACLAuthMethodTypeJWT = "JWT"
+
+	DefaultACLAuthMethodTokenNameFormat = "${auth_method_type}-${auth_method_name}"
 )
 
 var (
@@ -777,11 +779,20 @@ func (a *ACLAuthMethod) SetHash() []byte {
 	_, _ = hash.Write([]byte(strconv.FormatBool(a.Default)))
 
 	if a.Config != nil {
+		_, _ = hash.Write([]byte(a.Config.JWKSURL))
+		_, _ = hash.Write([]byte(a.Config.JWKSCACert))
 		_, _ = hash.Write([]byte(a.Config.OIDCDiscoveryURL))
 		_, _ = hash.Write([]byte(a.Config.OIDCClientID))
 		_, _ = hash.Write([]byte(a.Config.OIDCClientSecret))
+		_, _ = hash.Write([]byte(strconv.FormatBool(a.Config.OIDCDisableUserInfo)))
+		_, _ = hash.Write([]byte(a.Config.ExpirationLeeway.String()))
+		_, _ = hash.Write([]byte(a.Config.NotBeforeLeeway.String()))
+		_, _ = hash.Write([]byte(a.Config.ClockSkewLeeway.String()))
 		for _, ba := range a.Config.BoundAudiences {
 			_, _ = hash.Write([]byte(ba))
+		}
+		for _, bi := range a.Config.BoundIssuer {
+			_, _ = hash.Write([]byte(bi))
 		}
 		for _, uri := range a.Config.AllowedRedirectURIs {
 			_, _ = hash.Write([]byte(uri))
@@ -789,8 +800,14 @@ func (a *ACLAuthMethod) SetHash() []byte {
 		for _, pem := range a.Config.DiscoveryCaPem {
 			_, _ = hash.Write([]byte(pem))
 		}
+		for _, scope := range a.Config.OIDCScopes {
+			_, _ = hash.Write([]byte(scope))
+		}
 		for _, sa := range a.Config.SigningAlgs {
 			_, _ = hash.Write([]byte(sa))
+		}
+		for _, key := range a.Config.JWTValidationPubKeys {
+			_, _ = hash.Write([]byte(key))
 		}
 		for k, v := range a.Config.ClaimMappings {
 			_, _ = hash.Write([]byte(k))
@@ -904,7 +921,7 @@ func (a *ACLAuthMethod) Canonicalize() {
 	a.ModifyTime = t
 
 	if a.TokenNameFormat == "" {
-		a.TokenNameFormat = "${auth_method_type}-${auth_method_name}"
+		a.TokenNameFormat = DefaultACLAuthMethodTokenNameFormat
 	}
 }
 
@@ -973,6 +990,9 @@ type ACLAuthMethodConfig struct {
 
 	// The OAuth Client Secret configured with the OIDC provider
 	OIDCClientSecret string
+
+	// Disable claims from the OIDC UserInfo endpoint
+	OIDCDisableUserInfo bool
 
 	// List of OIDC scopes
 	OIDCScopes []string

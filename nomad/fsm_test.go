@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package nomad
 
@@ -2426,9 +2426,7 @@ func TestFSM_SnapshotRestore_Nodes(t *testing.T) {
 	fsm2 := testSnapshotRestore(t, fsm)
 	state2 := fsm2.State()
 	out, _ := state2.NodeByID(nil, node.ID)
-	if !reflect.DeepEqual(node, out) {
-		t.Fatalf("bad: \n%#v\n%#v", out, node)
-	}
+	must.Eq(t, node, out)
 }
 
 func TestFSM_SnapshotRestore_NodePools(t *testing.T) {
@@ -2936,6 +2934,60 @@ func TestFSM_SnapshotRestore_ACLBindingRules(t *testing.T) {
 	must.SliceContainsAll(t, restoredACLBindingRules, mockedACLBindingRoles)
 }
 
+func TestFSM_SnapshotRestore_JobSubmissions(t *testing.T) {
+	ci.Parallel(t)
+
+	// Create our initial FSM which will be snapshotted.
+	fsm := testFSM(t)
+	testState := fsm.State()
+
+	// Create a non-default namespace, so we can later create jobs and
+	// submissions within it.
+	mockNamespace := mock.Namespace()
+	mockNamespace.Name = "platform"
+
+	must.NoError(t, testState.UpsertNamespaces(10, []*structs.Namespace{mockNamespace}))
+
+	// Generate a some mocked jobs and submissions to insert directly into
+	// state.
+	mockJob1 := mock.Job()
+	mockJobSubmission1 := &structs.JobSubmission{
+		Source:         "job{}",
+		Namespace:      mockJob1.Namespace,
+		JobID:          mockJob1.ID,
+		Version:        mockJob1.Version,
+		JobModifyIndex: mockJob1.JobModifyIndex,
+	}
+
+	must.NoError(t, testState.UpsertJob(structs.MsgTypeTestSetup, mockJob1.ModifyIndex, mockJobSubmission1, mockJob1))
+
+	mockJob2 := mock.Job()
+	mockJob2.Namespace = mockNamespace.Name
+	mockJobSubmission2 := &structs.JobSubmission{
+		Source:         "job{}",
+		Namespace:      mockJob2.Namespace,
+		JobID:          mockJob2.ID,
+		Version:        mockJob2.Version,
+		JobModifyIndex: mockJob2.JobModifyIndex,
+	}
+
+	must.NoError(t, testState.UpsertJob(structs.MsgTypeTestSetup, mockJob2.ModifyIndex, mockJobSubmission2, mockJob2))
+
+	// Perform a snapshot restore.
+	restoredFSM := testSnapshotRestore(t, fsm)
+	restoredState := restoredFSM.State()
+
+	jobSubmission1Resp, err := restoredState.JobSubmission(
+		nil, mockJobSubmission1.Namespace, mockJobSubmission1.JobID, mockJobSubmission1.Version)
+	must.NoError(t, err)
+	must.Eq(t, mockJobSubmission1, jobSubmission1Resp)
+
+	jobSubmission2Resp, err := restoredState.JobSubmission(
+		nil, mockJobSubmission2.Namespace, mockJobSubmission2.JobID, mockJobSubmission2.Version)
+	must.NoError(t, err)
+	must.Eq(t, mockJobSubmission2, jobSubmission2Resp)
+}
+
 func TestFSM_ReconcileSummaries(t *testing.T) {
 	ci.Parallel(t)
 	// Add some state
@@ -3305,6 +3357,29 @@ func TestFSM_DeleteNamespaces(t *testing.T) {
 	out, err = fsm.State().NamespaceByName(ws, ns2.Name)
 	assert.Nil(err)
 	assert.Nil(out)
+}
+
+func TestFSM_DeleteNamespaces_ErrorSurfacing(t *testing.T) {
+	ci.Parallel(t)
+	fsm := testFSM(t)
+
+	ns1 := mock.Namespace()
+	// force a failure by making this the default
+	ns1.Name = "default"
+	must.NoError(t, fsm.State().UpsertNamespaces(1000, []*structs.Namespace{ns1}))
+
+	req := structs.NamespaceDeleteRequest{
+		Namespaces: []string{ns1.Name},
+	}
+
+	buf, err := structs.Encode(structs.NamespaceDeleteRequestType, req)
+	must.NoError(t, err)
+	resp := fsm.Apply(makeLog(buf))
+	must.NotNil(t, resp)
+
+	err, ok := resp.(error)
+	must.True(t, ok, must.Sprintf("resp not of error type: %T %v", resp, resp))
+	must.ErrorContains(t, err, "default namespace can not be deleted")
 }
 
 func TestFSM_SnapshotRestore_Namespaces(t *testing.T) {

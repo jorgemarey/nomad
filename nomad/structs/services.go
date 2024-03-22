@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package structs
 
@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"maps"
 	"net/url"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,13 +22,11 @@ import (
 
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/go-multierror"
-	"github.com/hashicorp/go-set"
+	"github.com/hashicorp/go-set/v2"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/args"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/mitchellh/copystructure"
-	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 )
 
 const (
@@ -78,6 +78,7 @@ type ServiceCheck struct {
 	TaskName               string              // What task to execute this check in
 	SuccessBeforePassing   int                 // Number of consecutive successes required before considered healthy
 	FailuresBeforeCritical int                 // Number of consecutive failures required before considered unhealthy
+	FailuresBeforeWarning  int                 // Number of consecutive failures required before showing warning
 	Body                   string              // Body to use in HTTP check
 	OnUpdate               string
 }
@@ -135,6 +136,10 @@ func (sc *ServiceCheck) Equal(o *ServiceCheck) bool {
 		return false
 	}
 
+	if sc.FailuresBeforeWarning != o.FailuresBeforeWarning {
+		return false
+	}
+
 	if sc.Command != o.Command {
 		return false
 	}
@@ -168,7 +173,7 @@ func (sc *ServiceCheck) Equal(o *ServiceCheck) bool {
 		return false
 	}
 
-	if sc.PortLabel != o.Path {
+	if sc.PortLabel != o.PortLabel {
 		return false
 	}
 
@@ -383,6 +388,11 @@ func (sc *ServiceCheck) validateNomad() error {
 		return errors.New("failures_before_critical may only be set for Consul service checks")
 	}
 
+	// failures_before_warning is consul only
+	if sc.FailuresBeforeWarning != 0 {
+		return errors.New("failures_before_warning may only be set for Consul service checks")
+	}
+
 	// tls_server_name is consul only
 	if sc.TLSServerName != "" {
 		return errors.New("tls_server_name may only be set for Consul service checks")
@@ -436,6 +446,12 @@ func (sc *ServiceCheck) validateConsul() error {
 		return fmt.Errorf("failures_before_critical must be non-negative")
 	} else if sc.FailuresBeforeCritical > 0 && !slices.Contains(passFailCheckTypes, sc.Type) {
 		return fmt.Errorf("failures_before_critical not supported for check of type %q", sc.Type)
+	}
+
+	if sc.FailuresBeforeWarning < 0 {
+		return fmt.Errorf("failures_before_warning must be non-negative")
+	} else if sc.FailuresBeforeWarning > 0 && !slices.Contains(passFailCheckTypes, sc.Type) {
+		return fmt.Errorf("failures_before_warning not supported for check of type %q", sc.Type)
 	}
 
 	return nil
@@ -498,6 +514,7 @@ func (sc *ServiceCheck) Hash(serviceID string) string {
 	// Only include pass/fail if non-zero to maintain ID stability with Nomad < 0.12
 	hashIntIfNonZero(h, "success", sc.SuccessBeforePassing)
 	hashIntIfNonZero(h, "failures", sc.FailuresBeforeCritical)
+	hashIntIfNonZero(h, "failures-before-warning", sc.FailuresBeforeWarning)
 
 	// Hash is used for diffing against the Consul check definition, which does
 	// not have an expose parameter. Instead we rely on implied changes to
@@ -616,6 +633,14 @@ type Service struct {
 	// either ServiceProviderConsul or ServiceProviderNomad and defaults to the former when
 	// left empty by the operator.
 	Provider string
+
+	// Consul Cluster (by name) to send API requests to
+	Cluster string
+
+	// Identity is a field populated automatically by the job mutating hook.
+	// Its name will be `consul-service/${service_name}`, and its contents will
+	// match the server's `consul.service_identity` configuration block.
+	Identity *WorkloadIdentity
 }
 
 // Copy the block recursively. Returns nil if nil.
@@ -641,6 +666,8 @@ func (s *Service) Copy() *Service {
 	ns.Meta = maps.Clone(s.Meta)
 	ns.CanaryMeta = maps.Clone(s.CanaryMeta)
 	ns.TaggedAddresses = maps.Clone(s.TaggedAddresses)
+
+	ns.Identity = s.Identity.Copy()
 
 	return ns
 }
@@ -702,6 +729,20 @@ func (s *Service) Canonicalize(job, taskGroup, task, jobNamespace string) {
 	}
 }
 
+// Warnings returns a list of warnings that may be from dubious settings or
+// deprecation warnings.
+func (s *Service) Warnings() error {
+	var mErr *multierror.Error
+
+	if s.Identity != nil {
+		if err := s.Identity.Warnings(); err != nil {
+			mErr = multierror.Append(mErr, err)
+		}
+	}
+
+	return mErr.ErrorOrNil()
+}
+
 // Validate checks if the Service definition is valid
 func (s *Service) Validate() error {
 	var mErr multierror.Error
@@ -746,7 +787,37 @@ func (s *Service) Validate() error {
 			ServiceProviderConsul, ServiceProviderNomad, s.Provider))
 	}
 
+	if err := s.validateIdentity(); err != nil {
+		mErr.Errors = append(mErr.Errors, err)
+	}
+
 	return mErr.ErrorOrNil()
+}
+
+// MakeUniqueIdentityName returns a service identity name consisting of: task
+// name, service name and service port label.
+func (s *Service) MakeUniqueIdentityName() string {
+	prefix := ConsulServiceIdentityNamePrefix
+	if s.Provider == ServiceProviderNomad {
+		prefix = "nomad-service"
+	}
+	if s.TaskName != "" {
+		return fmt.Sprintf("%s_%v-%v-%v", prefix, s.TaskName, s.Name, s.PortLabel)
+	}
+	return fmt.Sprintf("%s_%v-%v", prefix, s.Name, s.PortLabel)
+}
+
+// IdentityHandle returns a WorkloadIdentityHandle which is a pair of service
+// identity name and service name.
+func (s *Service) IdentityHandle() *WIHandle {
+	if s.Identity != nil {
+		return &WIHandle{
+			IdentityName:       s.Identity.Name,
+			WorkloadIdentifier: s.Name,
+			WorkloadType:       WorkloadTypeService,
+		}
+	}
+	return nil
 }
 
 func (s *Service) validateCheckPort(c *ServiceCheck) error {
@@ -818,6 +889,20 @@ func (s *Service) validateNomadService(mErr *multierror.Error) {
 	}
 }
 
+// validateIdentity performs validation on workload identity field populated by
+// the job mutating hook
+func (s *Service) validateIdentity() error {
+	if s.Identity == nil {
+		return nil
+	}
+
+	if len(s.Identity.Audience) == 0 {
+		return fmt.Errorf("Service identity must provide at least one target aud value")
+	}
+
+	return nil
+}
+
 // ValidateName checks if the service Name is valid and should be called after
 // the name has been interpolated
 func (s *Service) ValidateName(name string) error {
@@ -857,6 +942,7 @@ func (s *Service) Hash(allocID, taskName string, canary bool) string {
 	hashConnect(h, s.Connect)
 	hashString(h, s.OnUpdate)
 	hashString(h, s.Namespace)
+	hashIdentity(h, s.Identity)
 
 	// Don't hash the provider parameter, so we don't cause churn of all
 	// registered services when upgrading Nomad versions. The provider is not
@@ -894,6 +980,22 @@ func hashConnect(h hash.Hash, connect *ConsulConnect) {
 	}
 }
 
+func hashIdentity(h hash.Hash, identity *WorkloadIdentity) {
+	if identity != nil {
+		hashString(h, identity.Name)
+		hashAud(h, identity.Audience)
+		hashBool(h, identity.Env, "Env")
+		hashBool(h, identity.File, "File")
+		hashString(h, identity.ServiceName)
+	}
+}
+
+func hashAud(h hash.Hash, aud []string) {
+	for _, a := range aud {
+		hashString(h, a)
+	}
+}
+
 func hashString(h hash.Hash, s string) {
 	_, _ = io.WriteString(h, s)
 }
@@ -925,6 +1027,10 @@ func (s *Service) Equal(o *Service) bool {
 	}
 
 	if s.Provider != o.Provider {
+		return false
+	}
+
+	if s.Cluster != o.Cluster {
 		return false
 	}
 
@@ -988,7 +1094,15 @@ func (s *Service) Equal(o *Service) bool {
 		return false
 	}
 
+	if !s.Identity.Equal(o.Identity) {
+		return false
+	}
+
 	return true
+}
+
+func (s *Service) IsConsul() bool {
+	return s.Provider == ServiceProviderConsul || s.Provider == ""
 }
 
 // ConsulConnect represents a Consul Connect jobspec block.

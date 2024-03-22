@@ -1,6 +1,6 @@
 {{!
   Copyright (c) HashiCorp, Inc.
-  SPDX-License-Identifier: MPL-2.0
+  SPDX-License-Identifier: BUSL-1.1
 ~}}
 
 <td data-test-job-name
@@ -53,13 +53,6 @@
     {{this.job.priority}}
   </td>
 {{/if}}
-<td data-test-job-task-groups>
-  {{#if this.job.taskGroupCount}}
-    {{this.job.taskGroupCount}}
-  {{else}}
-    --
-  {{/if}}
-</td>
 <td data-test-job-allocations>
   <div class="inline-chart">
     {{#if this.job.hasChildren}}

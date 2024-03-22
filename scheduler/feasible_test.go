@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package scheduler
 
@@ -1313,6 +1313,26 @@ func TestCheckSemverConstraint(t *testing.T) {
 		{
 			name: "Prereleases are handled according to semver 2",
 			lVal: "1.7.0-alpha1", rVal: ">= 1.6.0-beta1",
+			result: true,
+		},
+		{
+			name: "Prereleases of same version handled according to semver",
+			lVal: "1.7.0-beta", rVal: ">= 1.7.0",
+			result: false,
+		},
+		{
+			name: "Prereleases constraints allow GA version according to semver",
+			lVal: "1.7.0", rVal: ">= 1.7.0-dev",
+			result: true,
+		},
+		{
+			name: "Prereleases constraints allow beta according to semver",
+			lVal: "1.7.0-beta.1", rVal: ">= 1.7.0-a",
+			result: true,
+		},
+		{
+			name: "Prereleases constraints allow RC version according to semver",
+			lVal: "1.7.0-rc.1", rVal: ">= 1.7.0-dev",
 			result: true,
 		},
 		{

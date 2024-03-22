@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { findAll, render } from '@ember/test-helpers';
@@ -148,7 +148,7 @@ module('Integration | Component | TopoViz::Node', function (hooks) {
 
     await render(commonTemplate);
 
-    assert.ok(TopoVizNode.statusIcon.includes('icon-is-clock-outline'));
+    assert.ok(TopoVizNode.statusIcon.includes('clock'));
     assert.equal(TopoVizNode.statusIconLabel, 'Client is draining');
   });
 
@@ -165,7 +165,7 @@ module('Integration | Component | TopoViz::Node', function (hooks) {
 
     await render(commonTemplate);
 
-    assert.ok(TopoVizNode.statusIcon.includes('icon-is-lock-closed'));
+    assert.ok(TopoVizNode.statusIcon.includes('lock'));
     assert.equal(TopoVizNode.statusIconLabel, 'Client is ineligible');
   });
 

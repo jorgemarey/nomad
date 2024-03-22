@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package state
 
@@ -67,6 +67,14 @@ func (m *ErrDB) PutAllocVolumes(allocID string, state *arstate.AllocVolumes, opt
 }
 
 func (m *ErrDB) GetAllocVolumes(allocID string) (*arstate.AllocVolumes, error) {
+	return nil, fmt.Errorf("Error!")
+}
+
+func (m *ErrDB) PutAllocIdentities(_ string, _ []*structs.SignedWorkloadIdentity, _ ...WriteOption) error {
+	return fmt.Errorf("Error!")
+}
+
+func (m *ErrDB) GetAllocIdentities(_ string) ([]*structs.SignedWorkloadIdentity, error) {
 	return nil, fmt.Errorf("Error!")
 }
 

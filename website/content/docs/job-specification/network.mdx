@@ -84,9 +84,11 @@ All other operating systems use the `host` networking mode.
   [mode](#mode) is set to [`bridge`](#bridge). This parameter supports
   [interpolation](/nomad/docs/runtime/interpolation).
 
-- `dns` <code>([DNSConfig](#dns-parameters): nil)</code> - Sets the DNS configuration
-  for the allocations. By default all DNS configuration is inherited from the client host.
-  DNS configuration is only supported on Linux clients at this time.
+- `dns` <code>([DNSConfig](#dns-parameters): nil)</code> - Sets the DNS
+  configuration for the allocations. By default all task drivers will inherit
+  DNS configuration from the client host. DNS configuration is only supported on
+  Linux clients at this time. Note that if you are using a `mode="cni/*`, these
+  values will override any DNS configuration the CNI plugins return.
 
 ### `port` Parameters
 
@@ -232,7 +234,7 @@ $ sudo firewall-cmd --zone=trusted --add-interface=nomad
 $ sudo firewall-cmd --zone=trusted --add-interface=nomad --permanent
 ```
 
-It is neccessary to restart the affected jobs afterwards for them to be able to access
+It is necessary to restart the affected jobs afterwards for them to be able to access
 the network. Further details can be found in Docker's documentation under [Docker and iptables](https://docs.docker.com/network/iptables/#integration-with-firewalld).
 
 ### DNS

@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package nomad
 
@@ -189,7 +189,7 @@ func (v *CSIVolume) Get(args *structs.CSIVolumeGetRequest, reply *structs.CSIVol
 	allowCSIAccess := acl.NamespaceValidator(acl.NamespaceCapabilityCSIReadVolume,
 		acl.NamespaceCapabilityCSIMountVolume,
 		acl.NamespaceCapabilityReadJob)
-	aclObj, err := v.srv.ResolveClientOrACL(args)
+	aclObj, err := v.srv.ResolveACL(args)
 	if err != nil {
 		return err
 	}
@@ -452,14 +452,13 @@ func (v *CSIVolume) Claim(args *structs.CSIVolumeClaimRequest, reply *structs.CS
 		return structs.ErrPermissionDenied
 	}
 
+	defer metrics.MeasureSince([]string{"nomad", "volume", "claim"}, time.Now())
+
 	allowVolume := acl.NamespaceValidator(acl.NamespaceCapabilityCSIMountVolume)
-	aclObj, err := v.srv.ResolveClientOrACL(args)
+	aclObj, err := v.srv.ResolveACL(args)
 	if err != nil {
 		return err
 	}
-
-	defer metrics.MeasureSince([]string{"nomad", "volume", "claim"}, time.Now())
-
 	if !allowVolume(aclObj, args.RequestNamespace()) || !aclObj.AllowPluginRead() {
 		return structs.ErrPermissionDenied
 	}
@@ -694,7 +693,7 @@ func (v *CSIVolume) Unpublish(args *structs.CSIVolumeUnpublishRequest, reply *st
 	defer metrics.MeasureSince([]string{"nomad", "volume", "unpublish"}, time.Now())
 
 	allowVolume := acl.NamespaceValidator(acl.NamespaceCapabilityCSIMountVolume)
-	aclObj, err := v.srv.ResolveClientOrACL(args)
+	aclObj, err := v.srv.ResolveACL(args)
 	if err != nil {
 		return err
 	}
@@ -993,7 +992,7 @@ func (v *CSIVolume) lookupExternalNodeID(vol *structs.CSIVolume, claim *structs.
 		return "", fmt.Errorf("%s: %s", structs.ErrUnknownNodePrefix, claim.NodeID)
 	}
 
-	// get the the storage provider's ID for the client node (not
+	// get the storage provider's ID for the client node (not
 	// Nomad's ID for the node)
 	targetCSIInfo, ok := targetNode.CSINodePlugins[vol.PluginID]
 	if !ok || targetCSIInfo.NodeInfo == nil {
@@ -1860,7 +1859,7 @@ func (v *CSIPlugin) Delete(args *structs.CSIPluginDeleteRequest, reply *structs.
 	// Check that it is a management token.
 	if aclObj, err := v.srv.ResolveACL(args); err != nil {
 		return err
-	} else if aclObj != nil && !aclObj.IsManagement() {
+	} else if !aclObj.IsManagement() {
 		return structs.ErrPermissionDenied
 	}
 

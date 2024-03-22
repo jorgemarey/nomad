@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package nomad
 
@@ -55,20 +55,6 @@ func init() {
 		}
 		return n
 	}
-}
-
-// NewTestWorker returns the worker without calling it's run method.
-func NewTestWorker(shutdownCtx context.Context, srv *Server) *Worker {
-	w := &Worker{
-		srv:               srv,
-		start:             time.Now(),
-		id:                uuid.Generate(),
-		enabledSchedulers: srv.config.EnabledSchedulers,
-	}
-	w.logger = srv.logger.ResetNamed("worker").With("worker_id", w.id)
-	w.pauseCond = sync.NewCond(&w.pauseLock)
-	w.ctx, w.cancelFn = context.WithCancel(shutdownCtx)
-	return w
 }
 
 func TestWorker_dequeueEvaluation(t *testing.T) {
@@ -364,7 +350,8 @@ func TestWorker_runBackoff(t *testing.T) {
 	workerCtx, workerCancel := context.WithCancel(srv.shutdownCtx)
 	defer workerCancel()
 
-	w := NewTestWorker(workerCtx, srv)
+	poolArgs := getSchedulerWorkerPoolArgsFromConfigLocked(srv.config).Copy()
+	w := newWorker(workerCtx, srv, poolArgs)
 	doneCh := make(chan struct{})
 
 	go func() {

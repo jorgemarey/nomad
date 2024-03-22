@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package nomad
 
@@ -439,7 +439,7 @@ func TestPlanApply_signAllocIdentities(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 
-			err := signAllocIdentities(tc.signer, job, allocs)
+			err := signAllocIdentities(tc.signer, job, allocs, time.Now())
 
 			if tc.expectErr != nil {
 				must.Error(t, err)
@@ -516,8 +516,10 @@ func TestPlanApply_EvalPlan_Preemption(t *testing.T) {
 	state := testStateStore(t)
 	node := mock.Node()
 	node.NodeResources = &structs.NodeResources{
-		Cpu: structs.NodeCpuResources{
-			CpuShares: 2000,
+		Cpu: structs.LegacyNodeCpuResources{
+			CpuShares:          2000,
+			TotalCpuCores:      2,
+			ReservableCpuCores: []uint16{0, 1},
 		},
 		Memory: structs.NodeMemoryResources{
 			MemoryMB: 4192,
@@ -533,6 +535,8 @@ func TestPlanApply_EvalPlan_Preemption(t *testing.T) {
 			},
 		},
 	}
+	node.NodeResources.Compatibility()
+
 	state.UpsertNode(structs.MsgTypeTestSetup, 1000, node)
 
 	preemptedAlloc := mock.Alloc()

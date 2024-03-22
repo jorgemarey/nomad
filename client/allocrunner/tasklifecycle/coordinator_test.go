@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package tasklifecycle
 
@@ -374,7 +374,7 @@ func TestCoordinator_PoststartStartsAfterMain(t *testing.T) {
 	// Only use the tasks that we care about.
 	tasks = []*structs.Task{mainTask, sideTask, postTask}
 
-	// Make the the third task is a poststart hook
+	// Make the third task is a poststart hook
 	postTask.Lifecycle.Hook = structs.TaskLifecycleHookPoststart
 
 	shutdownCh := make(chan struct{})

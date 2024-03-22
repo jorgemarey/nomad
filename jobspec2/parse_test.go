@@ -1104,3 +1104,31 @@ func TestRestartRenderTemplates(t *testing.T) {
 	require.Nil(t, tg.Tasks[0].RestartPolicy)
 	require.False(t, *tg.Tasks[1].RestartPolicy.RenderTemplates)
 }
+
+// TestIdentity asserts that the default identity will be moved from the
+// Identities slice to the pre-1.7 Identity field in case >=1.7 CLIs are used
+// with <1.7 APIs.
+func TestIdentity(t *testing.T) {
+	ci.Parallel(t)
+	hclBytes, err := os.ReadFile("test-fixtures/identity-compat.nomad.hcl")
+	must.NoError(t, err)
+	job, err := ParseWithConfig(&ParseConfig{
+		Path:    "test-fixtures/identity-compat.nomad.hcl",
+		Body:    hclBytes,
+		AllowFS: false,
+	})
+	must.NoError(t, err)
+	must.NotNil(t, job.TaskGroups[0].Tasks[0].Identity)
+	must.True(t, job.TaskGroups[0].Tasks[0].Identity.Env)
+	must.True(t, job.TaskGroups[0].Tasks[0].Identity.File)
+
+	must.Len(t, 1, job.TaskGroups[0].Tasks[0].Identities)
+	altID := job.TaskGroups[0].Tasks[0].Identities[0]
+	must.Eq(t, "foo", altID.Name)
+	must.Eq(t, []string{"bar"}, altID.Audience)
+	must.True(t, altID.File)
+	must.False(t, altID.Env)
+	must.Eq(t, "signal", altID.ChangeMode)
+	must.Eq(t, "sighup", altID.ChangeSignal)
+	must.Eq(t, 2*time.Hour, altID.TTL)
+}

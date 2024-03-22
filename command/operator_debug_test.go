@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package command
 
@@ -898,7 +898,7 @@ func testServerWithoutLeader(t *testing.T, runClient bool, cb func(*agent.Config
 	})
 	t.Cleanup(func() { a.Shutdown() })
 
-	c := a.Client()
+	c := a.APIClient()
 	return a, c, a.HTTPAddr()
 }
 

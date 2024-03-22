@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package consul
 
@@ -823,4 +823,139 @@ func TestSyncLogic_parseTaggedAddresses(t *testing.T) {
 			"public_wan": {Address: "1.2.3.4", Port: 9999},
 		}, result)
 	})
+}
+
+// TestServiceClient_ConsulTokens exercises the lifecycle of Consul tokens
+// associated with each service and the service client for each cluster.
+func TestServiceClient_ConsulTokens(t *testing.T) {
+	ci.Parallel(t)
+
+	mockAgent := NewMockAgent(ossFeatures)
+	nsClientA := NewNamespacesClient(NewMockNamespaces(nil), mockAgent)
+	nsClientB := NewNamespacesClient(NewMockNamespaces(nil), mockAgent)
+	logger := testlog.HCLogger(t)
+
+	scA := NewServiceClient(mockAgent, nsClientA, logger, true)
+	scB := NewServiceClient(mockAgent, nsClientB, logger, true)
+	scA.shutdownWait = time.Millisecond
+	scB.shutdownWait = time.Millisecond
+
+	scw := NewServiceClientWrapper()
+	scw.AddClient("A", scA)
+	scw.AddClient("B", scB)
+
+	allocID := uuid.Generate()
+	serviceTokenA, serviceTokenB := "uuid-service-token-a", "uuid-service-token-b"
+
+	ws := &serviceregistration.WorkloadServices{
+		AllocInfo: structs.AllocInfo{
+			AllocID: allocID,
+			Task:    "taskname",
+		},
+		Services: []*structs.Service{
+			{Name: "serviceA", Cluster: "A", PortLabel: "a"},
+			{Name: "serviceB", Cluster: "B", PortLabel: "b"},
+		},
+		Networks: []*structs.NetworkResource{
+			{DynamicPorts: []structs.Port{{Label: "a", Value: xPort}}},
+			{DynamicPorts: []structs.Port{{Label: "b", Value: xPort}}},
+		},
+		Tokens: map[string]string{
+			"serviceA": serviceTokenA,
+			"serviceB": serviceTokenB},
+	}
+
+	must.NoError(t, scw.RegisterWorkload(ws))
+
+	idA := serviceregistration.MakeAllocServiceID(allocID, ws.Name(), ws.Services[0])
+	idB := serviceregistration.MakeAllocServiceID(allocID, ws.Name(), ws.Services[1])
+
+	must.Eq(t, serviceTokenA, scA.getServiceToken(idA))
+	must.Eq(t, "", scA.getServiceToken(idB))
+
+	allocReg, err := scw.AllocRegistrations(allocID)
+	must.NoError(t, err)
+	must.Eq(t, 2, allocReg.NumServices())
+
+	scw.RemoveWorkload(ws)
+
+	// test hack: removing the workload doesn't actually remove the token until
+	// the service is confirmed deregistered, which we can't do without the
+	// running sync.
+	scA.explicitlyDeregisteredServices.Insert(idA)
+	scB.explicitlyDeregisteredServices.Insert(idB)
+	must.Eq(t, serviceTokenA, scA.getServiceToken(idA))
+	must.Eq(t, "", scA.getServiceToken(idB))
+
+	scA.clearExplicitlyDeregistered()
+	scB.clearExplicitlyDeregistered()
+	must.Eq(t, "", scA.getServiceToken(idA))
+	must.Eq(t, "", scB.getServiceToken(idB))
+
+	allocReg, err = scw.AllocRegistrations(allocID)
+	must.NoError(t, err)
+	must.Eq(t, 0, allocReg.NumServices())
+}
+
+// TestServiceClient_MultiClusterUpdates updates a workload in the service
+// client wrapper to ensure we're sending the updates to the right service
+// client for each cluster.
+func TestServiceClient_MultiClusterUpdates(t *testing.T) {
+	ci.Parallel(t)
+
+	mockAgent := NewMockAgent(ossFeatures)
+	nsClientA := NewNamespacesClient(NewMockNamespaces(nil), mockAgent)
+	nsClientB := NewNamespacesClient(NewMockNamespaces(nil), mockAgent)
+	logger := testlog.HCLogger(t)
+
+	scA := NewServiceClient(mockAgent, nsClientA, logger, true)
+	scB := NewServiceClient(mockAgent, nsClientB, logger, true)
+	scA.shutdownWait = time.Millisecond
+	scB.shutdownWait = time.Millisecond
+
+	scw := NewServiceClientWrapper()
+	scw.AddClient("A", scA)
+	scw.AddClient("B", scB)
+
+	allocID := uuid.Generate()
+	serviceTokenA, serviceTokenB := "uuid-service-token-a", "uuid-service-token-b"
+
+	ws := &serviceregistration.WorkloadServices{
+		AllocInfo: structs.AllocInfo{
+			AllocID: allocID,
+			Task:    "taskname",
+		},
+		Services: []*structs.Service{
+			{Name: "serviceA", Cluster: "A", PortLabel: "a"},
+			{Name: "serviceB", Cluster: "B", PortLabel: "b"},
+		},
+		Networks: []*structs.NetworkResource{
+			{DynamicPorts: []structs.Port{{Label: "a", Value: xPort}}},
+			{DynamicPorts: []structs.Port{{Label: "b", Value: xPort}}},
+		},
+		Tokens: map[string]string{
+			"serviceA": serviceTokenA,
+			"serviceB": serviceTokenB},
+	}
+
+	must.NoError(t, scw.RegisterWorkload(ws))
+	allocReg, err := scw.AllocRegistrations(allocID)
+	must.NoError(t, err)
+	must.Eq(t, 2, allocReg.NumServices())
+
+	newWs := ws.Copy()
+	newWs.Services = append(newWs.Services,
+		&structs.Service{Name: "serviceB2", Cluster: "B", PortLabel: "b2"})
+	newWs.Networks = append(newWs.Networks,
+		&structs.NetworkResource{DynamicPorts: []structs.Port{{Label: "b2", Value: yPort}}})
+	newWs.Tokens["serviceB2"] = "uuid-service-token-b2"
+
+	scw.UpdateWorkload(ws, newWs)
+
+	allocReg, err = scw.AllocRegistrations(allocID)
+	must.NoError(t, err)
+	must.Eq(t, 3, allocReg.NumServices())
+
+	idB2 := serviceregistration.MakeAllocServiceID(allocID, ws.Name(), newWs.Services[2])
+	must.Eq(t, "uuid-service-token-b2", scB.getServiceToken(idB2))
 }

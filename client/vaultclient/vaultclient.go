@@ -1,10 +1,12 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package vaultclient
 
 import (
 	"container/heap"
+	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -13,16 +15,37 @@ import (
 
 	metrics "github.com/armon/go-metrics"
 	hclog "github.com/hashicorp/go-hclog"
+
 	"github.com/hashicorp/nomad/helper/useragent"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
 	vaultapi "github.com/hashicorp/vault/api"
 )
 
+// VaultClientFunc is the interface of a function that retreives the VaultClient
+// by cluster name. This function is injected into the allocrunner/taskrunner
+type VaultClientFunc func(string) (VaultClient, error)
+
 // TokenDeriverFunc takes in an allocation and a set of tasks and derives a
 // wrapped token for all the tasks, from the nomad server. All the derived
 // wrapped tokens will be unwrapped using the vault API client.
 type TokenDeriverFunc func(*structs.Allocation, []string, *vaultapi.Client) (map[string]string, error)
+
+// JWTLoginRequest is used to derive a Vault ACL token using a JWT login
+// request.
+type JWTLoginRequest struct {
+	// JWT is the signed JWT to be used for the login request.
+	JWT string
+
+	// Role is Vault ACL role to use for the login request. If empty, the
+	// Nomad client's create_from_role value is used, or the Vault cluster
+	// default role.
+	Role string
+
+	// Namespace is the Vault namespace to use for the login request. If empty,
+	// the Nomad client's Vault configuration namespace will be used.
+	Namespace string
+}
 
 // VaultClient is the interface which nomad client uses to interact with vault and
 // periodically renews the tokens and secrets.
@@ -37,6 +60,10 @@ type VaultClient interface {
 	// a set of tasks. The wrapped tokens will be unwrapped using vault and
 	// returned.
 	DeriveToken(*structs.Allocation, []string) (map[string]string, error)
+
+	// DeriveTokenWithJWT returns a Vault ACL token using the JWT login
+	// endpoint, along with whether or not the token is renewable.
+	DeriveTokenWithJWT(context.Context, JWTLoginRequest) (string, bool, error)
 
 	// GetConsulACL fetches the Consul ACL token required for the task
 	GetConsulACL(string, string) (*vaultapi.Secret, error)
@@ -124,7 +151,7 @@ func NewVaultClient(config *config.VaultConfig, logger hclog.Logger, tokenDerive
 		return nil, fmt.Errorf("nil vault config")
 	}
 
-	logger = logger.Named("vault")
+	logger = logger.Named("vault").With("name", config.Name)
 
 	c := &vaultClient{
 		config: config,
@@ -222,10 +249,14 @@ func (c *vaultClient) Stop() {
 	close(c.stopCh)
 }
 
-// unlockAndUnset is used to unset the vault token on the client and release the
-// lock. Helper method for deferring a call that does both.
-func (c *vaultClient) unlockAndUnset() {
+// unlockAndUnset is used to unset the vault token on the client, restore the
+// client's namespace, and release the lock. Helper method for deferring a call
+// that does both.
+func (c *vaultClient) unlockAndUnset(previousNs string) {
 	c.client.SetToken("")
+	if previousNs != "" {
+		c.client.SetNamespace(previousNs)
+	}
 	c.lock.Unlock()
 }
 
@@ -242,7 +273,7 @@ func (c *vaultClient) DeriveToken(alloc *structs.Allocation, taskNames []string)
 	}
 
 	c.lock.Lock()
-	defer c.unlockAndUnset()
+	defer c.unlockAndUnset(c.client.Namespace())
 
 	// Use the token supplied to interact with vault
 	c.client.SetToken("")
@@ -254,6 +285,49 @@ func (c *vaultClient) DeriveToken(alloc *structs.Allocation, taskNames []string)
 	}
 
 	return tokens, nil
+}
+
+// DeriveTokenWithJWT returns a Vault ACL token using the JWT login endpoint.
+func (c *vaultClient) DeriveTokenWithJWT(ctx context.Context, req JWTLoginRequest) (string, bool, error) {
+	if !c.config.IsEnabled() {
+		return "", false, fmt.Errorf("vault client not enabled")
+	}
+	if !c.isRunning() {
+		return "", false, fmt.Errorf("vault client is not running")
+	}
+
+	c.lock.Lock()
+	defer c.unlockAndUnset(c.client.Namespace())
+
+	// Make sure the login request is not passing any token and that we're using
+	// the expected namespace to login
+	c.client.SetToken("")
+	if req.Namespace != "" {
+		c.client.SetNamespace(req.Namespace)
+	}
+
+	jwtLoginPath := fmt.Sprintf("auth/%s/login", c.config.JWTAuthBackendPath)
+	s, err := c.client.Logical().WriteWithContext(ctx, jwtLoginPath,
+		map[string]any{
+			"role": req.Role,
+			"jwt":  req.JWT,
+		},
+	)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to login with JWT: %v", err)
+	}
+	if s == nil {
+		return "", false, errors.New("JWT login returned an empty secret")
+	}
+	if s.Auth == nil {
+		return "", false, errors.New("JWT login did not return a token")
+	}
+
+	for _, w := range s.Warnings {
+		c.logger.Warn("JWT login warning", "warning", w)
+	}
+
+	return s.Auth.ClientToken, s.Auth.Renewable, nil
 }
 
 // GetConsulACL creates a vault API client and reads from vault a consul ACL
@@ -270,7 +344,7 @@ func (c *vaultClient) GetConsulACL(token, path string) (*vaultapi.Secret, error)
 	}
 
 	c.lock.Lock()
-	defer c.unlockAndUnset()
+	defer c.unlockAndUnset(c.client.Namespace())
 
 	// Use the token supplied to interact with vault
 	c.client.SetToken(token)

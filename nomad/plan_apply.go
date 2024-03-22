@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package nomad
 
@@ -239,7 +239,8 @@ func (p *planner) snapshotMinIndex(prevPlanResultIndex, planSnapshotIndex uint64
 
 // applyPlan is used to apply the plan result and to return the alloc index
 func (p *planner) applyPlan(plan *structs.Plan, result *structs.PlanResult, snap *state.StateSnapshot) (raft.ApplyFuture, error) {
-	now := time.Now().UTC().UnixNano()
+	now := time.Now().UTC()
+	unixNow := now.UnixNano()
 
 	// Setup the update request
 	req := structs.ApplyPlanResultsRequest{
@@ -250,7 +251,7 @@ func (p *planner) applyPlan(plan *structs.Plan, result *structs.PlanResult, snap
 		DeploymentUpdates: result.DeploymentUpdates,
 		IneligibleNodes:   result.IneligibleNodes,
 		EvalID:            plan.EvalID,
-		UpdatedAt:         now,
+		UpdatedAt:         unixNow,
 	}
 
 	preemptedJobIDs := make(map[structs.NamespacedID]struct{})
@@ -265,7 +266,7 @@ func (p *planner) applyPlan(plan *structs.Plan, result *structs.PlanResult, snap
 
 		for _, updateList := range result.NodeUpdate {
 			for _, stoppedAlloc := range updateList {
-				req.AllocsStopped = append(req.AllocsStopped, normalizeStoppedAlloc(stoppedAlloc, now))
+				req.AllocsStopped = append(req.AllocsStopped, normalizeStoppedAlloc(stoppedAlloc, unixNow))
 			}
 		}
 
@@ -275,16 +276,16 @@ func (p *planner) applyPlan(plan *structs.Plan, result *structs.PlanResult, snap
 
 		// Set the time the alloc was applied for the first time. This can be used
 		// to approximate the scheduling time.
-		updateAllocTimestamps(req.AllocsUpdated, now)
+		updateAllocTimestamps(req.AllocsUpdated, unixNow)
 
-		err := signAllocIdentities(p.srv.encrypter, plan.Job, req.AllocsUpdated)
+		err := signAllocIdentities(p.srv.encrypter, plan.Job, req.AllocsUpdated, now)
 		if err != nil {
 			return nil, err
 		}
 
 		for _, preemptions := range result.NodePreemptions {
 			for _, preemptedAlloc := range preemptions {
-				req.AllocsPreempted = append(req.AllocsPreempted, normalizePreemptedAlloc(preemptedAlloc, now))
+				req.AllocsPreempted = append(req.AllocsPreempted, normalizePreemptedAlloc(preemptedAlloc, unixNow))
 
 				// Gather jobids to create follow up evals
 				appendNamespacedJobID(preemptedJobIDs, preemptedAlloc)
@@ -316,12 +317,12 @@ func (p *planner) applyPlan(plan *structs.Plan, result *structs.PlanResult, snap
 
 		// Set the time the alloc was applied for the first time. This can be used
 		// to approximate the scheduling time.
-		updateAllocTimestamps(req.Alloc, now)
+		updateAllocTimestamps(req.Alloc, unixNow)
 
 		// Set modify time for preempted allocs if any
 		// Also gather jobids to create follow up evals
 		for _, alloc := range req.NodePreemptions {
-			alloc.ModifyTime = now
+			alloc.ModifyTime = unixNow
 			appendNamespacedJobID(preemptedJobIDs, alloc)
 		}
 	}
@@ -338,8 +339,8 @@ func (p *planner) applyPlan(plan *structs.Plan, result *structs.PlanResult, snap
 				Type:        job.Type,
 				Priority:    job.Priority,
 				Status:      structs.EvalStatusPending,
-				CreateTime:  now,
-				ModifyTime:  now,
+				CreateTime:  unixNow,
+				ModifyTime:  unixNow,
 			}
 			evals = append(evals, eval)
 		}
@@ -407,7 +408,7 @@ func updateAllocTimestamps(allocations []*structs.Allocation, timestamp int64) {
 	}
 }
 
-func signAllocIdentities(signer claimSigner, job *structs.Job, allocations []*structs.Allocation) error {
+func signAllocIdentities(signer claimSigner, job *structs.Job, allocations []*structs.Allocation, now time.Time) error {
 	for _, alloc := range allocations {
 		if alloc.SignedIdentities == nil {
 			alloc.SignedIdentities = map[string]string{}
@@ -418,7 +419,8 @@ func signAllocIdentities(signer claimSigner, job *structs.Job, allocations []*st
 			if _, ok := alloc.SignedIdentities[task.Name]; ok {
 				continue
 			}
-			claims := alloc.ToTaskIdentityClaims(job, task.Name)
+			defaultWI := &structs.WorkloadIdentity{Name: "default"}
+			claims := structs.NewIdentityClaims(job, alloc, task.IdentityHandle(defaultWI), task.Identity, now)
 			token, keyID, err := signer.SignClaims(claims)
 			if err != nil {
 				return err
@@ -552,7 +554,7 @@ func evaluatePlanPlacements(pool *EvaluatePool, snap *state.StateSnapshot, plan 
 				//is resolved this log line is the only way to
 				//monitor the disagreement between workers and
 				//the plan applier.
-				logger.Info("plan for node rejected, refer to https://www.nomadproject.io/s/port-plan-failure for more information",
+				logger.Info("plan for node rejected, refer to https://developer.hashicorp.com/nomad/s/port-plan-failure for more information",
 					"node_id", nodeID, "reason", reason, "eval_id", plan.EvalID,
 					"namespace", plan.Job.Namespace)
 			}
@@ -735,6 +737,11 @@ func evaluateNodePlan(snap *state.StateSnapshot, plan *structs.Plan, nodeID stri
 			return true, "", nil
 		}
 		return false, "node is disconnected and contains invalid updates", nil
+	} else if node.Status == structs.NodeStatusDown {
+		if isValidForDownNode(plan, node.ID) {
+			return true, "", nil
+		}
+		return false, "node is down and contains invalid updates", nil
 	} else if node.Status != structs.NodeStatusReady {
 		return false, "node is not ready for placements", nil
 	}
@@ -782,6 +789,20 @@ func evaluateNodePlan(snap *state.StateSnapshot, plan *structs.Plan, nodeID stri
 func isValidForDisconnectedNode(plan *structs.Plan, nodeID string) bool {
 	for _, alloc := range plan.NodeAllocation[nodeID] {
 		if alloc.ClientStatus != structs.AllocClientStatusUnknown {
+			return false
+		}
+	}
+
+	return true
+}
+
+// The plan is only valid for a node down if it only contains
+// updates to mark allocations as unknown and those allocations are configured
+// as non reschedulables when lost or if the allocs are being updated to lost.
+func isValidForDownNode(plan *structs.Plan, nodeID string) bool {
+	for _, alloc := range plan.NodeAllocation[nodeID] {
+		if !(alloc.ClientStatus == structs.AllocClientStatusUnknown && alloc.PreventRescheduleOnLost()) &&
+			(alloc.ClientStatus != structs.AllocClientStatusLost) {
 			return false
 		}
 	}

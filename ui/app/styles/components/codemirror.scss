@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 $dark-bright: lighten($dark, 15%);
@@ -11,6 +11,12 @@ $dark-bright: lighten($dark, 15%);
 
 .CodeMirror-scroll {
   min-height: 500px;
+}
+
+.namespace-editor {
+  .CodeMirror-scroll {
+    min-height: 204px;
+  }
 }
 
 .cm-s-hashi,

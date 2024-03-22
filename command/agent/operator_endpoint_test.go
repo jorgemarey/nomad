@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package agent
 
@@ -20,6 +20,8 @@ import (
 
 	"github.com/hashicorp/nomad/api"
 	"github.com/hashicorp/nomad/ci"
+	"github.com/hashicorp/nomad/helper/pointer"
+	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/shoenig/test/must"
@@ -89,6 +91,144 @@ func TestHTTP_OperatorRaftPeer(t *testing.T) {
 			t.Fatalf("err: %v", err)
 		}
 	})
+}
+
+func TestHTTP_OperatorRaftTransferLeadership(t *testing.T) {
+	ci.Parallel(t)
+	configCB := func(c *Config) {
+		c.Client.Enabled = false
+		c.Server.NumSchedulers = pointer.Of(0)
+	}
+
+	httpTest(t, configCB, func(s *TestAgent) {
+		body := bytes.NewBuffer(nil)
+		badMethods := []string{
+			http.MethodConnect,
+			http.MethodDelete,
+			http.MethodGet,
+			http.MethodHead,
+			http.MethodOptions,
+			http.MethodPatch,
+			http.MethodTrace,
+		}
+		for _, tc := range badMethods {
+			tc := tc
+			t.Run(tc+" method errors", func(t *testing.T) {
+				req, err := http.NewRequest(tc, "/v1/operator/raft/transfer-leadership?address=nope", body)
+				must.NoError(t, err)
+
+				resp := httptest.NewRecorder()
+				_, err = s.Server.OperatorRaftTransferLeadership(resp, req)
+
+				must.Error(t, err)
+				must.ErrorContains(t, err, "Invalid method")
+				body.Reset()
+			})
+		}
+
+		apiErrTCs := []struct {
+			name     string
+			qs       string
+			expected string
+		}{
+			{
+				name:     "URL with id and address errors",
+				qs:       `?id=foo&address=bar`,
+				expected: "must specify either id or address",
+			},
+			{
+				name:     "URL without id and address errors",
+				qs:       ``,
+				expected: "must specify id or address",
+			},
+			{
+				name:     "URL with multiple id errors",
+				qs:       `?id=foo&id=bar`,
+				expected: "must specify only one id",
+			},
+			{
+				name:     "URL with multiple address errors",
+				qs:       `?address=foo&address=bar`,
+				expected: "must specify only one address",
+			},
+			{
+				name:     "URL with an empty id errors",
+				qs:       `?id`,
+				expected: "id must be non-empty",
+			},
+			{
+				name:     "URL with an empty address errors",
+				qs:       `?address`,
+				expected: "address must be non-empty",
+			},
+			{
+				name:     "an invalid id errors",
+				qs:       `?id=foo`,
+				expected: "id must be a uuid",
+			},
+			{
+				name:     "URL with an empty address errors",
+				qs:       `?address=bar`,
+				expected: "address must be in IP:port format",
+			},
+		}
+		for _, tc := range apiErrTCs {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				req, err := http.NewRequest(
+					http.MethodPut,
+					"/v1/operator/raft/transfer-leadership"+tc.qs,
+					body,
+				)
+				must.NoError(t, err)
+
+				resp := httptest.NewRecorder()
+				_, err = s.Server.OperatorRaftTransferLeadership(resp, req)
+
+				must.Error(t, err)
+				must.ErrorContains(t, err, tc.expected)
+				body.Reset()
+			})
+		}
+	})
+
+	testID := uuid.Generate()
+	apiOkTCs := []struct {
+		name     string
+		qs       string
+		expected string
+	}{
+		{
+			"id",
+			"?id=" + testID,
+			`id "` + testID + `" was not found in the Raft configuration`,
+		},
+		{
+			"address",
+			"?address=9.9.9.9:8000",
+			`address "9.9.9.9:8000" was not found in the Raft configuration`,
+		},
+	}
+	for _, tc := range apiOkTCs {
+		tc := tc
+		t.Run(tc.name+" can roundtrip", func(t *testing.T) {
+			httpTest(t, configCB, func(s *TestAgent) {
+				body := bytes.NewBuffer(nil)
+				req, err := http.NewRequest(
+					http.MethodPut,
+					"/v1/operator/raft/transfer-leadership"+tc.qs,
+					body,
+				)
+				must.NoError(t, err)
+
+				// If we get this error, it proves we sent the parameter all the
+				// way through.
+				resp := httptest.NewRecorder()
+				_, err = s.Server.OperatorRaftTransferLeadership(resp, req)
+				must.ErrorContains(t, err, tc.expected)
+			})
+		})
+	}
 }
 
 func TestOperator_AutopilotGetConfiguration(t *testing.T) {
@@ -519,5 +659,44 @@ func TestOperator_SnapshotRequests(t *testing.T) {
 		require.Equal(t, 200, resp.Code)
 
 		require.True(t, jobExists())
+	})
+}
+
+func TestOperator_UpgradeCheckRequest_VaultWorkloadIdentity(t *testing.T) {
+	ci.Parallel(t)
+	httpTest(t, func(c *Config) {
+		c.Vaults[0].Enabled = pointer.Of(true)
+		c.Vaults[0].Name = "default"
+	}, func(s *TestAgent) {
+		// Create a test job with a Vault block but without an identity.
+		job := mock.Job()
+		job.TaskGroups[0].Tasks[0].Vault = &structs.Vault{
+			Cluster:  "default",
+			Policies: []string{"test"},
+		}
+
+		args := structs.JobRegisterRequest{
+			Job:          job,
+			WriteRequest: structs.WriteRequest{Region: "global"},
+		}
+		var resp structs.JobRegisterResponse
+		err := s.Agent.RPC("Job.Register", &args, &resp)
+		must.NoError(t, err)
+
+		// Make HTTP request to retrieve
+		req, err := http.NewRequest(http.MethodGet, "/v1/operator/upgrade-check/vault-workload-identity", nil)
+		must.NoError(t, err)
+		respW := httptest.NewRecorder()
+
+		obj, err := s.Server.UpgradeCheckRequest(respW, req)
+		must.NoError(t, err)
+		must.NotEq(t, "", respW.Header().Get("X-Nomad-Index"))
+		must.NotEq(t, "", respW.Header().Get("X-Nomad-LastContact"))
+		must.Eq(t, "true", respW.Header().Get("X-Nomad-KnownLeader"))
+
+		upgradeCheck := obj.(structs.UpgradeCheckVaultWorkloadIdentityResponse)
+		must.Len(t, 1, upgradeCheck.JobsWithoutVaultIdentity)
+		must.Len(t, 0, upgradeCheck.VaultTokens)
+		must.Eq(t, job.ID, upgradeCheck.JobsWithoutVaultIdentity[0].ID)
 	})
 }

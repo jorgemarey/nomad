@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package state
 
@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -16,13 +17,12 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
 	"github.com/hashicorp/go-multierror"
-	"github.com/hashicorp/go-set"
+	"github.com/hashicorp/go-set/v2"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/lib/lang"
 	"github.com/hashicorp/nomad/nomad/stream"
 	"github.com/hashicorp/nomad/nomad/structs"
-	"golang.org/x/exp/slices"
 )
 
 // Txn is a transaction against a state store.
@@ -61,7 +61,7 @@ const (
 	// the same node may indicate an underlying issue not detected by Nomad.
 	// The plan applier keeps track of plan rejection history and will mark
 	// nodes as ineligible if they cross a given threshold.
-	NodeEligibilityEventPlanRejectThreshold = "Node marked as ineligible for scheduling due to multiple plan rejections, refer to https://www.nomadproject.io/s/port-plan-failure for more information"
+	NodeEligibilityEventPlanRejectThreshold = "Node marked as ineligible for scheduling due to multiple plan rejections, refer to https://developer.hashicorp.com/nomad/s/port-plan-failure for more information"
 
 	// NodeRegisterEventRegistered is the message used when the node becomes
 	// registered.
@@ -406,7 +406,7 @@ func (s *StateStore) UpsertPlanResults(msgType structs.MessageType, index uint64
 
 	// Mark nodes as ineligible.
 	for _, nodeID := range results.IneligibleNodes {
-		s.logger.Warn("marking node as ineligible due to multiple plan rejections, refer to https://www.nomadproject.io/s/port-plan-failure for more information", "node_id", nodeID)
+		s.logger.Warn("marking node as ineligible due to multiple plan rejections, refer to https://developer.hashicorp.com/nomad/s/port-plan-failure for more information", "node_id", nodeID)
 
 		nodeEvent := structs.NewNodeEvent().
 			SetSubsystem(structs.NodeEventSubsystemScheduler).
@@ -466,6 +466,7 @@ func (s *StateStore) UpsertPlanResults(msgType structs.MessageType, index uint64
 
 	// handle upgrade path
 	for _, alloc := range allocsToUpsert {
+		alloc = alloc.Copy()
 		alloc.Canonicalize()
 	}
 
@@ -806,6 +807,18 @@ func (s *StateStore) DeleteDeployment(index uint64, deploymentIDs []string) erro
 	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
+	err := s.DeleteDeploymentTxn(index, deploymentIDs, txn)
+	if err == nil {
+		return txn.Commit()
+	}
+
+	return err
+}
+
+// DeleteDeploymentTxn is used to delete a set of deployments by ID, like
+// DeleteDeployment but in a transaction. Useful when making multiple
+// modifications atomically.
+func (s *StateStore) DeleteDeploymentTxn(index uint64, deploymentIDs []string, txn Txn) error {
 	if len(deploymentIDs) == 0 {
 		return nil
 	}
@@ -817,7 +830,7 @@ func (s *StateStore) DeleteDeployment(index uint64, deploymentIDs []string) erro
 			return fmt.Errorf("deployment lookup failed: %v", err)
 		}
 		if existing == nil {
-			return fmt.Errorf("deployment not found")
+			continue
 		}
 
 		// Delete the deployment
@@ -830,7 +843,50 @@ func (s *StateStore) DeleteDeployment(index uint64, deploymentIDs []string) erro
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
-	return txn.Commit()
+	return nil
+}
+
+// DeleteAlloc is used to delete a set of allocations by ID
+func (s *StateStore) DeleteAlloc(index uint64, allocIDs []string) error {
+	txn := s.db.WriteTxn(index)
+	defer txn.Abort()
+
+	err := s.DeleteAllocTxn(index, allocIDs, txn)
+	if err == nil {
+		return txn.Commit()
+	}
+
+	return err
+}
+
+// DeleteAllocTxn is used to delete a set of allocs by ID, like DeleteALloc but
+// in a transaction. Useful when making multiple modifications atomically.
+func (s *StateStore) DeleteAllocTxn(index uint64, allocIDs []string, txn Txn) error {
+	if len(allocIDs) == 0 {
+		return nil
+	}
+
+	for _, allocID := range allocIDs {
+		// Lookup the alloc
+		existing, err := txn.First("allocs", "id", allocID)
+		if err != nil {
+			return fmt.Errorf("alloc lookup failed: %v", err)
+		}
+		if existing == nil {
+			continue
+		}
+
+		// Delete the alloc
+		if err := txn.Delete("allocs", existing); err != nil {
+			return fmt.Errorf("alloc delete failed: %v", err)
+		}
+	}
+
+	if err := txn.Insert("index", &IndexEntry{"allocs", index}); err != nil {
+		return fmt.Errorf("index update failed: %v", err)
+	}
+
+	return nil
 }
 
 // UpsertScalingEvent is used to insert a new scaling event.
@@ -1894,6 +1950,68 @@ func (s *StateStore) DeleteJobTxn(index uint64, namespace, jobID string, txn Txn
 		return err
 	}
 
+	// Delete job deployments
+	deployments, err := s.DeploymentsByJobID(nil, namespace, job.ID, true)
+	if err != nil {
+		return fmt.Errorf("deployment lookup for job %s failed: %v", job.ID, err)
+	}
+
+	deploymentIDs := []string{}
+	for _, d := range deployments {
+		deploymentIDs = append(deploymentIDs, d.ID)
+	}
+
+	if err := s.DeleteDeploymentTxn(index, deploymentIDs, txn); err != nil {
+		return err
+	}
+
+	// Mark all "pending" evals for this job as "complete"
+	evals, err := s.EvalsByJob(nil, namespace, job.ID)
+	if err != nil {
+		return fmt.Errorf("eval lookup for job %s failed: %v", job.ID, err)
+	}
+
+	for _, eval := range evals {
+		existing, err := txn.First("evals", "id", eval.ID)
+		if err != nil {
+			return fmt.Errorf("eval lookup failed: %v", err)
+		}
+		if existing == nil {
+			continue
+		}
+
+		if existing.(*structs.Evaluation).Status != structs.EvalStatusPending {
+			continue
+		}
+
+		eval := existing.(*structs.Evaluation).Copy()
+		eval.Status = structs.EvalStatusComplete
+		eval.StatusDescription = fmt.Sprintf("job %s deleted", job.ID)
+
+		// Insert the eval
+		if err := txn.Insert("evals", eval); err != nil {
+			return fmt.Errorf("eval insert failed: %v", err)
+		}
+		if err := txn.Insert("index", &IndexEntry{"evals", index}); err != nil {
+			return fmt.Errorf("index update failed: %v", err)
+		}
+	}
+
+	// Delete job allocs
+	allocs, err := s.AllocsByJob(nil, namespace, job.ID, true)
+	if err != nil {
+		return fmt.Errorf("alloc lookup for job %s failed: %v", job.ID, err)
+	}
+
+	allocIDs := []string{}
+	for _, a := range allocs {
+		allocIDs = append(allocIDs, a.ID)
+	}
+
+	if err := s.DeleteAllocTxn(index, allocIDs, txn); err != nil {
+		return err
+	}
+
 	// Cleanup plugins registered by this job, before we delete the summary
 	err = s.deleteJobFromPlugins(index, txn, job)
 	if err != nil {
@@ -2091,6 +2209,22 @@ func (s *StateStore) upsertJobVersion(index uint64, job *structs.Job, txn *txn) 
 	}
 
 	return nil
+}
+
+// GetJobSubmissions returns an iterator that contains all job submissions
+// stored within state. This is not currently exposed via RPC and is only used
+// for snapshot persist and restore functionality.
+func (s *StateStore) GetJobSubmissions(ws memdb.WatchSet) (memdb.ResultIterator, error) {
+	txn := s.db.ReadTxn()
+
+	// Walk the entire table to get all job submissions.
+	iter, err := txn.Get(TableJobSubmission, indexID)
+	if err != nil {
+		return nil, fmt.Errorf("job submissions lookup failed: %v", err)
+	}
+	ws.Add(iter.WatchCh())
+
+	return iter, nil
 }
 
 // JobSubmission returns the original HCL/Variables context of a job, if available.
@@ -3772,7 +3906,7 @@ func (s *StateStore) UpdateAllocsFromClient(msgType structs.MessageType, index u
 	}
 
 	// Update the index of when nodes last updated their allocs.
-	for _, nodeID := range nodeIDs.List() {
+	for _, nodeID := range nodeIDs.Slice() {
 		if err := s.updateClientAllocUpdateIndex(txn, index, nodeID); err != nil {
 			return fmt.Errorf("node update failed: %v", err)
 		}

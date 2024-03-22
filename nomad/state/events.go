@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package state
 
@@ -123,6 +123,19 @@ func eventFromChange(change memdb.Change) (structs.Event, bool) {
 				FilterKeys: []string{before.AuthMethod},
 				Payload: &structs.ACLBindingRuleEvent{
 					ACLBindingRule: before,
+				},
+			}, true
+		case "jobs":
+			before, ok := change.Before.(*structs.Job)
+			if !ok {
+				return structs.Event{}, false
+			}
+			return structs.Event{
+				Topic:     structs.TopicJob,
+				Key:       before.ID,
+				Namespace: before.Namespace,
+				Payload: &structs.JobEvent{
+					Job: before,
 				},
 			}, true
 		case "nodes":

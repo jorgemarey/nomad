@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Watchable from './watchable';
@@ -16,5 +16,13 @@ export default class NamespaceAdapter extends Watchable {
         return { Name: id };
       }
     });
+  }
+
+  urlForCreateRecord(_modelName, model) {
+    return this.urlForUpdateRecord(model.attr('name'), 'namespace');
+  }
+
+  urlForDeleteRecord(id) {
+    return this.urlForUpdateRecord(id, 'namespace');
   }
 }

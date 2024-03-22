@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package command
 
@@ -38,6 +38,17 @@ func TestCACreateCommand(t *testing.T) {
 				require.Equal(t, 1825*24*time.Hour, time.Until(cert.NotAfter).Round(24*time.Hour))
 				require.False(t, cert.PermittedDNSDomainsCritical)
 				require.Len(t, cert.PermittedDNSDomains, 0)
+			},
+		},
+		{"ca custom domain",
+			[]string{
+				"-name-constraint=true",
+				"-domain=foo.com",
+			},
+			"foo.com-agent-ca.pem",
+			"foo.com-agent-ca-key.pem",
+			func(t *testing.T, cert *x509.Certificate) {
+				require.ElementsMatch(t, cert.PermittedDNSDomains, []string{"nomad", "foo.com", "localhost"})
 			},
 		},
 		{"ca options",

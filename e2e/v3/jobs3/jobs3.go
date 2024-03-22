@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package jobs3
 
@@ -10,16 +10,18 @@ import (
 	"math/rand"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/hashicorp/go-set"
+	"github.com/hashicorp/go-set/v2"
 	nomadapi "github.com/hashicorp/nomad/api"
 	"github.com/hashicorp/nomad/e2e/v3/util3"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/jobspec2"
 	"github.com/shoenig/test"
 	"github.com/shoenig/test/must"
+	"github.com/shoenig/test/wait"
 )
 
 type Submission struct {
@@ -34,6 +36,10 @@ type Submission struct {
 	noCleanup     bool
 	timeout       time.Duration
 	verbose       bool
+	detach        bool
+
+	// jobspec mutator funcs
+	mutators []func(string) string
 
 	vars         *set.Set[string] // key=value
 	waitComplete *set.Set[string] // groups to wait until complete
@@ -94,12 +100,26 @@ func (sub *Submission) getTaskLogs(allocID, task string) Logs {
 
 	fsAPI := sub.nomadClient.AllocFS()
 	read := func(path string) string {
-		rc, err := fsAPI.ReadAt(alloc, path, 0, 0, queryOpts)
-		must.NoError(sub.t, err, must.Sprintf("failed to read alloc logs for %s", allocID))
-		b, err := io.ReadAll(rc)
-		must.NoError(sub.t, err, must.Sprintf("failed to read alloc logs for %s", allocID))
-		must.NoError(sub.t, rc.Close(), must.Sprint("failed to close log stream"))
-		return string(b)
+		var content string
+		f := func() error {
+			rc, err := fsAPI.ReadAt(alloc, path, 0, 0, queryOpts)
+			if err != nil {
+				return fmt.Errorf("failed to read alloc %s logs: %w", allocID, err)
+			}
+			b, err := io.ReadAll(rc)
+			if err != nil {
+				return fmt.Errorf("failed to read alloc %s logs: %w", allocID, err)
+			}
+			content = string(b)
+			return rc.Close()
+		}
+		must.Wait(sub.t, wait.InitialSuccess(
+			wait.ErrorFunc(f),
+			wait.Timeout(15*time.Second),
+			wait.Gap(1*time.Second),
+		))
+
+		return content
 	}
 
 	stdout := fmt.Sprintf("alloc/logs/%s.stdout.0", task)
@@ -114,6 +134,25 @@ func (sub *Submission) getTaskLogs(allocID, task string) Logs {
 // JobID provides the (possibly) randomized jobID associated with this Submission.
 func (sub *Submission) JobID() string {
 	return sub.jobID
+}
+
+// AllocID returns the ID of an alloc of the given task group. If there is more than
+// one allocation for the task group, an ID is chosen at random. If there is no
+// allocation of the given task group the test assertion fails.
+func (sub *Submission) AllocID(group string) string {
+	queryOpts := sub.queryOptions()
+	jobsAPI := sub.nomadClient.Jobs()
+	stubs, _, err := jobsAPI.Allocations(sub.jobID, false, queryOpts)
+	must.NoError(sub.t, err)
+
+	for _, stub := range stubs {
+		if stub.TaskGroup == group {
+			return stub.ID
+		}
+	}
+
+	must.Unreachable(sub.t, must.Sprintf("no alloc id found for group %q", group))
+	panic("bug")
 }
 
 func (sub *Submission) logf(msg string, args ...any) {
@@ -148,6 +187,7 @@ type Option func(*Submission)
 type Cleanup func()
 
 func Submit(t *testing.T, filename string, opts ...Option) (*Submission, Cleanup) {
+	t.Helper()
 	sub := initialize(t, filename)
 
 	for _, opt := range opts {
@@ -166,6 +206,7 @@ func Namespace(name string) Option {
 		sub.inNamespace = name
 	}
 }
+
 func AuthToken(token string) Option {
 	return func(sub *Submission) {
 		sub.authToken = token
@@ -176,10 +217,23 @@ var (
 	idRe = regexp.MustCompile(`(?m)^job "(.*)" \{`)
 )
 
+func (sub *Submission) Rerun(opts ...Option) {
+	sub.noRandomJobID = true
+	for _, opt := range opts {
+		opt(sub)
+	}
+	sub.run()
+	sub.waits()
+}
+
 func (sub *Submission) run() {
 	if !sub.noRandomJobID {
 		sub.jobID = fmt.Sprintf("%s-%03d", sub.origJobID, rand.Int()%1000)
 		sub.jobSpec = idRe.ReplaceAllString(sub.jobSpec, fmt.Sprintf("job %q {", sub.jobID))
+	}
+
+	for _, mut := range sub.mutators {
+		sub.jobSpec = mut(sub.jobSpec)
 	}
 
 	parseConfig := &jobspec2.ParseConfig{
@@ -246,9 +300,10 @@ EVAL:
 			deploymentID = eval.DeploymentID
 			break EVAL
 		case nomadapi.EvalStatusFailed:
-			must.Unreachable(sub.t, must.Sprint("eval failed"))
+			must.Unreachable(sub.t, must.Sprintf("eval failed: %s, triggered by: %s, failed allocs: %d",
+				eval.StatusDescription, eval.TriggeredBy, len(eval.FailedTGAllocs)))
 		case nomadapi.EvalStatusCancelled:
-			must.Unreachable(sub.t, must.Sprint("eval cancelled"))
+			must.Unreachable(sub.t, must.Sprintf("eval canceled: %s", eval.StatusDescription))
 		default:
 			time.Sleep(1 * time.Second)
 		}
@@ -258,6 +313,10 @@ EVAL:
 			evalID = nextEvalID
 			continue
 		}
+	}
+
+	if sub.detach {
+		return
 	}
 
 	switch *job.Type {
@@ -399,6 +458,24 @@ func DisableCleanup() Option {
 	return func(sub *Submission) {
 		sub.noCleanup = true
 	}
+}
+
+func Detach() Option {
+	return func(c *Submission) {
+		c.detach = true
+	}
+}
+
+func MutateJobSpec(mut func(string) string) Option {
+	return func(c *Submission) {
+		c.mutators = append(c.mutators, mut)
+	}
+}
+
+func ReplaceInJobSpec(old, new string) Option {
+	return MutateJobSpec(func(j string) string {
+		return strings.ReplaceAll(j, old, new)
+	})
 }
 
 func Timeout(timeout time.Duration) Option {

@@ -1,19 +1,19 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package structs
 
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
 	multierror "github.com/hashicorp/go-multierror"
 
 	"github.com/hashicorp/nomad/helper"
-	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 )
 
 // CSISocketName is the filename that Nomad expects plugins to create inside the
@@ -967,7 +967,7 @@ type CSIVolumeListResponse struct {
 }
 
 // CSIVolumeExternalListRequest is a request to a controller plugin to list
-// all the volumes known to the the storage provider. This request is
+// all the volumes known to the storage provider. This request is
 // paginated by the plugin and accepts the QueryOptions.PerPage and
 // QueryOptions.NextToken fields
 type CSIVolumeExternalListRequest struct {
@@ -1055,7 +1055,7 @@ type CSISnapshotDeleteResponse struct {
 }
 
 // CSISnapshotListRequest is a request to a controller plugin to list all the
-// snapshot known to the the storage provider. This request is paginated by
+// snapshot known to the storage provider. This request is paginated by
 // the plugin and accepts the QueryOptions.PerPage and QueryOptions.NextToken
 // fields
 type CSISnapshotListRequest struct {

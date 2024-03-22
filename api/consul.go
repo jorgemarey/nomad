@@ -13,23 +13,37 @@ import (
 type Consul struct {
 	// (Enterprise-only) Namespace represents a Consul namespace.
 	Namespace string `mapstructure:"namespace" hcl:"namespace,optional"`
+
+	// (Enterprise-only) Cluster represents a specific Consul cluster.
+	Cluster string `mapstructure:"cluster" hcl:"cluster,optional"`
+
+	// Partition is the Consul admin partition where the workload should
+	// run. This is available in Nomad CE but only works with Consul ENT
+	Partition string `mapstructure:"partition" hcl:"partition,optional"`
 }
 
 // Canonicalize Consul into a canonical form. The Canonicalize structs containing
 // a Consul should ensure it is not nil.
 func (c *Consul) Canonicalize() {
-	// Nothing to do here.
-	//
+	if c.Cluster == "" {
+		c.Cluster = "default"
+	}
+
 	// If Namespace is nil, that is a choice of the job submitter that
 	// we should inherit from higher up (i.e. job<-group). Likewise, if
 	// Namespace is set but empty, that is a choice to use the default consul
 	// namespace.
+
+	// Partition should never be defaulted to "default" because non-ENT Consul
+	// clusters don't have admin partitions
 }
 
 // Copy creates a deep copy of c.
 func (c *Consul) Copy() *Consul {
 	return &Consul{
 		Namespace: c.Namespace,
+		Cluster:   c.Cluster,
+		Partition: c.Partition,
 	}
 }
 
@@ -193,7 +207,6 @@ type ConsulMeshGateway struct {
 func (c *ConsulMeshGateway) Canonicalize() {
 	// Mode may be empty string, indicating behavior will defer to Consul
 	// service-defaults config entry.
-	return
 }
 
 func (c *ConsulMeshGateway) Copy() *ConsulMeshGateway {
@@ -624,9 +637,7 @@ type ConsulMeshConfigEntry struct {
 	// nothing in here
 }
 
-func (e *ConsulMeshConfigEntry) Canonicalize() {
-	return
-}
+func (e *ConsulMeshConfigEntry) Canonicalize() {}
 
 func (e *ConsulMeshConfigEntry) Copy() *ConsulMeshConfigEntry {
 	if e == nil {

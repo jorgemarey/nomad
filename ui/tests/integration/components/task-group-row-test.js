@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { module, test } from 'qunit';
@@ -25,6 +25,9 @@ let clientToken;
 const makeJob = (server, props = {}) => {
   // These tests require a job with particular task groups. This requires
   // mild Mirage surgery.
+  server.create('namespace', {
+    id: 'default',
+  });
   const job = server.create('job', {
     id: jobName,
     groupCount: 0,

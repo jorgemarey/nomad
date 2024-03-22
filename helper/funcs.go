@@ -1,25 +1,25 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package helper
 
 import (
 	"crypto/sha512"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	multierror "github.com/hashicorp/go-multierror"
-	"github.com/hashicorp/go-set"
+	"github.com/hashicorp/go-set/v2"
 	"github.com/hashicorp/hcl/hcl/ast"
-	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 )
 
 // validUUID is used to check if a given string looks like a UUID
@@ -85,9 +85,9 @@ func HashUUID(input string) (output string, hashed bool) {
 func UniqueMapSliceValues[K, V comparable](m map[K][]V) []V {
 	s := set.New[V](0)
 	for _, slice := range m {
-		s.InsertAll(slice)
+		s.InsertSlice(slice)
 	}
-	return s.List()
+	return s.Slice()
 }
 
 // IsSubset returns whether the smaller set of items is a subset of
@@ -95,11 +95,11 @@ func UniqueMapSliceValues[K, V comparable](m map[K][]V) []V {
 // returned.
 func IsSubset[T comparable](larger, smaller []T) (bool, []T) {
 	l := set.From(larger)
-	if l.ContainsAll(smaller) {
+	if l.ContainsSlice(smaller) {
 		return true, nil
 	}
 	s := set.From(smaller)
-	return false, s.Difference(l).List()
+	return false, s.Difference(l).Slice()
 }
 
 // StringHasPrefixInSlice returns true if s starts with any prefix in list.
@@ -118,7 +118,7 @@ func IsDisjoint[T comparable](first, second []T) (bool, []T) {
 	f, s := set.From(first), set.From(second)
 	intersection := f.Intersect(s)
 	if intersection.Size() > 0 {
-		return false, intersection.List()
+		return false, intersection.Slice()
 	}
 	return true, nil
 }
@@ -187,6 +187,17 @@ func CopyMapOfSlice[K comparable, V any](m map[K][]V) map[K][]V {
 		c[k] = slices.Clone(v)
 	}
 	return c
+}
+
+// SliceToMap creates a map from a slice, using keyFn to extract a key from each
+// value. Note this doesn't copy the elements of the slice, so you may need to
+// call slices.Clone on the result
+func SliceToMap[M ~map[K]V, K comparable, V any](slice []V, keyFn func(value V) K) M {
+	result := make(map[K]V, len(slice))
+	for _, item := range slice {
+		result[keyFn(item)] = item
+	}
+	return result
 }
 
 // CleanEnvVar replaces all occurrences of illegal characters in an environment

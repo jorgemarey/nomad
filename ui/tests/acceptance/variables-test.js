@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import {
@@ -711,7 +711,7 @@ module('Acceptance | variables', function (hooks) {
       assert.ok(confirmFired, 'Confirm fired when leaving with unsaved form');
       assert.equal(
         currentURL(),
-        '/jobs?namespace=*',
+        '/jobs',
         'Opted to leave, ended up on desired page'
       );
 
@@ -999,7 +999,7 @@ module('Acceptance | variables', function (hooks) {
       await visit(
         `/jobs/${server.db.jobs[0].id}@${server.db.jobs[0].namespace}/variables`
       );
-      assert.equal(currentURL(), '/jobs?namespace=*');
+      assert.equal(currentURL(), '/jobs');
 
       window.localStorage.nomadTokenSecret = null; // Reset Token
     });
@@ -1094,7 +1094,7 @@ module('Acceptance | variables', function (hooks) {
       let token = server.create('token', { type: 'management' });
       let job = server.create('job', {
         createAllocations: true,
-        groupTaskCount: 10,
+        groupAllocCount: 10,
         resourceSpec: Array(3).fill('M: 257, C: 500'), // 3 groups
         shallow: false,
         name: 'test-job',
@@ -1153,7 +1153,7 @@ module('Acceptance | variables', function (hooks) {
       let token = server.create('token', { type: 'management' });
       let job = server.create('job', {
         createAllocations: true,
-        groupTaskCount: 2,
+        groupAllocCount: 2,
         resourceSpec: Array(1).fill('M: 257, C: 500'), // 1 group
         shallow: false,
         name: 'test-job',

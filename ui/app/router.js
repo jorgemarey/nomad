@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 import EmberRouter from '@ember/routing/router';
@@ -128,6 +128,14 @@ Router.map(function () {
       this.route('new');
       this.route('token', {
         path: '/:id',
+      });
+    });
+    this.route('namespaces', function () {
+      this.route('new');
+      // Note, this needs the "acl-" portion due to
+      // "namespace" being a magic string in Ember
+      this.route('acl-namespace', {
+        path: '/:name',
       });
     });
   });

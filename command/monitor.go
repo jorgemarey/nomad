@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package command
 
@@ -305,6 +305,9 @@ func (m *monitor) monitor(evalID string) int {
 		status, err := cmd.monitor(m.client, dID, 0, m.state.wait, verbose)
 		if err != nil || status != api.DeploymentStatusSuccessful {
 			return 1
+		}
+		if status == api.DeploymentStatusSuccessful {
+			schedFailure = false
 		}
 	}
 

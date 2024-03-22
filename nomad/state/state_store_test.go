@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package state
 
@@ -2566,6 +2566,54 @@ func TestStateStore_UpsertJob_submission(t *testing.T) {
 	must.Eq(t, 1007, sub.JobModifyIndex)
 }
 
+func TestStateStore_GetJobSubmissions(t *testing.T) {
+	ci.Parallel(t)
+
+	state := testStateStore(t)
+
+	// Generate some job submissions and upsert these into state.
+	mockJobSubmissions := []*structs.JobSubmission{
+		{
+			Source:         "job{}",
+			Namespace:      "default",
+			JobID:          "example",
+			Version:        10,
+			JobModifyIndex: 20,
+		},
+		{
+			Source:         "job{}",
+			Namespace:      "platform",
+			JobID:          "example",
+			Version:        20,
+			JobModifyIndex: 20,
+		},
+	}
+
+	txn := state.db.WriteTxn(20)
+
+	for _, mockSubmission := range mockJobSubmissions {
+		must.NoError(t, state.updateJobSubmission(
+			20, mockSubmission, mockSubmission.Namespace, mockSubmission.JobID, mockSubmission.Version, txn))
+	}
+
+	must.NoError(t, txn.Commit())
+
+	// List out all the job submissions in state and ensure they match the
+	// items we previously wrote.
+	ws := memdb.NewWatchSet()
+	iter, err := state.GetJobSubmissions(ws)
+	must.NoError(t, err)
+
+	var submissions []*structs.JobSubmission
+
+	for raw := iter.Next(); raw != nil; raw = iter.Next() {
+		submissions = append(submissions, raw.(*structs.JobSubmission))
+	}
+
+	must.SliceLen(t, 2, submissions)
+	must.Eq(t, mockJobSubmissions, submissions)
+}
+
 func TestStateStore_UpdateUpsertJob_JobVersion(t *testing.T) {
 	ci.Parallel(t)
 
@@ -4220,27 +4268,6 @@ func TestStateStore_CSIPlugin_Lifecycle(t *testing.T) {
 
 		plug := checkPlugin(pluginCounts{
 			controllerFingerprints: 1, // no changes till we get fingerprint
-			nodeFingerprints:       2,
-			controllersHealthy:     1,
-			nodesHealthy:           2,
-			controllersExpected:    0,
-			nodesExpected:          0,
-		})
-		require.True(t, plug.ControllerRequired)
-		require.False(t, plug.IsEmpty())
-
-		updateAllocsFn(allocIDs, SERVER,
-			func(alloc *structs.Allocation) {
-				alloc.DesiredStatus = structs.AllocDesiredStatusStop
-			})
-
-		updateAllocsFn(allocIDs, CLIENT,
-			func(alloc *structs.Allocation) {
-				alloc.ClientStatus = structs.AllocClientStatusComplete
-			})
-
-		plug = checkPlugin(pluginCounts{
-			controllerFingerprints: 1,
 			nodeFingerprints:       2,
 			controllersHealthy:     1,
 			nodesHealthy:           2,
@@ -7080,7 +7107,7 @@ func TestStateStore_AllocsForRegisteredJob(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	expected := len(allocs) + len(allocs1)
+	expected := len(allocs1) // state.DeleteJob corresponds to stop -purge, so all allocs from the original job should be gone
 	if len(out) != expected {
 		t.Fatalf("expected: %v, actual: %v", expected, len(out))
 	}

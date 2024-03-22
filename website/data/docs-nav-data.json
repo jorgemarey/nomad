@@ -59,15 +59,33 @@
       },
       {
         "title": "Consul",
-        "path": "integrations/consul-integration"
+        "routes": [
+          {
+            "title": "Overview",
+            "path": "integrations/consul"
+          },
+          {
+            "title": "ACL",
+            "path": "integrations/consul/acl"
+          },
+          {
+            "title": "Service Mesh",
+            "path": "integrations/consul/service-mesh"
+          }
+        ]
       },
       {
-        "title": "Consul Service Mesh",
-        "path": "integrations/consul-connect"
-      },
-      {
-        "title": "Vault Integration",
-        "path": "integrations/vault-integration"
+        "title": "Vault",
+        "routes": [
+          {
+            "title": "Overview",
+            "path": "integrations/vault"
+          },
+          {
+            "title": "ACL",
+            "path": "integrations/vault/acl"
+          }
+        ]
       }
     ]
   },
@@ -88,6 +106,10 @@
       {
         "title": "Architecture",
         "path": "concepts/architecture"
+      },
+      {
+        "title": "CPU",
+        "path": "concepts/cpu"
       },
       {
         "title": "Plugins",
@@ -199,6 +221,10 @@
       {
         "title": "plugin",
         "path": "configuration/plugin"
+      },
+      {
+        "title": "reporting",
+        "path": "configuration/reporting"
       },
       {
         "title": "sentinel",
@@ -511,6 +537,10 @@
             "path": "commands/job"
           },
           {
+            "title": "action",
+            "path": "commands/job/action"
+          },
+          {
             "title": "allocs",
             "path": "commands/job/allocs"
           },
@@ -800,6 +830,10 @@
               {
                 "title": "state",
                 "path": "commands/operator/raft/state"
+              },
+              {
+                "title": "transfer-leadership",
+                "path": "commands/operator/raft/transfer-leadership"
               }
             ]
           },
@@ -928,6 +962,23 @@
           {
             "title": "list",
             "path": "commands/recommendation/list"
+          }
+        ]
+      },
+      {
+        "title": "setup",
+        "routes": [
+          {
+            "title": "Overview",
+            "path": "commands/setup"
+          },
+          {
+            "title": "consul",
+            "path": "commands/setup/consul"
+          },
+          {
+            "title": "vault",
+            "path": "commands/setup/vault"
           }
         ]
       },
@@ -1087,6 +1138,10 @@
           {
             "title": "put",
             "path": "commands/var/put"
+          },
+          {
+            "title": "lock",
+            "path": "commands/var/lock"
           },
           {
             "title": "purge",
@@ -1585,6 +1640,10 @@
         ]
       },
       {
+        "title": "action",
+        "path": "job-specification/action"
+      },
+      {
         "title": "artifact",
         "path": "job-specification/artifact"
       },
@@ -1607,6 +1666,10 @@
       {
         "title": "connect",
         "path": "job-specification/connect"
+      },
+      {
+        "title": "consul",
+        "path": "job-specification/consul"
       },
       {
         "title": "constraint",
@@ -1675,6 +1738,10 @@
       {
         "title": "network",
         "path": "job-specification/network"
+      },
+      {
+        "title": "numa",
+        "path": "job-specification/numa"
       },
       {
         "title": "parameterized",
@@ -1886,6 +1953,10 @@
           {
             "title": "Windows IIS",
             "href": "/plugins/drivers/community/iis"
+          },
+          {
+            "title": "Windows IIS",
+            "href": "/plugins/drivers/community/nomad-iis"
           }
         ]
       },
@@ -2227,6 +2298,10 @@
       {
         "title": "Key Management",
         "path": "operations/key-management"
+      },
+      {
+        "title": "Considerations for Stateful Workloads",
+        "path": "operations/stateful-workloads"
       }
     ]
   },
@@ -2275,6 +2350,10 @@
           {
             "title": "Overview",
             "path": "enterprise/license"
+          },
+          {
+            "title": "Automated license utilization reporting",
+            "path": "enterprise/license/utilization-reporting"
           },
           {
             "title": "FAQ",

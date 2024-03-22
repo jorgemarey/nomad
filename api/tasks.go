@@ -195,7 +195,7 @@ func NewAffinity(lTarget string, operand string, rTarget string, weight int8) *A
 		LTarget: lTarget,
 		RTarget: rTarget,
 		Operand: operand,
-		Weight:  pointerOf(int8(weight)),
+		Weight:  pointerOf(weight),
 	}
 }
 
@@ -301,7 +301,7 @@ func NewSpreadTarget(value string, percent uint8) *SpreadTarget {
 func NewSpread(attribute string, weight int8, spreadTargets []*SpreadTarget) *Spread {
 	return &Spread{
 		Attribute:    attribute,
-		Weight:       pointerOf(int8(weight)),
+		Weight:       pointerOf(weight),
 		SpreadTarget: spreadTargets,
 	}
 }
@@ -459,6 +459,7 @@ type TaskGroup struct {
 	MaxClientDisconnect       *time.Duration            `mapstructure:"max_client_disconnect" hcl:"max_client_disconnect,optional"`
 	Scaling                   *ScalingPolicy            `hcl:"scaling,block"`
 	Consul                    *Consul                   `hcl:"consul,block"`
+	PreventRescheduleOnLost   *bool                     `hcl:"prevent_reschedule_on_lost,optional"`
 }
 
 // NewTaskGroup creates a new TaskGroup.
@@ -577,7 +578,9 @@ func (g *TaskGroup) Canonicalize(job *Job) {
 	for _, s := range g.Services {
 		s.Canonicalize(nil, g, job)
 	}
-
+	if g.PreventRescheduleOnLost == nil {
+		g.PreventRescheduleOnLost = pointerOf(false)
+	}
 }
 
 // These needs to be in sync with DefaultServiceJobRestartPolicy in
@@ -714,6 +717,7 @@ type Task struct {
 	LogConfig       *LogConfig             `mapstructure:"logs" hcl:"logs,block"`
 	Artifacts       []*TaskArtifact        `hcl:"artifact,block"`
 	Vault           *Vault                 `hcl:"vault,block"`
+	Consul          *Consul                `hcl:"consul,block"`
 	Templates       []*Template            `hcl:"template,block"`
 	DispatchPayload *DispatchPayloadConfig `hcl:"dispatch_payload,block"`
 	VolumeMounts    []*VolumeMount         `hcl:"volume_mount,block"`
@@ -723,7 +727,15 @@ type Task struct {
 	KillSignal      string                 `mapstructure:"kill_signal" hcl:"kill_signal,optional"`
 	Kind            string                 `hcl:"kind,optional"`
 	ScalingPolicies []*ScalingPolicy       `hcl:"scaling,block"`
-	Identity        *WorkloadIdentity      `hcl:"identity,block"`
+
+	// Identity is the default Nomad Workload Identity and will be added to
+	// Identities with the name "default"
+	Identity *WorkloadIdentity
+
+	// Workload Identities
+	Identities []*WorkloadIdentity `hcl:"identity,block"`
+
+	Actions []*Action `hcl:"action,block"`
 }
 
 func (t *Task) Canonicalize(tg *TaskGroup, job *Job) {
@@ -745,6 +757,9 @@ func (t *Task) Canonicalize(tg *TaskGroup, job *Job) {
 	}
 	if t.Vault != nil {
 		t.Vault.Canonicalize()
+	}
+	if t.Consul != nil {
+		t.Consul.Canonicalize()
 	}
 	for _, tmpl := range t.Templates {
 		tmpl.Canonicalize()
@@ -922,12 +937,15 @@ func (tmpl *Template) Canonicalize() {
 }
 
 type Vault struct {
-	Policies     []string `hcl:"policies,optional"`
-	Namespace    *string  `mapstructure:"namespace" hcl:"namespace,optional"`
-	Env          *bool    `hcl:"env,optional"`
-	DisableFile  *bool    `mapstructure:"disable_file" hcl:"disable_file,optional"`
-	ChangeMode   *string  `mapstructure:"change_mode" hcl:"change_mode,optional"`
-	ChangeSignal *string  `mapstructure:"change_signal" hcl:"change_signal,optional"`
+	Policies             []string `hcl:"policies,optional"`
+	Role                 string   `hcl:"role,optional"`
+	Namespace            *string  `mapstructure:"namespace" hcl:"namespace,optional"`
+	Cluster              string   `hcl:"cluster,optional"`
+	Env                  *bool    `hcl:"env,optional"`
+	DisableFile          *bool    `mapstructure:"disable_file" hcl:"disable_file,optional"`
+	ChangeMode           *string  `mapstructure:"change_mode" hcl:"change_mode,optional"`
+	ChangeSignal         *string  `mapstructure:"change_signal" hcl:"change_signal,optional"`
+	AllowTokenExpiration *bool    `mapstructure:"allow_token_expiration" hcl:"allow_token_expiration,optional"`
 }
 
 func (v *Vault) Canonicalize() {
@@ -940,11 +958,17 @@ func (v *Vault) Canonicalize() {
 	if v.Namespace == nil {
 		v.Namespace = pointerOf("")
 	}
+	if v.Cluster == "" {
+		v.Cluster = "default"
+	}
 	if v.ChangeMode == nil {
 		v.ChangeMode = pointerOf("restart")
 	}
 	if v.ChangeSignal == nil {
 		v.ChangeSignal = pointerOf("SIGHUP")
+	}
+	if v.AllowTokenExpiration == nil {
+		v.AllowTokenExpiration = pointerOf(false)
 	}
 }
 
@@ -1145,6 +1169,18 @@ func (t *TaskCSIPluginConfig) Canonicalize() {
 // WorkloadIdentity is the jobspec block which determines if and how a workload
 // identity is exposed to tasks.
 type WorkloadIdentity struct {
-	Env  bool `hcl:"env,optional"`
-	File bool `hcl:"file,optional"`
+	Name         string        `hcl:"name,optional"`
+	Audience     []string      `mapstructure:"aud" hcl:"aud,optional"`
+	ChangeMode   string        `mapstructure:"change_mode" hcl:"change_mode,optional"`
+	ChangeSignal string        `mapstructure:"change_signal" hcl:"change_signal,optional"`
+	Env          bool          `hcl:"env,optional"`
+	File         bool          `hcl:"file,optional"`
+	ServiceName  string        `hcl:"service_name,optional"`
+	TTL          time.Duration `mapstructure:"ttl" hcl:"ttl,optional"`
+}
+
+type Action struct {
+	Name    string   `hcl:"name,label"`
+	Command string   `mapstructure:"command" hcl:"command"`
+	Args    []string `mapstructure:"args" hcl:"args,optional"`
 }

@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package oidc
 
@@ -35,6 +35,7 @@ func TestProviderCache(t *testing.T) {
 			OIDCDiscoveryURL:    oidcTestProvider.Addr(),
 			OIDCClientID:        "alice",
 			OIDCClientSecret:    "ssshhhh",
+			OIDCDisableUserInfo: false,
 			AllowedRedirectURIs: []string{"http://example.com"},
 			DiscoveryCaPem:      []string{oidcTestProvider.CACert()},
 			SigningAlgs:         []string{string(tpAlg)},

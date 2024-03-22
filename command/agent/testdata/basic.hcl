@@ -1,5 +1,5 @@
 # Copyright (c) HashiCorp, Inc.
-# SPDX-License-Identifier: MPL-2.0
+# SPDX-License-Identifier: BUSL-1.1
 
 # This file was used to generate basic.json from https://www.hcl2json.com/
 region = "foobar"
@@ -245,6 +245,22 @@ consul {
   auto_advertise         = true
   checks_use_advertise   = true
   timeout                = "5s"
+  service_auth_method    = "nomad-services"
+  task_auth_method       = "nomad-tasks"
+
+  service_identity {
+    aud  = ["consul.io", "nomad.dev"]
+    env  = false
+    file = true
+    ttl  = "1h"
+  }
+
+  task_identity {
+    aud  = ["consul.io"]
+    env  = true
+    file = false
+    ttl  = "2h"
+  }
 }
 
 vault {
@@ -260,6 +276,14 @@ vault {
   tls_server_name       = "foobar"
   tls_skip_verify       = true
   create_from_role      = "test_role"
+  jwt_auth_backend_path = "nomad_jwt"
+
+  default_identity {
+    aud  = ["vault.io", "nomad.io"]
+    env  = false
+    file = true
+    ttl  = "3h"
+  }
 }
 
 tls {
@@ -314,5 +338,11 @@ plugin "docker" {
 plugin "exec" {
   config {
     foo = true
+  }
+}
+
+reporting {
+  license {
+    enabled = true
   }
 }

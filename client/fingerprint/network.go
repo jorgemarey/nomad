@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package fingerprint
 
@@ -103,11 +103,6 @@ func (f *NetworkFingerprint) Fingerprint(req *FingerprintRequest, resp *Fingerpr
 	nwResources, err := f.createNetworkResources(mbits, intf, disallowLinkLocal)
 	if err != nil {
 		return err
-	}
-
-	// COMPAT(0.10): Remove in 0.10
-	resp.Resources = &structs.Resources{
-		Networks: nwResources,
 	}
 
 	resp.NodeResources = &structs.NodeResources{

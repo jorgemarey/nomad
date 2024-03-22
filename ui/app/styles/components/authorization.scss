@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 .authorization-page {
@@ -22,6 +22,11 @@
       width: 50%;
     }
     margin-bottom: 1.5rem;
+  }
+
+  .token-details {
+    display: grid;
+    gap: 1rem;
   }
 
   .or-divider {

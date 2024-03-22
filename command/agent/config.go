@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package agent
 
@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,8 +32,6 @@ import (
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/nomad/version"
-	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 )
 
 // Config is the configuration for the Nomad agent.
@@ -136,14 +136,13 @@ type Config struct {
 	// for security bulletins
 	DisableAnonymousSignature bool `hcl:"disable_anonymous_signature"`
 
-	// Consul contains the configuration for the Consul Agent and
-	// parameters necessary to register services, their checks, and
-	// discover the current Nomad servers.
-	Consul *config.ConsulConfig `hcl:"consul"`
+	// Consuls is a slice derived from multiple `consul` blocks, here to support
+	// features in Nomad Enterprise.
+	Consuls []*config.ConsulConfig `hcl:"-"`
 
-	// Vault contains the configuration for the Vault Agent and
-	// parameters necessary to derive tokens.
-	Vault *config.VaultConfig `hcl:"vault"`
+	// Vaults is a slice derived from multiple `vault` blocks, here to support
+	// features in Nomad Enterprise.
+	Vaults []*config.VaultConfig `hcl:"-"`
 
 	// UI is used to configure the web UI
 	UI *config.UIConfig `hcl:"ui"`
@@ -188,8 +187,29 @@ type Config struct {
 	// Audit contains the configuration for audit logging.
 	Audit *config.AuditConfig `hcl:"audit"`
 
+	// Reporting is used to enable go census reporting
+	Reporting *config.ReportingConfig `hcl:"reporting,block"`
+
 	// ExtraKeysHCL is used by hcl to surface unexpected keys
 	ExtraKeysHCL []string `hcl:",unusedKeys" json:"-"`
+}
+
+func (c *Config) defaultConsul() *config.ConsulConfig {
+	for _, cfg := range c.Consuls {
+		if cfg.Name == structs.ConsulDefaultCluster {
+			return cfg
+		}
+	}
+	return nil
+}
+
+func (c *Config) defaultVault() *config.VaultConfig {
+	for _, cfg := range c.Vaults {
+		if cfg.Name == structs.VaultDefaultCluster {
+			return cfg
+		}
+	}
+	return nil
 }
 
 // ClientConfig is configuration specific to the client mode
@@ -250,7 +270,7 @@ type ClientConfig struct {
 	DiskFreeMB int `hcl:"disk_free_mb"`
 
 	// ReservableCores is used to override detected reservable cpu cores.
-	ReserveableCores string `hcl:"reservable_cores"`
+	ReservableCores string `hcl:"reservable_cores"`
 
 	// MaxKillTimeout allows capping the user-specifiable KillTimeout.
 	MaxKillTimeout string `hcl:"max_kill_timeout"`
@@ -452,7 +472,7 @@ type ServerConfig struct {
 	// the source of truth for global tokens and ACL policies.
 	AuthoritativeRegion string `hcl:"authoritative_region"`
 
-	// BootstrapExpect tries to automatically bootstrap the Consul cluster,
+	// BootstrapExpect tries to automatically bootstrap the Nomad cluster,
 	// by withholding peers until enough servers join.
 	BootstrapExpect int `hcl:"bootstrap_expect"`
 
@@ -682,6 +702,11 @@ type ServerConfig struct {
 
 	// JobTrackedVersions is the number of historic job versions that are kept.
 	JobTrackedVersions *int `hcl:"job_tracked_versions"`
+
+	// OIDCIssuer if set enables OIDC Discovery and uses this value as the
+	// issuer. Third parties such as AWS IAM OIDC Provider expect the issuer to
+	// be a publically accessible HTTPS URL signed by a trusted well-known CA.
+	OIDCIssuer string `hcl:"oidc_issuer"`
 }
 
 func (s *ServerConfig) Copy() *ServerConfig {
@@ -1152,47 +1177,43 @@ type devModeConfig struct {
 	// mode flags are set at the command line via -dev and -dev-connect
 	defaultMode bool
 	connectMode bool
+	consulMode  bool
+	vaultMode   bool
 
 	bindAddr string
 	iface    string
 }
 
-// newDevModeConfig parses the optional string value of the -dev flag
-func newDevModeConfig(devMode, connectMode bool) (*devModeConfig, error) {
-	if !devMode && !connectMode {
-		return nil, nil
-	}
-	mode := &devModeConfig{}
-	mode.defaultMode = devMode
-	if connectMode {
+func (mode *devModeConfig) enabled() bool {
+	return mode.defaultMode || mode.connectMode ||
+		mode.consulMode || mode.vaultMode
+}
+
+func (mode *devModeConfig) validate() error {
+	if mode.connectMode {
 		if runtime.GOOS != "linux" {
 			// strictly speaking -dev-connect only binds to the
 			// non-localhost interface, but given its purpose
 			// is to support a feature with network namespaces
 			// we'll return an error here rather than let the agent
 			// come up and fail unexpectedly to run jobs
-			return nil, fmt.Errorf("-dev-connect is only supported on linux.")
+			return fmt.Errorf("-dev-connect is only supported on linux.")
 		}
 		u, err := users.Current()
 		if err != nil {
-			return nil, fmt.Errorf(
+			return fmt.Errorf(
 				"-dev-connect uses network namespaces and is only supported for root: %v", err)
 		}
 		if u.Uid != "0" {
-			return nil, fmt.Errorf(
+			return fmt.Errorf(
 				"-dev-connect uses network namespaces and is only supported for root.")
 		}
 		// Ensure Consul is on PATH
 		if _, err := exec.LookPath("consul"); err != nil {
-			return nil, fmt.Errorf("-dev-connect requires a 'consul' binary in Nomad's $PATH")
+			return fmt.Errorf("-dev-connect requires a 'consul' binary in Nomad's $PATH")
 		}
-		mode.connectMode = true
 	}
-	err := mode.networkConfig()
-	if err != nil {
-		return nil, err
-	}
-	return mode, nil
+	return nil
 }
 
 func (mode *devModeConfig) networkConfig() error {
@@ -1243,7 +1264,7 @@ func DevConfig(mode *devModeConfig) *Config {
 	conf.Server.BootstrapExpect = 1
 	conf.EnableDebug = true
 	conf.DisableAnonymousSignature = true
-	conf.Consul.AutoAdvertise = pointer.Of(true)
+	conf.defaultConsul().AutoAdvertise = pointer.Of(true)
 	conf.Client.NetworkInterface = mode.iface
 	conf.Client.Options = map[string]string{
 		"driver.raw_exec.enable": "true",
@@ -1260,16 +1281,36 @@ func DevConfig(mode *devModeConfig) *Config {
 	conf.Client.Options[fingerprint.TightenNetworkTimeoutsConfig] = "true"
 	conf.Client.BindWildcardDefaultHostNetwork = true
 	conf.Client.NomadServiceDiscovery = pointer.Of(true)
+	conf.Client.ReservableCores = "" // inherit all the cores
 	conf.Telemetry.PrometheusMetrics = true
 	conf.Telemetry.PublishAllocationMetrics = true
 	conf.Telemetry.PublishNodeMetrics = true
 
+	if mode.consulMode {
+		conf.Consuls[0].ServiceIdentity = &config.WorkloadIdentityConfig{
+			Audience: []string{"consul.io"},
+			TTL:      pointer.Of(time.Hour),
+		}
+		conf.Consuls[0].TaskIdentity = &config.WorkloadIdentityConfig{
+			Audience: []string{"consul.io"},
+			TTL:      pointer.Of(time.Hour),
+		}
+	}
+
+	if mode.vaultMode {
+		conf.Vaults[0].Enabled = pointer.Of(true)
+		conf.Vaults[0].Addr = "http://localhost:8200"
+		conf.Vaults[0].DefaultIdentity = &config.WorkloadIdentityConfig{
+			Audience: []string{"vault.io"},
+			TTL:      pointer.Of(time.Hour),
+		}
+	}
 	return conf
 }
 
 // DefaultConfig is the baseline configuration for Nomad.
 func DefaultConfig() *Config {
-	return &Config{
+	cfg := &Config{
 		LogLevel:   "INFO",
 		Region:     "global",
 		Datacenter: "dc1",
@@ -1281,8 +1322,8 @@ func DefaultConfig() *Config {
 		},
 		Addresses:      &Addresses{},
 		AdvertiseAddrs: &AdvertiseAddrs{},
-		Consul:         config.DefaultConsulConfig(),
-		Vault:          config.DefaultVaultConfig(),
+		Consuls:        []*config.ConsulConfig{config.DefaultConsulConfig()},
+		Vaults:         []*config.VaultConfig{config.DefaultVaultConfig()},
 		UI:             config.DefaultUIConfig(),
 		Client: &ClientConfig{
 			Enabled:               false,
@@ -1359,7 +1400,10 @@ func DefaultConfig() *Config {
 		Audit:              &config.AuditConfig{},
 		DisableUpdateCheck: pointer.Of(false),
 		Limits:             config.DefaultLimits(),
+		Reporting:          config.DefaultReporting(),
 	}
+
+	return cfg
 }
 
 // Listener can be used to get a new listener using a custom bind address.
@@ -1460,6 +1504,13 @@ func (c *Config) Merge(b *Config) *Config {
 		result.Telemetry = result.Telemetry.Merge(b.Telemetry)
 	}
 
+	// Apply the Reporting Config
+	if result.Reporting == nil && b.Reporting != nil {
+		result.Reporting = b.Reporting.Copy()
+	} else if b.Reporting != nil {
+		result.Reporting = result.Reporting.Merge(b.Reporting)
+	}
+
 	// Apply the TLS Config
 	if result.TLSConfig == nil && b.TLSConfig != nil {
 		result.TLSConfig = b.TLSConfig.Copy()
@@ -1523,20 +1574,11 @@ func (c *Config) Merge(b *Config) *Config {
 		result.AdvertiseAddrs = result.AdvertiseAddrs.Merge(b.AdvertiseAddrs)
 	}
 
-	// Apply the Consul Configuration
-	if result.Consul == nil && b.Consul != nil {
-		result.Consul = b.Consul.Copy()
-	} else if b.Consul != nil {
-		result.Consul = result.Consul.Merge(b.Consul)
-	}
+	// Apply the Consul Configurations
+	result.Consuls = mergeConsulConfigs(result.Consuls, b.Consuls)
 
-	// Apply the Vault Configuration
-	if result.Vault == nil && b.Vault != nil {
-		vaultConfig := *b.Vault
-		result.Vault = &vaultConfig
-	} else if b.Vault != nil {
-		result.Vault = result.Vault.Merge(b.Vault)
-	}
+	// Apply the Vault Configurations
+	result.Vaults = mergeVaultConfigs(result.Vaults, b.Vaults)
 
 	// Apply the UI Configuration
 	if result.UI == nil && b.UI != nil {
@@ -1587,6 +1629,74 @@ func (c *Config) Merge(b *Config) *Config {
 	return &result
 }
 
+// mergeVaultConfigs takes two slices of VaultConfig and returns a slice
+// containing the superset of all configurations, and with every configuration
+// with the same name merged
+func mergeVaultConfigs(left, right []*config.VaultConfig) []*config.VaultConfig {
+	results := []*config.VaultConfig{}
+
+	doMerge := func(dstConfigs, srcConfigs []*config.VaultConfig) []*config.VaultConfig {
+		for _, src := range srcConfigs {
+			if src.Name == "" {
+				src.Name = "default"
+			}
+			var found bool
+			for i, dst := range dstConfigs {
+				if dst.Name == src.Name {
+					dstConfigs[i] = dst.Merge(src)
+					found = true
+					break
+				}
+			}
+			if !found {
+				dstConfigs = append(dstConfigs, config.DefaultVaultConfig().Merge(src))
+			}
+		}
+		return dstConfigs
+	}
+
+	results = doMerge(results, left)
+	results = doMerge(results, right)
+	return results
+}
+
+// mergeConsulConfigs takes two slices of ConsulConfig and returns a slice
+// containing the superset of all configurations, and with every configuration
+// with the same name merged
+func mergeConsulConfigs(left, right []*config.ConsulConfig) []*config.ConsulConfig {
+	if len(left) == 0 {
+		return right
+	}
+	if len(right) == 0 {
+		return left
+	}
+	results := []*config.ConsulConfig{}
+
+	doMerge := func(dstConfigs, srcConfigs []*config.ConsulConfig) []*config.ConsulConfig {
+		for _, src := range srcConfigs {
+			if src.Name == "" {
+				src.Name = "default"
+			}
+			var found bool
+			for i, dst := range dstConfigs {
+				if dst.Name == src.Name {
+					dstConfigs[i] = dst.Merge(src)
+					found = true
+					break
+				}
+			}
+			if !found {
+				dstConfigs = append(dstConfigs, config.DefaultConsulConfig().Merge(src))
+			}
+		}
+		return dstConfigs
+	}
+
+	results = doMerge(results, left)
+	results = doMerge(results, right)
+	return results
+}
+
 // Copy returns a deep copy safe for mutation.
 func (c *Config) Copy() *Config {
 	if c == nil {
@@ -1603,8 +1713,8 @@ func (c *Config) Copy() *Config {
 	nc.ACL = c.ACL.Copy()
 	nc.Telemetry = c.Telemetry.Copy()
 	nc.DisableUpdateCheck = pointer.Copy(c.DisableUpdateCheck)
-	nc.Consul = c.Consul.Copy()
-	nc.Vault = c.Vault.Copy()
+	nc.Consuls = helper.CopySlice(c.Consuls)
+	nc.Vaults = helper.CopySlice(c.Vaults)
 	nc.UI = c.UI.Copy()
 
 	nc.NomadConfig = c.NomadConfig.Copy()
@@ -1619,6 +1729,7 @@ func (c *Config) Copy() *Config {
 	nc.Plugins = helper.CopySlice(c.Plugins)
 	nc.Limits = c.Limits.Copy()
 	nc.Audit = c.Audit.Copy()
+	nc.Reporting = c.Reporting.Copy()
 	nc.ExtraKeysHCL = slices.Clone(c.ExtraKeysHCL)
 	return &nc
 }
@@ -2062,6 +2173,10 @@ func (s *ServerConfig) Merge(b *ServerConfig) *ServerConfig {
 		result.JobTrackedVersions = b.JobTrackedVersions
 	}
 
+	if b.OIDCIssuer != "" {
+		result.OIDCIssuer = b.OIDCIssuer
+	}
+
 	// Add the schedulers
 	result.EnabledSchedulers = append(result.EnabledSchedulers, b.EnabledSchedulers...)
 
@@ -2136,8 +2251,8 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 	} else if b.Reserved != nil {
 		result.Reserved = result.Reserved.Merge(b.Reserved)
 	}
-	if b.ReserveableCores != "" {
-		result.ReserveableCores = b.ReserveableCores
+	if b.ReservableCores != "" {
+		result.ReservableCores = b.ReservableCores
 	}
 	if b.GCInterval != 0 {
 		result.GCInterval = b.GCInterval

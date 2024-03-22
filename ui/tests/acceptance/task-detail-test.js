@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 /* eslint-disable qunit/require-expect */
@@ -223,7 +223,7 @@ module('Acceptance | task detail', function (hooks) {
       'Event timestamp'
     );
     assert.equal(recentEvent.type, event.type, 'Event type');
-    assert.equal(recentEvent.message, event.message, 'Event message');
+    assert.equal(recentEvent.message, event.displayMessage, 'Event message');
   });
 
   test('when the allocation is not found, the application errors', async function (assert) {
@@ -377,11 +377,7 @@ module('Acceptance | task detail (different namespace)', function (hooks) {
     const job = server.db.jobs.find(jobId);
 
     await Layout.breadcrumbFor('jobs.index').visit();
-    assert.equal(
-      currentURL(),
-      '/jobs?namespace=*',
-      'Jobs breadcrumb links correctly'
-    );
+    assert.equal(currentURL(), '/jobs', 'Jobs breadcrumb links correctly');
 
     await Task.visit({ id: allocation.id, name: task.name });
     await Layout.breadcrumbFor('jobs.job.index').visit();

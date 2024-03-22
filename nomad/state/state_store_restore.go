@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package state
 
@@ -272,6 +272,15 @@ func (r *StateRestore) ACLAuthMethodRestore(aclAuthMethod *structs.ACLAuthMethod
 func (r *StateRestore) ACLBindingRuleRestore(aclBindingRule *structs.ACLBindingRule) error {
 	if err := r.txn.Insert(TableACLBindingRules, aclBindingRule); err != nil {
 		return fmt.Errorf("ACL binding rule insert failed: %v", err)
+	}
+	return nil
+}
+
+// JobSubmissionRestore is used to restore a single job submission into the
+// job_submission table.
+func (r *StateRestore) JobSubmissionRestore(jobSubmission *structs.JobSubmission) error {
+	if err := r.txn.Insert(TableJobSubmission, jobSubmission); err != nil {
+		return fmt.Errorf("job submission insert failed: %v", err)
 	}
 	return nil
 }

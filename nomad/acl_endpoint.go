@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package nomad
 
@@ -17,7 +17,7 @@ import (
 	capOIDC "github.com/hashicorp/cap/oidc"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
-	"github.com/hashicorp/go-set"
+	"github.com/hashicorp/go-set/v2"
 
 	policy "github.com/hashicorp/nomad/acl"
 	"github.com/hashicorp/nomad/helper"
@@ -208,7 +208,7 @@ func (a *ACL) ListPolicies(args *structs.ACLPolicyListRequest, reply *structs.AC
 		}
 
 		// Add the token policies which are directly referenced into the set.
-		tokenPolicyNames.InsertAll(token.Policies)
+		tokenPolicyNames.InsertSlice(token.Policies)
 	}
 
 	// Setup the blocking query
@@ -302,7 +302,7 @@ func (a *ACL) GetPolicy(args *structs.ACLPolicySpecificRequest, reply *structs.S
 		}
 
 		// Add the token policies which are directly referenced into the set.
-		tokenPolicyNames.InsertAll(token.Policies)
+		tokenPolicyNames.InsertSlice(token.Policies)
 
 		if !tokenPolicyNames.Contains(args.Name) {
 			return structs.ErrPermissionDenied
@@ -387,7 +387,7 @@ func (a *ACL) GetPolicies(args *structs.ACLPolicySetRequest, reply *structs.ACLP
 	}
 
 	// Add the token policies which are directly referenced into the set.
-	tokenPolicyNames.InsertAll(token.Policies)
+	tokenPolicyNames.InsertSlice(token.Policies)
 
 	// Setup the blocking query
 	opts := blockingOptions{
@@ -452,7 +452,7 @@ func (a *ACL) GetClaimPolicies(args *structs.GenericRequest, reply *structs.ACLP
 		return structs.ErrPermissionDenied
 	}
 
-	policies, err := a.srv.resolvePoliciesForClaims(claims)
+	policies, err := a.srv.ResolvePoliciesForClaims(claims)
 	if err != nil {
 		// Likely only hit if a job/alloc has been GC'd on the server but the
 		// client hasn't stopped it yet. Return Permission Denied as there's no way
@@ -2182,6 +2182,16 @@ func (a *ACL) WhoAmI(args *structs.GenericRequest, reply *structs.ACLWhoAmIRespo
 	}
 
 	reply.Identity = args.GetIdentity()
+
+	// COMPAT: originally these were time.Time objects but switching to go-jose
+	// changed them to int64 which aren't compatible with Nomad versions
+	// <1.7. These aren't used by any existing callers of this handler.
+	if reply.Identity.Claims != nil {
+		reply.Identity.Claims.Expiry = nil
+		reply.Identity.Claims.IssuedAt = nil
+		reply.Identity.Claims.NotBefore = nil
+	}
+
 	return nil
 }
 
@@ -2737,9 +2747,11 @@ func (a *ACL) OIDCCompleteAuth(
 	}
 
 	var userClaims map[string]interface{}
-	if userTokenSource := oidcToken.StaticTokenSource(); userTokenSource != nil {
-		if err := oidcProvider.UserInfo(ctx, userTokenSource, idTokenClaims["sub"].(string), &userClaims); err != nil {
-			return fmt.Errorf("failed to retrieve the user info claims: %v", err)
+	if !authMethod.Config.OIDCDisableUserInfo {
+		if userTokenSource := oidcToken.StaticTokenSource(); userTokenSource != nil {
+			if err := oidcProvider.UserInfo(ctx, userTokenSource, idTokenClaims["sub"].(string), &userClaims); err != nil {
+				return fmt.Errorf("failed to retrieve the user info claims: %v", err)
+			}
 		}
 	}
 
@@ -2972,6 +2984,9 @@ func formatTokenName(format, authType, authName string, claims map[string]string
 		claimMappings["value."+k] = v
 	}
 
+	if format == "" {
+		format = structs.DefaultACLAuthMethodTokenNameFormat
+	}
 	tokenName, err := auth.InterpolateHIL(format, claimMappings, false)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate ACL token name: %w", err)

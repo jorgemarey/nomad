@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package agent
 
@@ -212,7 +212,7 @@ func TestHTTP_Alloc_Port_Response(t *testing.T) {
 	ci.Parallel(t)
 
 	httpTest(t, nil, func(srv *TestAgent) {
-		client := srv.Client()
+		client := srv.APIClient()
 		defer srv.Shutdown()
 		defer client.Close()
 

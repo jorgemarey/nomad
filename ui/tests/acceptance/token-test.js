@@ -1,6 +1,6 @@
 /**
  * Copyright (c) HashiCorp, Inc.
- * SPDX-License-Identifier: MPL-2.0
+ * SPDX-License-Identifier: BUSL-1.1
  */
 
 /* eslint-disable qunit/require-expect */
@@ -48,6 +48,7 @@ module('Acceptance | tokens', function (hooks) {
 
     server.create('agent');
     server.create('node-pool');
+    server.create('namespace');
     node = server.create('node');
     job = server.create('job');
     managementToken = server.create('token');
@@ -321,7 +322,7 @@ module('Acceptance | tokens', function (hooks) {
     assert.timeout(6000);
     const nearlyExpiringToken = server.create('token', {
       name: 'Not quite dead yet',
-      expirationTime: moment().add(10, 'm').add(5, 's').toDate(),
+      expirationTime: moment().add(10, 'm').add(3, 's').toDate(),
     });
 
     await Tokens.visit();
@@ -856,7 +857,8 @@ module('Acceptance | tokens', function (hooks) {
       await visit('/jobs');
       // Expect the Run button/link to work now
       assert.dom('[data-test-run-job]').hasTagName('a');
-      assert.dom('[data-test-run-job]').hasAttribute('href', '/ui/jobs/run');
+      let runJobLink = find('[data-test-run-job]');
+      assert.ok(runJobLink.href.includes('/ui/jobs/run'));
     });
   });
 
@@ -1208,7 +1210,15 @@ module('Acceptance | tokens', function (hooks) {
     test('Token can be deleted', async function (assert) {
       const token = server.db.tokens.findBy((t) => t.id === 'cl4y-t0k3n');
       await visit(`/access-control/tokens/${token.id}`);
-      await click('[data-test-delete-token]');
+
+      const deleteButton = find('[data-test-delete-token] button');
+      assert.dom(deleteButton).exists('delete button is present');
+      await click(deleteButton);
+      assert
+        .dom('[data-test-confirmation-message]')
+        .exists('confirmation message is present');
+      await click(find('[data-test-confirm-button]'));
+
       assert.dom('.flash-message.alert-success').exists();
       await AccessControl.visitTokens();
       assert.dom('[data-test-token-name="cl4y-t0k3n"]').doesNotExist();

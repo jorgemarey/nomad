@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package state
 
@@ -554,4 +554,28 @@ func TestStateStore_ACLBindingRuleRestore(t *testing.T) {
 	out, err := testState.GetACLBindingRule(ws, aclBindingRule.ID)
 	must.NoError(t, err)
 	must.Eq(t, aclBindingRule, out)
+}
+
+func TestStateStore_JobSubmissionRestore(t *testing.T) {
+	ci.Parallel(t)
+	testState := testStateStore(t)
+
+	// Set up our test job submissions.
+	jobSubmission := structs.JobSubmission{
+		Source:    "{job{}}",
+		Namespace: "default",
+		JobID:     "example",
+	}
+
+	restore, err := testState.Restore()
+	must.NoError(t, err)
+	must.NoError(t, restore.JobSubmissionRestore(&jobSubmission))
+	must.NoError(t, restore.Commit())
+
+	// Check the state is now populated as we expect and that we can find the
+	// restored job submission.
+	ws := memdb.NewWatchSet()
+	out, err := testState.JobSubmission(ws, jobSubmission.Namespace, jobSubmission.JobID, jobSubmission.Version)
+	must.NoError(t, err)
+	must.Eq(t, jobSubmission, *out)
 }

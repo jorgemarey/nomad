@@ -13,20 +13,152 @@ upgrade. However, specific versions of Nomad may have more details provided for
 their upgrades as a result of new features or changed behavior. This page is
 used to document those details separately from the standard upgrade flow.
 
-## Nomad 1.6.4, 1.5.11
+## Nomad 1.7.2
+
+Nomad 1.7.2 fixes a critical bug in CPU fingerprinting in Nomad 1.7.0 and
+1.7.1. You should not install Nomad 1.7.0 or 1.7.1 and instead install the
+latest Nomad 1.7.x version.
+
+## Nomad 1.7.0
+
+<Warning>
+
+Nomad 1.7.0 contains a critical bug in keyring replication. You should not
+install Nomad 1.7.0 and instead install the latest Nomad 1.7.x version.
+
+</Warning>
+
+#### Keyring Replication Failure After Leader Election
+
+Nomad 1.7.0 introduced new RSA keys to the keyring for use in signing workload
+identities. These keys were not correctly replicated from leader to
+followers. This results in all workload identity verification failing after a
+leader election.
+
+This bug was fixed in Nomad 1.7.1.
+
+#### Vault Integration Changes
+
+Starting in Nomad 1.7, Nomad clients will use a task's [Workload Identity][] to
+authenticate to Vault and obtain a Vault token specific to the task.
+
+The existing workflow using a Vault token provided in either the agent
+configuration or at the time of job submission is deprecated and will be removed
+in Nomad 1.9. The [`vault.policies`][] field is also deprecated and will work
+only with the existing workflow. Instead, you should configure a suitable Vault
+role and use that.
+
+The following agent configuration fields are deprecated:
+- [`vault.allow_unauthenticated`][] will be removed in Nomad 1.9. Tasks will use
+  the workload identity without the user supplying a Vault token.
+- [`vault.task_token_ttl`][] will be removed in Nomad 1.9. With workload
+  identity, tasks will receive their TTL configuration from the Vault role.
+- [`vault.token`][] will be removed in Nomad 1.9. Nomad agents will no longer
+  make requests to authenticated endpoints except with a task's workload
+  identity.
+
+Before upgrading to Nomad 1.9 you will need to have configured authentication
+with Vault to work with workload identity. See [Migrating to Using Workload
+Identity with Vault][] for more details.
+
+#### Consul Integration Changes
+
+Starting in Nomad 1.7, Nomad clients will use a service's or task's [Workload
+Identity][] to authenticate to Consul and obtain a Consul token specific to the
+workload.
+
+The existing workflow using a Consul token provided in either the agent
+configuration or at the time of job submission is deprecated and will be removed
+in Nomad 1.9. The [`consul.allow_unauthenticated`][] agent configuration field
+will be removed in Nomad 1.9. Tasks will use the workload identity without the
+user supplying a Consul token.
+
+Before upgrading to Nomad 1.9 you will need to have configured authentication
+with Consul to work with workload identity. See [Migrating to Using Workload
+Identity with Consul][] for more details.
+
+#### RS256 JWT Signing Algorithm Support
+
+Prior to Nomad 1.7, workload identity JWTs were signed with the `EdDSA`
+algorithm. While `EdDSA` has numerous advantages as a signing algorithm, most
+third parties that accept JWTs expect the `RS256` signing algorithm to be used.
+
+Therefore starting in Nomad 1.7 *new* signing keys will generate an RSA key and
+sign workload identities with the `RS256` signing algorithm.
+
+Before setting up third party authentication methods to use workload
+identities, it is recommended to run [`nomad operator root keyring
+rotate`](/nomad/docs/commands/operator/root/keyring-rotate) to ensure you
+generate a new RSA key.
+
+To verify an RSA key is present you may check the [`/.well-known/jwks.json`
+endpoint](/nomad/api-docs/operator/keyring#list-active-public-keys) on any
+Nomad agent. If you see `"kty": "RSA"`, then an RSA key exists and you do not
+need to rotate keys.
+
+New Nomad clusters will use RSA by default and are not affected.
+
+#### CPU Fingerprinting Changes
+
+Starting in Nomad 1.7, Nomad clients improve the accuracy of detected CPU
+performance metrics. The fingerprinter now takes into account heterogeneous core
+types on applicable processors. In addition, Nomad will attempt to detect and
+use the base frequency of the processor rather than the turbo frequency when
+calculating the total available CPU bandwidth. The net result of these behaviors
+is that the calculated total CPU bandwidth available on a node may change when
+upgrading to Nomad 1.7. Operators are encouraged to ensure planned capacity
+meets expectations before upgrading. The [cpu concepts][cpu] documentation
+contains guidance in understanding how Nomad detects CPU metrics.
+
+#### CPU EC2 Detection Changes
+
+Prior to Nomad 1.7, Nomad clients embedded a large lookup table of CPU
+performance data for every EC2 instance type. In 1.7 and later Nomad instead
+gathers this data by executing the `dmidecode` command. The `dmidecode` package
+must be installed manually on some Linux distributions before the Nomad agent
+is started.
+
+#### CPU Core Isolation
+
+Starting in Nomad 1.7, Nomad tasks that specify CPU resources using the `cores`
+attribute will be restricted to using only the CPU cores assigned to them. In
+previous versions of Nomad these tasks could also make use of other non-reserved
+CPU cores. However this feature would cause severe performance problems for
+the Linux kernel as the number of tasks increased. Operators are encouraged
+to ensure tasks making use of the `cores` attribute are given sufficient CPU
+resources before upgrading.
 
 #### The `distinct_hosts` Constraint Now Honors Namespaces
 
-Nomad 1.6.4 and 1.5.11 change the behavior of the [`distinct_hosts`][]
-constraint such that namespaces are taken into account when choosing feasible
-clients for allocation placement. The previous, less-expected behavior would
-cause **any** job with the same name running on a client to cause that node to
-be considered infeasible.
+Nomad 1.7.0 changes the behavior of the [`distinct_hosts`][] constraint such that
+namespaces are taken into account when choosing feasible clients for allocation
+placement. The previous, less-expected behavior would cause **any** job with the
+same name running on a client to cause that node to be considered infeasible.
 
 This change allows workloads that formerly did not colocate to be scheduled
 onto the same client when they are in different namespaces. To prevent this,
 consider using [node pools] and constrain the jobs with a [`distinct_property`][]
 constraint over [`${node.pool}`][node_attributes].
+
+#### Loading Binaries from `plugin_dir` Without Configuration
+
+Starting with Nomad 1.7.0, loading plugins that are not referenced in the agent
+configuration file is deprecated. Future versions of Nomad will only load
+plugins that have a corresponding [`plugin`](/nomad/docs/configuration/plugin)
+block in the agent configuration file.
+
+#### Changes to `raw_exec`
+
+The `raw_exec` task driver now enforces memory limits via cgroups on Linux
+platforms similar to the `exec` and `docker` task drivers. The driver does
+support memory [oversubscription][oversub], which can be configured in such a
+way to nearly replicate the previously unlimited behavior.
+
+The `no_cgroups` configuration option no longer has any effect. Previously,
+setting `no_cgroups` would disable the mechanism where Nomad used the freezer
+cgroup to halt the process group of a Task before issuing a kill signal to each
+process. Starting in Nomad 1.7.0 this behavior is always enabled (and a similar
+mechanism has always been enabled on cgroups v2 systems).
 
 ## Nomad 1.6.0
 
@@ -1872,13 +2004,14 @@ deleted and then Nomad 0.3.0 can be launched.
 [lxc]: /nomad/plugins/drivers/community/lxc
 [max_kill_timeout]: /nomad/docs/configuration/client#max_kill_timeout
 [migrate]: /nomad/docs/job-specification/migrate
-[Migrating to Using Workload Identity with Consul]: /nomad/docs/integrations/consul-integration#migrating-to-using-workload-identity-with-consul
-[Migrating to Using Workload Identity with Vault]: /nomad/docs/integrations/vault-integration#migrating-to-using-workload-identity-with-vault
+[Migrating to Using Workload Identity with Consul]: /nomad/docs/integrations/consul/acl#migrating-to-using-workload-identity-with-consul
+[Migrating to Using Workload Identity with Vault]: /nomad/docs/integrations/vault/acl#migrating-to-using-workload-identity-with-vault
 [no_net_raw]: /nomad/docs/upgrade/upgrade-specific#nomad-1-1-0-rc1-1-0-5-0-12-12
 [node drain]: /nomad/docs/upgrade#5-upgrade-clients
 [node pools]: /nomad/docs/concepts/node-pools
 [node_attributes]: /nomad/docs/runtime/interpolation#node-attributes
 [nvidia]: /nomad/plugins/devices/nvidia
+[oversub]: /nomad/docs/job-specification/resources#memory-oversubscription
 [pki]: /vault/docs/secrets/pki
 [plugin-block]: /nomad/docs/configuration/plugin
 [plugins]: /nomad/plugins/drivers/community
@@ -1896,39 +2029,4 @@ deleted and then Nomad 0.3.0 can be launched.
 [Upgrading to Raft Protocol 3]: /nomad/docs/upgrade#upgrading-to-raft-protocol-3
 [validate]: /nomad/docs/commands/job/validate
 [vault_grace]: /nomad/docs/job-specification/template
-[node drain]: /nomad/docs/upgrade#5-upgrade-clients
-[`template.disable_file_sandbox`]: /nomad/docs/configuration/client#template-parameters
-[template_gid]: /nomad/docs/job-specification/template#gid
-[template_uid]: /nomad/docs/job-specification/template#uid
-[pki]: /vault/docs/secrets/pki
-[`volume create`]: /nomad/docs/commands/volume/create
-[`volume register`]: /nomad/docs/commands/volume/register
-[`volume`]: /nomad/docs/job-specification/volume
-[enterprise licensing]: /nomad/docs/enterprise/license
-[`cap_net_raw`]: https://security.stackexchange.com/a/128988
-[`linux capabilities`]: https://docs.docker.com/engine/reference/run/#runtime-privilege-and-linux-capabilities
-[`allow_caps`]: /nomad/docs/drivers/docker#allow_caps
-[`extra_hosts`]: /nomad/docs/drivers/docker#extra_hosts
-[no_net_raw]: /nomad/docs/upgrade/upgrade-specific#nomad-1-1-0-rc1-1-0-5-0-12-12
-[allow_caps_exec]: /nomad/docs/drivers/exec#allow_caps
-[allow_caps_java]: /nomad/docs/drivers/java#allow_caps
-[cap_add_exec]: /nomad/docs/drivers/exec#cap_add
-[cap_drop_exec]: /nomad/docs/drivers/exec#cap_drop
-[`log_file`]: /nomad/docs/configuration#log_file
-[Upgrading to Raft Protocol 3]: /nomad/docs/upgrade#upgrading-to-raft-protocol-3
-[`Local`]: /consul/docs/security/acl/acl-tokens#token-attributes
-[anon_token]: /consul/docs/security/acl/acl-tokens#special-purpose-tokens
-[consul_acl]: https://github.com/hashicorp/consul/issues/7414
-[kill_timeout]: /nomad/docs/job-specification/task#kill_timeout
-[max_kill_timeout]: /nomad/docs/configuration/client#max_kill_timeout
-[alloc_overlap]: https://github.com/hashicorp/nomad/issues/10440
-[gh_10446]: https://github.com/hashicorp/nomad/pull/10446#issuecomment-1224833906
-[gh_issue]: https://github.com/hashicorp/nomad/issues/new/choose
-[upgrade process]: /nomad/docs/upgrade#upgrade-process
-[landlock]: https://docs.kernel.org/userspace-api/landlock.html
-[artifact_fs_isolation]: /nomad/docs/configuration/client#disable_filesystem_isolation
-[decompression_file_count_limit]: /nomad/docs/configuration/client#decompression_file_count_limit
-[decompression_size_limit]: /nomad/docs/configuration/client#decompression_size_limit
-[artifact_env]: /nomad/docs/configuration/client#set_environment_variables
-[dangling_container_reconciliation]: /nomad/docs/drivers/docker#enabled
-[hard_guide]: /nomad/docs/install/production/requirements#hardening-nomad
+[Workload Identity]: /nomad/docs/concepts/workload-identity
