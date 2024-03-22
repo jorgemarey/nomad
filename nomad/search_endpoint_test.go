@@ -20,7 +20,6 @@ import (
 	"github.com/hashicorp/nomad/testutil"
 	"github.com/shoenig/test/must"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/slices"
 )
 
 const jobIndex = 1000
