@@ -13,13 +13,27 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/distribution/reference"
 	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/cli/cli/config/types"
-	"github.com/docker/distribution/reference"
 	registrytypes "github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/registry"
 	docker "github.com/fsouza/go-dockerclient"
 )
+
+func applyDefaultRegistry(image, defaultRegistry string) (string, error) {
+	if defaultRegistry == "" {
+		return image, nil
+	}
+	ref, err := reference.ParseNormalizedNamed(image)
+	if err != nil {
+		return image, fmt.Errorf("failed to parse image: %v", err)
+	}
+	if domain := reference.Domain(ref); domain == "docker.io" {
+		return strings.Replace(ref.String(), "docker.io", defaultRegistry, 1), nil
+	}
+	return image, nil
+}
 
 func parseDockerImage(image string) (repo, tag string) {
 	repo, tag = docker.ParseRepositoryTag(image)

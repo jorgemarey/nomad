@@ -310,6 +310,15 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 
 	driverConfig.Image = strings.TrimPrefix(driverConfig.Image, "https://")
 
+	if driverConfig.LoadImage == "" {
+		image, err := applyDefaultRegistry(driverConfig.Image, d.config.DefaultRegistry)
+		if err != nil {
+			d.logger.Warn("failed to apply default registry", "image", driverConfig.Image, "error", err)
+		} else {
+			driverConfig.Image = image
+		}
+	}
+
 	handle := drivers.NewTaskHandle(taskHandleVersion)
 	handle.Config = cfg
 
