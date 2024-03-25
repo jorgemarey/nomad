@@ -551,6 +551,7 @@ func (a *ACL) AllowVariableSearch(ns string) bool {
 	if a.aclsDisabled || a.management {
 		return true
 	}
+
 	if ns == "*" {
 		return a.variables.Len() > 0 || a.wildcardVariables.Len() > 0
 	}
