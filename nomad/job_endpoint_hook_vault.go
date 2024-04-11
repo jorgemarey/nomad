@@ -31,16 +31,15 @@ func (h jobVaultHook) Validate(job *structs.Job) ([]error, error) {
 	}
 
 	requiresToken := false
-	for _, tg := range vaultBlocks {
-		for _, vaultBlock := range tg {
+	for groupName, tg := range vaultBlocks {
+		for taskName, vaultBlock := range tg {
 			vconf := h.srv.config.VaultConfigs[vaultBlock.Cluster]
 			if !vconf.IsEnabled() {
 				return nil, fmt.Errorf("Vault %q not enabled but used in the job",
 					vaultBlock.Cluster)
 			}
-			if vconf.DefaultIdentity == nil && !vconf.AllowsUnauthenticated() {
-				requiresToken = true
-			}
+			widProvided := hasWid(job, groupName, taskName, vaultBlock)
+			requiresToken = requiresToken || (!widProvided && !vconf.AllowsUnauthenticated())
 		}
 	}
 
@@ -112,4 +111,23 @@ func (jobVaultHook) validatePolicies(
 	}
 
 	return nil
+}
+
+func hasWid(job *structs.Job, groupName, taskName string, vaultBlock *structs.Vault) bool {
+	for _, group := range job.TaskGroups {
+		if group.Name != groupName {
+			continue
+		}
+		for _, task := range group.Tasks {
+			if task.Name != taskName {
+				continue
+			}
+			for _, wid := range task.Identities {
+				if wid.Name == vaultBlock.IdentityName() {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

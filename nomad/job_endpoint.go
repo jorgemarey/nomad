@@ -240,33 +240,6 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 		return err
 	}
 
-	// helper function that checks if the Consul token supplied with the job has
-	// sufficient ACL permissions for:
-	//   - registering services into namespace of each group
-	//   - reading kv store of each group
-	//   - establishing consul connect services
-	checkConsulToken := func(usages map[string]*structs.ConsulUsage) error {
-		if j.srv.config.GetDefaultConsul().AllowsUnauthenticated() {
-			// if consul.allow_unauthenticated is enabled (which is the default)
-			// just let the job through without checking anything
-			return nil
-		}
-
-		ctx := context.Background()
-		for namespace, usage := range usages {
-			if err := j.srv.consulACLs.CheckPermissions(ctx, namespace, usage, args.Job.ConsulToken); err != nil {
-				return fmt.Errorf("job-submitter consul token denied: %w", err)
-			}
-		}
-
-		return nil
-	}
-
-	// Enforce the job-submitter has a Consul token with necessary ACL permissions.
-	if err := checkConsulToken(args.Job.ConsulUsages()); err != nil {
-		return err
-	}
-
 	// Create or Update Consul Configuration Entries defined in the job. For now
 	// Nomad only supports Configuration Entries types
 	// - "ingress-gateway" for managing Ingress Gateways
