@@ -44,7 +44,7 @@ PROTO_COMPARE_TAG ?= v1.0.3$(if $(findstring ent,$(GO_TAGS)),+ent,)
 
 # LAST_RELEASE is the git sha of the latest release corresponding to this branch. main should have the latest
 # published release, and release branches should point to the latest published release in the X.Y release line.
-LAST_RELEASE ?= v1.7.5
+LAST_RELEASE ?= v1.7.6
 
 default: help
 
@@ -115,7 +115,10 @@ pkg/windows_%/nomad: GO_TAGS += timetzdata
 # Define package targets for each of the build targets we actually have on this system
 define makePackageTarget
 
-pkg/$(1).zip: pkg/$(1)/nomad
+pkg/$(1)/LICENSE.txt:
+	@cp LICENSE pkg/$(1)/LICENSE.txt
+
+pkg/$(1).zip: pkg/$(1)/nomad pkg/$(1)/LICENSE.txt
 	@echo "==> Packaging for $(1)..."
 	@zip -j pkg/$(1).zip pkg/$(1)/*
 

@@ -12,6 +12,7 @@ import (
 	capi "github.com/hashicorp/consul/api"
 	"github.com/hashicorp/nomad/api"
 	"github.com/hashicorp/nomad/ci"
+	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1203,14 +1204,15 @@ func TestParse(t *testing.T) {
 											LocalServicePort: 8080,
 											Upstreams: []*api.ConsulUpstream{
 												{
-													DestinationName:     "other-service",
-													DestinationPeer:     "10.0.0.1:6379",
-													DestinationType:     "tcp",
-													LocalBindPort:       4567,
-													LocalBindAddress:    "0.0.0.0",
-													LocalBindSocketPath: "/var/run/testsocket.sock",
-													LocalBindSocketMode: "0666",
-													Datacenter:          "dc1",
+													DestinationName:      "other-service",
+													DestinationPeer:      "10.0.0.1:6379",
+													DestinationPartition: "infra",
+													DestinationType:      "tcp",
+													LocalBindPort:        4567,
+													LocalBindAddress:     "0.0.0.0",
+													LocalBindSocketPath:  "/var/run/testsocket.sock",
+													LocalBindSocketMode:  "0666",
+													Datacenter:           "dc1",
 
 													MeshGateway: &api.ConsulMeshGateway{
 														Mode: "local",
@@ -1676,6 +1678,23 @@ func TestParse(t *testing.T) {
 											Hosts: []string{
 												"2.2.2.2:8080",
 											},
+											TLS: &api.ConsulGatewayTLSConfig{
+												SDS: &api.ConsulGatewayTLSSDSConfig{
+													ClusterName:  "foo",
+													CertResource: "bar",
+												},
+											},
+											RequestHeaders: &api.ConsulHTTPHeaderModifiers{
+												Add: map[string]string{
+													"test": "testvalue",
+												},
+											},
+											ResponseHeaders: &api.ConsulHTTPHeaderModifiers{
+												Remove: []string{"test2"},
+											},
+											MaxConnections:        pointer.Of(uint32(5120)),
+											MaxPendingRequests:    pointer.Of(uint32(512)),
+											MaxConcurrentRequests: pointer.Of(uint32(2048)),
 										}},
 									},
 									},

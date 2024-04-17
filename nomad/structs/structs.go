@@ -669,6 +669,10 @@ type NodeUpdateDrainRequest struct {
 	// Meta is user-provided metadata relating to the drain operation
 	Meta map[string]string
 
+	// UpdatedBy represents the AuthenticatedIdentity of the request, so that we
+	// can record it in the LastDrain data without re-authenticating in the FSM.
+	UpdatedBy string
+
 	WriteRequest
 }
 
@@ -2860,7 +2864,7 @@ func (d *DNSConfig) IsZero() bool {
 	if d == nil {
 		return true
 	}
-	return len(d.Options) == 0 || len(d.Searches) == 0 || len(d.Servers) == 0
+	return len(d.Options) == 0 && len(d.Searches) == 0 && len(d.Servers) == 0
 }
 
 // NetworkResource is used to represent available network
@@ -4480,8 +4484,10 @@ type Job struct {
 	SubmitTime int64
 
 	// Raft Indexes
-	CreateIndex    uint64
-	ModifyIndex    uint64
+	CreateIndex uint64
+	// ModifyIndex is the index at which any state of the job last changed
+	ModifyIndex uint64
+	// JobModifyIndex is the index at which the job *specification* last changed
 	JobModifyIndex uint64
 }
 
@@ -11412,6 +11418,9 @@ func NewIdentityClaims(job *Job, alloc *Allocation, wihandle *WIHandle, wid *Wor
 	switch wihandle.WorkloadType {
 	case WorkloadTypeService:
 		serviceName := wihandle.WorkloadIdentifier
+		if wihandle.InterpolatedWorkloadIdentifier != "" {
+			serviceName = wihandle.InterpolatedWorkloadIdentifier
+		}
 		claims.ServiceName = serviceName
 
 		// Find task name if this is a task service.
