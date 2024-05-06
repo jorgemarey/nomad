@@ -257,6 +257,9 @@ type ClientConfig struct {
 	// speed.
 	NetworkSpeed int `hcl:"network_speed"`
 
+	// DisableDmidecode is used to disable dmidecode usage for CPU calculation
+	DisableDmidecode bool `hcl:"disable_dmidecode"`
+
 	// CpuCompute is used to override any detected or default total CPU compute.
 	CpuCompute int `hcl:"cpu_total_compute"`
 
@@ -2252,6 +2255,9 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 	}
 	if b.NetworkSpeed != 0 {
 		result.NetworkSpeed = b.NetworkSpeed
+	}
+	if b.DisableDmidecode {
+		result.DisableDmidecode = b.DisableDmidecode
 	}
 	if b.CpuCompute != 0 {
 		result.CpuCompute = b.CpuCompute

@@ -736,6 +736,9 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	if agentConfig.Client.NetworkSpeed != 0 {
 		conf.NetworkSpeed = agentConfig.Client.NetworkSpeed
 	}
+	if agentConfig.Client.DisableDmidecode {
+		conf.DisableDmidecode = agentConfig.Client.DisableDmidecode
+	}
 	if agentConfig.Client.CpuCompute != 0 {
 		conf.CpuCompute = agentConfig.Client.CpuCompute
 	}

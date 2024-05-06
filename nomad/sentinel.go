@@ -41,6 +41,10 @@ func (s *Server) enforceScope(override bool, scope string, dataCB sentinelDataCa
 		data = dataCB()
 	}
 
+	// TODO: fix for next release
+	// This command executes the policy file at the path specified by POLICY. In addition to a path to a policy, POLICY can reference a label of a policy entry in the configuration.
+	// https://developer.hashicorp.com/sentinel/docs/configuration#policies
+
 	// Evaluate the policy
 	result := s.sentinel.Eval(prepared, &sentinel.EvalOpts{
 		Data:     data,
@@ -82,9 +86,9 @@ func prepareSentinelPolicies(sent *sentinel.Sentinel, policies []*structs.Sentin
 	var out []*sentinel.Policy
 	for _, inp := range policies {
 		p := &sentinel.Policy{
-			Name: inp.Name,
+			Name:  inp.Name,
 			Level: sentinel.EnforcementLevel(inp.EnforcementLevel),
-			Code: inp.Policy,
+			Code:  inp.Policy,
 		}
 
 		out = append(out, p)

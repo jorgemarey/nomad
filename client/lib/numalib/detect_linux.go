@@ -17,14 +17,16 @@ import (
 )
 
 // PlatformScanners returns the set of SystemScanner for Linux.
-func PlatformScanners() []SystemScanner {
-	return []SystemScanner{
-		new(Sysfs),
-		new(Smbios),
-		new(Cgroups1),
-		new(Cgroups2),
-		new(Fallback),
+func PlatformScanners(disableDmidecode bool) []SystemScanner {
+	scanners := []SystemScanner{new(Sysfs)}
+	if !disableDmidecode {
+		scanners = append(scanners, new(Smbios))
 	}
+	scanners = append(scanners, new(Cgroups1))
+	scanners = append(scanners, new(Cgroups2))
+	scanners = append(scanners, new(Fallback))
+
+	return scanners
 }
 
 const (

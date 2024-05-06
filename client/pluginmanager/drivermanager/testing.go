@@ -26,7 +26,7 @@ type testManager struct {
 }
 
 var (
-	topology = numalib.Scan(numalib.PlatformScanners())
+	topology = numalib.Scan(numalib.PlatformScanners(false))
 )
 
 func TestDriverManager(t *testing.T) Manager {
