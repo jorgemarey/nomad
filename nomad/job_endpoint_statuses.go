@@ -71,11 +71,8 @@ func (j *Job) Statuses(
 		return err
 	}
 	// since the state index we're using doesn't include namespace,
-	// explicitly add the user-provided ns to our filter if needed.
-	// (allowableNamespaces will be nil if the caller sent a mgmt token)
-	if allowableNamespaces == nil &&
-		namespace != "" &&
-		namespace != structs.AllNamespacesSentinel {
+	// explicitly add the user-provided ns to our
+	if namespace != "" && namespace != structs.AllNamespacesSentinel {
 		allowableNamespaces = map[string]bool{
 			namespace: true,
 		}
