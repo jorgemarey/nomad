@@ -202,6 +202,7 @@ func NewAllocReconciler(logger log.Logger, allocUpdateFn allocUpdateType, batch 
 	jobID string, job *structs.Job, deployment *structs.Deployment,
 	existingAllocs []*structs.Allocation, taintedNodes map[string]*structs.Node, evalID string,
 	evalPriority int, supportsDisconnectedClients bool, opts ...AllocReconcilerOption) *allocReconciler {
+
 	ar := &allocReconciler{
 		logger:                      logger.Named("reconciler"),
 		allocUpdateFn:               allocUpdateFn,

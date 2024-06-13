@@ -29,10 +29,6 @@ func (s *Server) autopilotStateExt(_ *autopilot.State, _ *structs.OperatorHealth
 	return nil
 }
 
-func (s *Server) autopilotStateExt(_ *autopilot.State, _ *structs.OperatorHealthReply) error {
-	return nil
-}
-
 // autopilotConfigExt returns the autopilot-enterprise.Config extensions needed
 // for ENT feature support, but this is the empty OSS implementation.
 func autopilotConfigExt(c *structs.AutopilotConfig) interface{} {

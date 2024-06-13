@@ -11363,19 +11363,6 @@ func (a *Allocation) PreventRescheduleOnDisconnect() bool {
 	return false
 }
 
-// PreventRescheduleOnLost determines if an alloc allows to have a replacement
-// when lost.
-func (a *Allocation) PreventRescheduleOnLost() bool {
-	if a.Job != nil {
-		tg := a.Job.LookupTaskGroup(a.TaskGroup)
-		if tg != nil {
-			return tg.PreventRescheduleOnLost
-		}
-	}
-
-	return false
-}
-
 // NextDelay returns a duration after which the allocation can be rescheduled.
 // It is calculated according to the delay function and previous reschedule attempts.
 func (a *Allocation) NextDelay() time.Duration {

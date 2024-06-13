@@ -26,13 +26,14 @@ require (
 	github.com/containernetworking/cni v1.1.2
 	github.com/coreos/go-iptables v0.6.0
 	github.com/creack/pty v1.1.18
+	github.com/distribution/reference v0.5.0
 	github.com/docker/cli v24.0.6+incompatible
-	github.com/docker/distribution v2.8.3+incompatible
 	github.com/docker/docker v26.0.1+incompatible
 	github.com/docker/go-units v0.5.0
 	github.com/dustin/go-humanize v1.0.1
 	github.com/elazarl/go-bindata-assetfs v1.0.1
 	github.com/fatih/color v1.16.0
+	github.com/felixge/httpsnoop v1.0.3
 	github.com/fsouza/go-dockerclient v1.10.1
 	github.com/go-jose/go-jose/v3 v3.0.3
 	github.com/golang-jwt/jwt/v5 v5.0.0
@@ -128,6 +129,7 @@ require (
 	go.etcd.io/bbolt v1.3.9
 	go.uber.org/goleak v1.2.1
 	golang.org/x/crypto v0.22.0
+	golang.org/x/exp v0.0.0-20231006140011-7918f672742d
 	golang.org/x/sync v0.6.0
 	golang.org/x/sys v0.19.0
 	golang.org/x/time v0.3.0
@@ -137,8 +139,6 @@ require (
 	gopkg.in/tomb.v2 v2.0.0-20140626144623-14b3d72120e8
 	oss.indeed.com/go/libtime v1.6.0
 )
-
-require github.com/docker/distribution v2.8.3+incompatible // indirect
 
 require (
 	cloud.google.com/go v0.110.7 // indirect
@@ -189,12 +189,11 @@ require (
 	github.com/denverdino/aliyungo v0.0.0-20190125010748-a747050bb1ba // indirect
 	github.com/digitalocean/godo v1.10.0 // indirect
 	github.com/dimchansky/utfbom v1.1.0 // indirect
-	github.com/distribution/reference v0.5.0 // indirect
+	github.com/docker/distribution v2.8.3+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.7.0 // indirect
 	github.com/docker/go-connections v0.4.0 // indirect
 	github.com/docker/go-metrics v0.0.1 // indirect
 	github.com/docker/libtrust v0.0.0-20160708172513-aabc10ec26b7 // indirect
-	github.com/felixge/httpsnoop v1.0.3 // indirect
 	github.com/go-jose/go-jose/v4 v4.0.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
@@ -282,7 +281,6 @@ require (
 	github.com/vmware/govmomi v0.18.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.3 // indirect
 	go.opencensus.io v0.24.0 // indirect
-	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
 	golang.org/x/mod v0.13.0 // indirect
 	golang.org/x/net v0.24.0 // indirect
 	golang.org/x/oauth2 v0.18.0 // indirect
