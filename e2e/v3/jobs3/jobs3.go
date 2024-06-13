@@ -37,14 +37,19 @@ type Submission struct {
 	timeout       time.Duration
 	verbose       bool
 	detach        bool
+	dispatcher    bool
 
 	// jobspec mutator funcs
 	mutators []func(string) string
+	// preCleanup funcs to run before deregistering the job
+	preCleanup []func(*Submission)
 
 	vars         *set.Set[string] // key=value
 	waitComplete *set.Set[string] // groups to wait until complete
 	inNamespace  string
 	authToken    string
+
+	legacyConsulToken string
 }
 
 func (sub *Submission) queryOptions() *nomadapi.QueryOptions {
@@ -52,6 +57,45 @@ func (sub *Submission) queryOptions() *nomadapi.QueryOptions {
 		Namespace: sub.inNamespace,
 		AuthToken: sub.authToken,
 	}
+}
+
+func (sub *Submission) Evals() []*nomadapi.Evaluation {
+	sub.t.Helper()
+	evals, _, err := sub.nomadClient.Jobs().
+		Evaluations(sub.JobID(), sub.queryOptions())
+	must.NoError(sub.t, err)
+	return evals
+}
+
+func (sub *Submission) Allocs() []*nomadapi.AllocationListStub {
+	sub.t.Helper()
+	allocs, _, err := sub.nomadClient.Jobs().
+		Allocations(sub.jobID, true, sub.queryOptions())
+	must.NoError(sub.t, err, must.Sprint("could not get allocs"))
+	return allocs
+}
+
+type TaskEvents struct {
+	Group  string
+	Task   string
+	Events []*nomadapi.TaskEvent
+}
+
+// AllocEvents returns a map of TaskEvents with alloc ID keys
+func (sub *Submission) AllocEvents() map[string]TaskEvents {
+	sub.t.Helper()
+	allocs := sub.Allocs()
+	events := make(map[string]TaskEvents)
+	for _, alloc := range allocs {
+		for task, state := range alloc.TaskStates {
+			events[alloc.ID] = TaskEvents{
+				Group:  alloc.TaskGroup,
+				Task:   task,
+				Events: state.Events,
+			}
+		}
+	}
+	return events
 }
 
 type Logs struct {
@@ -161,9 +205,13 @@ func (sub *Submission) logf(msg string, args ...any) {
 }
 
 func (sub *Submission) cleanup() {
+	if os.Getenv("NOMAD_TEST_SKIPCLEANUP") == "1" {
+		return
+	}
 	if sub.noCleanup {
 		return
 	}
+	sub.noCleanup = true // so this isn't attempted more than once
 
 	// deregister the job that was submitted
 	jobsAPI := sub.nomadClient.Jobs()
@@ -254,6 +302,9 @@ func (sub *Submission) run() {
 	if job.Type == nil {
 		job.Type = pointer.Of("service")
 	}
+	if sub.legacyConsulToken != "" {
+		job.ConsulToken = pointer.Of(sub.legacyConsulToken)
+	}
 
 	writeOpts := &nomadapi.WriteOptions{
 		Namespace: sub.inNamespace,
@@ -264,6 +315,23 @@ func (sub *Submission) run() {
 	sub.logf("register (%s) job: %q", *job.Type, sub.jobID)
 	regResp, _, err := jobsAPI.Register(job, writeOpts)
 	must.NoError(sub.t, err)
+
+	if !sub.noCleanup {
+		sub.t.Cleanup(sub.cleanup)
+	}
+
+	// pre-cleanup callbacks run before main cleanup (reverse order of their
+	// addition with t.Cleanup())
+	for _, f := range sub.preCleanup {
+		sub.t.Cleanup(func() {
+			f(sub)
+		})
+	}
+
+	if sub.dispatcher {
+		return
+	}
+
 	evalID := regResp.EvalID
 
 	queryOpts := &nomadapi.QueryOptions{
@@ -303,6 +371,22 @@ EVAL:
 			must.Unreachable(sub.t, must.Sprintf("eval failed: %s, triggered by: %s, failed allocs: %d",
 				eval.StatusDescription, eval.TriggeredBy, len(eval.FailedTGAllocs)))
 		case nomadapi.EvalStatusCancelled:
+			sub.logf("dumping information about a cancelled evaluation")
+			sub.logf("\tJobID: %s", eval.JobID)
+			sub.logf("\tNodeID: %s", eval.NodeID)
+			sub.logf("\tDeploymentID: %s", eval.DeploymentID)
+			sub.logf("\tType: %s", eval.Type)
+			sub.logf("\tTriggeredBy: %s", eval.TriggeredBy)
+			sub.logf("\tStatus: %s %q", eval.Status, eval.StatusDescription)
+			sub.logf("\tPriority: %d", eval.Priority)
+			sub.logf("\tBlockedEval: %s", eval.BlockedEval)
+			sub.logf("\tClassEligibility: %v", eval.ClassEligibility)
+			sub.logf("\tQuotaLimitReached: %s", eval.QuotaLimitReached)
+			for group, metric := range eval.FailedTGAllocs {
+				sub.logf("\t[%s]: %v", group, metric)
+			}
+			sub.logf("eval dump complete")
+
 			must.Unreachable(sub.t, must.Sprintf("eval canceled: %s", eval.StatusDescription))
 		default:
 			time.Sleep(1 * time.Second)
@@ -445,6 +529,7 @@ func initialize(t *testing.T, filename string) *Submission {
 		timeout:      20 * time.Second,
 		vars:         set.New[string](0),
 		waitComplete: set.New[string](0),
+		preCleanup:   []func(*Submission){defaultPreCleanup},
 	}
 }
 
@@ -506,6 +591,48 @@ func WaitComplete(group string) Option {
 	}
 }
 
+// PreCleanup runs a function after run has completed, before cleanup.
+func PreCleanup(cb func(*Submission)) Option {
+	return func(sub *Submission) {
+		sub.preCleanup = append(sub.preCleanup, cb)
+	}
+}
+
+// Dispatcher indicates the job is the parent for dispatched jobs, so we
+// shouldn't wait for evals or deployments
+func Dispatcher() Option {
+	return func(sub *Submission) {
+		sub.dispatcher = true
+	}
+}
+
+// defaultPreCleanup looks for blocked evals, alloc errors, and task events
+// only when the test has failed.
+func defaultPreCleanup(job *Submission) {
+	if !job.t.Failed() {
+		return
+	}
+
+	for _, eval := range job.Evals() {
+		for group, block := range eval.FailedTGAllocs {
+			job.t.Logf("eval for tg '%s' failed; constraints: %+v",
+				group, block.ConstraintFiltered)
+		}
+	}
+
+	for _, alloc := range job.Allocs() {
+		job.t.Logf("tg '%s' alloc status '%s': %s",
+			alloc.TaskGroup, alloc.ClientStatus, alloc.ClientDescription)
+	}
+
+	for _, ae := range job.AllocEvents() {
+		for _, event := range ae.Events {
+			job.t.Logf("tg '%s' task '%s' event: %s",
+				ae.Group, ae.Task, event.DisplayMessage)
+		}
+	}
+}
+
 // SkipEvalComplete will skip waiting for the evaluation(s) to be complete.
 //
 // Implies SkipDeploymentHealthy.
@@ -517,4 +644,10 @@ func SkipEvalComplete() Option {
 // healthy.
 func SkipDeploymentHealthy() Option {
 	panic("not yet implemented")
+}
+
+func LegacyConsulToken(token string) Option {
+	return func(c *Submission) {
+		c.legacyConsulToken = token
+	}
 }

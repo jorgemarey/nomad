@@ -13,13 +13,14 @@ import (
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
-	"github.com/hashicorp/go-msgpack/codec"
+	"github.com/hashicorp/go-msgpack/v2/codec"
 	version "github.com/hashicorp/go-version"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/serf/serf"
 
 	cstructs "github.com/hashicorp/nomad/client/structs"
 	"github.com/hashicorp/nomad/helper/snapshot"
+	"github.com/hashicorp/nomad/nomad/state"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
@@ -368,8 +369,7 @@ func (op *Operator) AutopilotGetConfiguration(args *structs.GenericRequest, repl
 	aclObj, err := op.srv.ResolveACL(args)
 	if err != nil {
 		return err
-	}
-	if aclObj != nil && !aclObj.AllowOperatorRead() {
+	} else if !aclObj.AllowOperatorRead() {
 		return structs.ErrPermissionDenied
 	}
 
@@ -403,8 +403,7 @@ func (op *Operator) AutopilotSetConfiguration(args *structs.AutopilotSetConfigRe
 	aclObj, err := op.srv.ResolveACL(args)
 	if err != nil {
 		return err
-	}
-	if aclObj != nil && !aclObj.AllowOperatorWrite() {
+	} else if !aclObj.AllowOperatorWrite() {
 		return structs.ErrPermissionDenied
 	}
 
@@ -446,8 +445,7 @@ func (op *Operator) ServerHealth(args *structs.GenericRequest, reply *structs.Op
 	aclObj, err := op.srv.ResolveACL(args)
 	if err != nil {
 		return err
-	}
-	if aclObj != nil && !aclObj.AllowOperatorRead() {
+	} else if !aclObj.AllowOperatorRead() {
 		return structs.ErrPermissionDenied
 	}
 
@@ -481,7 +479,7 @@ func (op *Operator) SchedulerSetConfiguration(args *structs.SchedulerSetConfigRe
 	aclObj, err := op.srv.ResolveACL(args)
 	if err != nil {
 		return err
-	} else if aclObj != nil && !aclObj.AllowOperatorWrite() {
+	} else if !aclObj.AllowOperatorWrite() {
 		return structs.ErrPermissionDenied
 	}
 
@@ -535,7 +533,7 @@ func (op *Operator) SchedulerGetConfiguration(args *structs.GenericRequest, repl
 	aclObj, err := op.srv.ResolveACL(args)
 	if err != nil {
 		return err
-	} else if aclObj != nil && !aclObj.AllowOperatorRead() {
+	} else if !aclObj.AllowOperatorRead() {
 		return structs.ErrPermissionDenied
 	}
 
@@ -806,15 +804,14 @@ func (op *Operator) UpgradeCheckVaultWorkloadIdentity(
 	aclObj, err := op.srv.ResolveACL(args)
 	if err != nil {
 		return err
-	} else if aclObj != nil && !aclObj.AllowOperatorRead() {
+	} else if !aclObj.AllowOperatorRead() {
 		return structs.ErrPermissionDenied
 	}
 
-	state := op.srv.fsm.State()
 	ws := memdb.NewWatchSet()
 
 	// Check for jobs that use Vault but don't have an identity for Vault.
-	jobsIter, err := state.Jobs(ws)
+	jobsIter, err := op.srv.State().Jobs(ws, state.SortDefault)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve jobs: %w", err)
 	}
@@ -847,7 +844,7 @@ func (op *Operator) UpgradeCheckVaultWorkloadIdentity(
 	reply.JobsWithoutVaultIdentity = jobs
 
 	// Find nodes that don't support workload identities for Vault.
-	nodesIter, err := state.Nodes(ws)
+	nodesIter, err := op.srv.State().Nodes(ws)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve nodes: %w", err)
 	}
@@ -865,7 +862,7 @@ func (op *Operator) UpgradeCheckVaultWorkloadIdentity(
 	reply.OutdatedNodes = nodes
 
 	// Retrieve Vault tokens that were created by Nomad servers.
-	vaultTokensIter, err := state.VaultAccessors(ws)
+	vaultTokensIter, err := op.srv.State().VaultAccessors(ws)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve Vault token accessors: %w", err)
 	}

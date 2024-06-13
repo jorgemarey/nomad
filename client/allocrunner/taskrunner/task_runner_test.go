@@ -27,6 +27,7 @@ import (
 	"github.com/hashicorp/nomad/client/config"
 	consulclient "github.com/hashicorp/nomad/client/consul"
 	"github.com/hashicorp/nomad/client/devicemanager"
+	"github.com/hashicorp/nomad/client/lib/cgroupslib"
 	"github.com/hashicorp/nomad/client/lib/proclib"
 	"github.com/hashicorp/nomad/client/pluginmanager/drivermanager"
 	regMock "github.com/hashicorp/nomad/client/serviceregistration/mock"
@@ -100,14 +101,22 @@ func testTaskRunnerConfig(t *testing.T, alloc *structs.Allocation, taskName stri
 	}
 
 	// Create the alloc dir + task dir
-	allocDir := allocdir.NewAllocDir(logger, clientConf.AllocDir, alloc.ID)
+	allocDir := allocdir.NewAllocDir(logger, clientConf.AllocDir, clientConf.AllocMountsDir, alloc.ID)
 	if err := allocDir.Build(); err != nil {
 		cleanup()
 		t.Fatalf("error building alloc dir: %v", err)
 	}
 	taskDir := allocDir.NewTaskDir(taskName)
 
+	// Create cgroup
+	f := cgroupslib.Factory(alloc.ID, taskName, false)
+	must.NoError(t, f.Setup())
+
 	trCleanup := func() {
+		// destroy and remove the cgroup
+		_ = f.Kill()
+		_ = f.Teardown()
+		// destroy the alloc dir
 		if err := allocDir.Destroy(); err != nil {
 			t.Logf("error destroying alloc dir: %v", err)
 		}
@@ -189,6 +198,7 @@ func runTestTaskRunner(t *testing.T, alloc *structs.Allocation, taskName string)
 	}
 
 	tr, err := NewTaskRunner(config)
+
 	require.NoError(t, err)
 	go tr.Run()
 
@@ -2498,7 +2508,7 @@ func TestTaskRunner_TemplateWorkloadIdentity(t *testing.T) {
 	}
 	conf.AllocHookResources.SetConsulTokens(map[string]map[string]*consulapi.ACLToken{
 		structs.ConsulDefaultCluster: {
-			task.Consul.IdentityName(): {SecretID: "consul-task-token"},
+			task.Consul.IdentityName() + "/web": {SecretID: "consul-task-token"},
 		},
 	})
 	t.Cleanup(cleanup)

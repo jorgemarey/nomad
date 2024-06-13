@@ -13,7 +13,7 @@ import (
 	"github.com/hashicorp/nomad/api"
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper/pointer"
-	"github.com/stretchr/testify/require"
+	"github.com/shoenig/test/must"
 )
 
 // consts copied from nomad/structs package to keep jobspec isolated from rest of nomad
@@ -140,8 +140,10 @@ func TestParse(t *testing.T) {
 					},
 
 					{
-						Name:  stringToPtr("binsl"),
-						Count: intToPtr(5),
+						Name:                      stringToPtr("binsl"),
+						Count:                     intToPtr(5),
+						StopAfterClientDisconnect: timeToPtr(120 * time.Second),
+						MaxClientDisconnect:       timeToPtr(120 * time.Hour),
 						Constraints: []*api.Constraint{
 							{
 								LTarget: "kernel.os",
@@ -221,8 +223,12 @@ func TestParse(t *testing.T) {
 								},
 							},
 						},
-						StopAfterClientDisconnect: timeToPtr(120 * time.Second),
-						MaxClientDisconnect:       timeToPtr(120 * time.Hour),
+						Disconnect: &api.DisconnectStrategy{
+							StopOnClientAfter: timeToPtr(120 * time.Second),
+							LostAfter:         timeToPtr(120 * time.Hour),
+							Replace:           boolToPtr(true),
+							Reconcile:         stringToPtr("best_score"),
+						},
 						ReschedulePolicy: &api.ReschedulePolicy{
 							Interval: timeToPtr(12 * time.Hour),
 							Attempts: intToPtr(5),
@@ -1464,6 +1470,15 @@ func TestParse(t *testing.T) {
 										DestinationName: "upstream2",
 										LocalBindPort:   2002,
 									}},
+									TransparentProxy: &api.ConsulTransparentProxy{
+										UID:                  "101",
+										OutboundPort:         15001,
+										ExcludeInboundPorts:  []string{"www", "9000"},
+										ExcludeOutboundPorts: []uint16{443, 80},
+										ExcludeOutboundCIDRs: []string{"10.0.0.0/8"},
+										ExcludeUIDs:          []string{"10", "1001"},
+										NoDNS:                true,
+									},
 									Config: map[string]interface{}{
 										"foo": "bar",
 									},
@@ -1934,14 +1949,14 @@ func TestParse(t *testing.T) {
 			t.Logf("Testing parse: %s", tc.File)
 
 			path, err := filepath.Abs(filepath.Join("./test-fixtures", tc.File))
-			require.NoError(t, err)
+			must.NoError(t, err)
 
 			actual, err := ParseFile(path)
 			if tc.Err {
-				require.Error(t, err)
+				must.Error(t, err)
 			} else {
-				require.NoError(t, err)
-				require.Equal(t, tc.Result, actual)
+				must.NoError(t, err)
+				must.Eq(t, tc.Result, actual)
 			}
 		})
 	}
@@ -2012,15 +2027,15 @@ func TestPortParsing(t *testing.T) {
 	var job *api.Job
 
 	path, err = filepath.Abs(filepath.Join("./test-fixtures", "parse-ports.hcl"))
-	require.NoError(t, err, "Can't get absolute path for file: parse-ports.hcl")
+	must.NoError(t, err, must.Sprint("Can't get absolute path for file: parse-ports.hcl"))
 
 	job, err = ParseFile(path)
-	require.NoError(t, err, "cannot parse job")
-	require.NotNil(t, job)
-	require.Len(t, job.TaskGroups, 1)
-	require.Len(t, job.TaskGroups[0].Networks, 1)
-	require.Len(t, job.TaskGroups[0].Networks[0].ReservedPorts, 1)
-	require.Len(t, job.TaskGroups[0].Networks[0].DynamicPorts, 1)
-	require.Equal(t, 9000, job.TaskGroups[0].Networks[0].ReservedPorts[0].Value)
-	require.Equal(t, 0, job.TaskGroups[0].Networks[0].DynamicPorts[0].Value)
+	must.NoError(t, err)
+	must.NotNil(t, job)
+	must.Len(t, 1, job.TaskGroups)
+	must.Len(t, 1, job.TaskGroups[0].Networks)
+	must.Len(t, 1, job.TaskGroups[0].Networks[0].ReservedPorts)
+	must.Len(t, 1, job.TaskGroups[0].Networks[0].DynamicPorts)
+	must.Eq(t, 9000, job.TaskGroups[0].Networks[0].ReservedPorts[0].Value)
+	must.Eq(t, 0, job.TaskGroups[0].Networks[0].DynamicPorts[0].Value)
 }

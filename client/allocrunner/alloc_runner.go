@@ -6,6 +6,7 @@ package allocrunner
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -35,10 +36,10 @@ import (
 	"github.com/hashicorp/nomad/client/vaultclient"
 	"github.com/hashicorp/nomad/client/widmgr"
 	"github.com/hashicorp/nomad/helper/pointer"
+	"github.com/hashicorp/nomad/helper/users/dynamic"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/plugins/device"
 	"github.com/hashicorp/nomad/plugins/drivers"
-	"golang.org/x/exp/maps"
 )
 
 // allocRunner is used to run all the tasks in a given allocation
@@ -133,7 +134,7 @@ type allocRunner struct {
 	stateDB cstate.StateDB
 
 	// allocDir is used to build the allocations directory structure.
-	allocDir *allocdir.AllocDir
+	allocDir allocdir.Interface
 
 	// runnerHooks are alloc runner lifecycle hooks that should be run on state
 	// transitions.
@@ -212,6 +213,9 @@ type allocRunner struct {
 
 	// widmgr manages workload identity signatures
 	widmgr widmgr.IdentityManager
+
+	// users manages a pool of dynamic workload users
+	users dynamic.Pool
 }
 
 // NewAllocRunner returns a new allocation runner.
@@ -256,6 +260,7 @@ func NewAllocRunner(config *config.AllocRunnerConfig) (interfaces.AllocRunner, e
 		partitions:               config.Partitions,
 		hookResources:            cstructs.NewAllocHookResources(),
 		widsigner:                config.WIDSigner,
+		users:                    config.Users,
 	}
 
 	// Create the logger based on the allocation ID
@@ -265,7 +270,12 @@ func NewAllocRunner(config *config.AllocRunnerConfig) (interfaces.AllocRunner, e
 	ar.allocBroadcaster = cstructs.NewAllocBroadcaster(ar.logger)
 
 	// Create alloc dir
-	ar.allocDir = allocdir.NewAllocDir(ar.logger, config.ClientConfig.AllocDir, alloc.ID)
+	ar.allocDir = allocdir.NewAllocDir(
+		ar.logger,
+		config.ClientConfig.AllocDir,
+		config.ClientConfig.AllocMountsDir,
+		alloc.ID,
+	)
 
 	ar.taskCoordinator = tasklifecycle.NewCoordinator(ar.logger, tg.Tasks, ar.waitCh)
 
@@ -280,7 +290,7 @@ func NewAllocRunner(config *config.AllocRunnerConfig) (interfaces.AllocRunner, e
 		ar.Alloc(),
 		nil,
 		config.ClientConfig.Region,
-	).SetAllocDir(ar.allocDir.AllocDir)
+	).SetAllocDir(ar.allocDir.AllocDirPath())
 
 	// initialize the workload identity manager
 	widmgr := widmgr.NewWIDMgr(ar.widsigner, alloc, ar.stateDB, ar.logger, envBuilder)
@@ -327,6 +337,7 @@ func (ar *allocRunner) initTaskRunners(tasks []*structs.Task) error {
 			Wranglers:           ar.wranglers,
 			AllocHookResources:  ar.hookResources,
 			WIDMgr:              ar.widmgr,
+			Users:               ar.users,
 		}
 
 		// Create, but do not Run, the task runner
@@ -442,7 +453,7 @@ func (ar *allocRunner) setAlloc(updated *structs.Allocation) {
 }
 
 // GetAllocDir returns the alloc dir which is safe for concurrent use.
-func (ar *allocRunner) GetAllocDir() *allocdir.AllocDir {
+func (ar *allocRunner) GetAllocDir() allocdir.Interface {
 	return ar.allocDir
 }
 
@@ -914,6 +925,12 @@ func (ar *allocRunner) SetNetworkStatus(s *structs.AllocNetworkStatus) {
 	ans := s.Copy()
 	ar.state.NetworkStatus = ans
 	ar.hookResources.SetAllocNetworkStatus(ans)
+
+	// Iterate each task runner and add the status information. This allows the
+	// task to build the environment variables with this information available.
+	for _, tr := range ar.tasks {
+		tr.SetNetworkStatus(ans)
+	}
 }
 
 func (ar *allocRunner) NetworkStatus() *structs.AllocNetworkStatus {

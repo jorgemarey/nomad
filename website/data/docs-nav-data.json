@@ -51,6 +51,24 @@
     ]
   },
   {
+    "title": "Release Notes",
+    "routes": [
+       {
+         "title": "Overview",
+         "path": "release-notes"
+       },
+       {
+         "title": "Nomad",
+         "routes": [
+           {
+             "title": "v1.8.x",
+             "path": "release-notes/nomad/v1_8_x"
+           }
+         ]
+       }
+    ] 
+  },
+  {
     "title": "Integrations",
     "routes": [
       {
@@ -768,6 +786,10 @@
               {
                 "title": "set-config",
                 "path": "commands/operator/autopilot/set-config"
+              },
+              {
+                "title": "health",
+                "path": "commands/operator/autopilot/health"
               }
             ]
           },
@@ -1700,6 +1722,10 @@
         "path": "job-specification/expose"
       },
       {
+        "title": "disconnect",
+        "path": "job-specification/disconnect"
+      },
+      {
         "title": "gateway",
         "path": "job-specification/gateway"
       },
@@ -1796,6 +1822,14 @@
         "path": "job-specification/template"
       },
       {
+        "title": "transparent_proxy",
+        "path": "job-specification/transparent_proxy"
+      },
+      {
+        "title": "ui",
+        "path": "job-specification/ui"
+      },
+      {
         "title": "update",
         "path": "job-specification/update"
       },
@@ -1873,6 +1907,10 @@
       {
         "title": "Docker",
         "path": "drivers/docker"
+      },
+      {
+        "title": "Exec2",
+        "href": "/plugins/drivers/exec2"
       },
       {
         "title": "Isolated Fork/Exec",

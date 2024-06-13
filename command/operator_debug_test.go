@@ -31,6 +31,7 @@ import (
 )
 
 // NOTE: most of these tests cannot be run in parallel
+// TODO(shoenig): come back to this one
 
 type testCase struct {
 	name            string
@@ -1052,7 +1053,6 @@ func TestDebug_EventStream(t *testing.T) {
 
 	archive := extractArchiveName(testOut.output)
 	require.NotEmpty(t, archive)
-	fmt.Println(archive)
 
 	// TODO dmay: verify evenstream.json output file contains expected content
 }

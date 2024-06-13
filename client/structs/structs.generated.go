@@ -7,7 +7,7 @@ package structs
 
 import (
 	"errors"
-	codec1978 "github.com/hashicorp/go-msgpack/codec"
+	codec1978 "github.com/hashicorp/go-msgpack/v2/codec"
 	pkg1_hoststats "github.com/hashicorp/nomad/client/hoststats"
 	pkg4_structs "github.com/hashicorp/nomad/nomad/structs"
 	pkg2_device "github.com/hashicorp/nomad/plugins/device"
@@ -6562,7 +6562,7 @@ func (x *AllocExecRequest) CodecEncodeSelf(e *codec1978.Encoder) {
 				} else {
 					if false {
 					} else {
-						z.F.EncSliceStringV(x.Cmd, e)
+						h.encSlicestring(([]string)(x.Cmd), e)
 					}
 				}
 			} else {
@@ -6578,7 +6578,7 @@ func (x *AllocExecRequest) CodecEncodeSelf(e *codec1978.Encoder) {
 				} else {
 					if false {
 					} else {
-						z.F.EncSliceStringV(x.Cmd, e)
+						h.encSlicestring(([]string)(x.Cmd), e)
 					}
 				}
 			}
@@ -6976,7 +6976,7 @@ func (x *AllocExecRequest) codecDecodeSelfFromMap(l int, d *codec1978.Decoder) {
 			} else {
 				if false {
 				} else {
-					z.F.DecSliceStringX(&x.Cmd, d)
+					h.decSlicestring((*[]string)(&x.Cmd), d)
 				}
 			}
 		case "Action":
@@ -7156,7 +7156,7 @@ func (x *AllocExecRequest) codecDecodeSelfFromArray(l int, d *codec1978.Decoder)
 	} else {
 		if false {
 		} else {
-			z.F.DecSliceStringX(&x.Cmd, d)
+			h.decSlicestring((*[]string)(&x.Cmd), d)
 		}
 	}
 	yyj24++
@@ -9747,7 +9747,7 @@ func (x *MemoryStats) CodecEncodeSelf(e *codec1978.Encoder) {
 				} else {
 					if false {
 					} else {
-						z.F.EncSliceStringV(x.Measured, e)
+						h.encSlicestring(([]string)(x.Measured), e)
 					}
 				}
 			} else {
@@ -9763,7 +9763,7 @@ func (x *MemoryStats) CodecEncodeSelf(e *codec1978.Encoder) {
 				} else {
 					if false {
 					} else {
-						z.F.EncSliceStringV(x.Measured, e)
+						h.encSlicestring(([]string)(x.Measured), e)
 					}
 				}
 			}
@@ -9878,7 +9878,7 @@ func (x *MemoryStats) codecDecodeSelfFromMap(l int, d *codec1978.Decoder) {
 			} else {
 				if false {
 				} else {
-					z.F.DecSliceStringX(&x.Measured, d)
+					h.decSlicestring((*[]string)(&x.Measured), d)
 				}
 			}
 		default:
@@ -10039,7 +10039,7 @@ func (x *MemoryStats) codecDecodeSelfFromArray(l int, d *codec1978.Decoder) {
 	} else {
 		if false {
 		} else {
-			z.F.DecSliceStringX(&x.Measured, d)
+			h.decSlicestring((*[]string)(&x.Measured), d)
 		}
 	}
 	for {
@@ -10199,7 +10199,7 @@ func (x *CpuStats) CodecEncodeSelf(e *codec1978.Encoder) {
 				} else {
 					if false {
 					} else {
-						z.F.EncSliceStringV(x.Measured, e)
+						h.encSlicestring(([]string)(x.Measured), e)
 					}
 				}
 			} else {
@@ -10215,7 +10215,7 @@ func (x *CpuStats) CodecEncodeSelf(e *codec1978.Encoder) {
 				} else {
 					if false {
 					} else {
-						z.F.EncSliceStringV(x.Measured, e)
+						h.encSlicestring(([]string)(x.Measured), e)
 					}
 				}
 			}
@@ -10318,7 +10318,7 @@ func (x *CpuStats) codecDecodeSelfFromMap(l int, d *codec1978.Decoder) {
 			} else {
 				if false {
 				} else {
-					z.F.DecSliceStringX(&x.Measured, d)
+					h.decSlicestring((*[]string)(&x.Measured), d)
 				}
 			}
 		default:
@@ -10447,7 +10447,7 @@ func (x *CpuStats) codecDecodeSelfFromArray(l int, d *codec1978.Decoder) {
 	} else {
 		if false {
 		} else {
-			z.F.DecSliceStringX(&x.Measured, d)
+			h.decSlicestring((*[]string)(&x.Measured), d)
 		}
 	}
 	for {
@@ -12132,6 +12132,106 @@ func (x codecSelfer102) decSlicePtrtoAllocFileInfo(v *[]*AllocFileInfo, d *codec
 			yyc1 = true
 		} else if yyj1 == 0 && yyv1 == nil {
 			yyv1 = make([]*AllocFileInfo, 0)
+			yyc1 = true
+		}
+	}
+	yyh1.End()
+	if yyc1 {
+		*v = yyv1
+	}
+}
+
+func (x codecSelfer102) encSlicestring(v []string, e *codec1978.Encoder) {
+	var h codecSelfer102
+	z, r := codec1978.GenHelperEncoder(e)
+	_, _, _ = h, z, r
+	r.WriteArrayStart(len(v))
+	for _, yyv1 := range v {
+		r.WriteArrayElem()
+		if false {
+		} else {
+			if z.EncBasicHandle().StringToRaw {
+				r.EncodeStringBytesRaw(z.BytesView(string(yyv1)))
+			} else {
+				r.EncodeStringEnc(codecSelferCcUTF8102, string(yyv1))
+			}
+		}
+	}
+	r.WriteArrayEnd()
+}
+
+func (x codecSelfer102) decSlicestring(v *[]string, d *codec1978.Decoder) {
+	var h codecSelfer102
+	z, r := codec1978.GenHelperDecoder(d)
+	_, _, _ = h, z, r
+
+	yyv1 := *v
+	yyh1, yyl1 := z.DecSliceHelperStart()
+	var yyc1 bool
+	_ = yyc1
+	if yyl1 == 0 {
+		if yyv1 == nil {
+			yyv1 = []string{}
+			yyc1 = true
+		} else if len(yyv1) != 0 {
+			yyv1 = yyv1[:0]
+			yyc1 = true
+		}
+	} else {
+		yyhl1 := yyl1 > 0
+		var yyrl1 int
+		_ = yyrl1
+		if yyhl1 {
+			if yyl1 > cap(yyv1) {
+				yyrl1 = z.DecInferLen(yyl1, z.DecBasicHandle().MaxInitLen, 16)
+				if yyrl1 <= cap(yyv1) {
+					yyv1 = yyv1[:yyrl1]
+				} else {
+					yyv1 = make([]string, yyrl1)
+				}
+				yyc1 = true
+			} else if yyl1 != len(yyv1) {
+				yyv1 = yyv1[:yyl1]
+				yyc1 = true
+			}
+		}
+		var yyj1 int
+		// var yydn1 bool
+		for yyj1 = 0; (yyhl1 && yyj1 < yyl1) || !(yyhl1 || r.CheckBreak()); yyj1++ { // bounds-check-elimination
+			if yyj1 == 0 && yyv1 == nil {
+				if yyhl1 {
+					yyrl1 = z.DecInferLen(yyl1, z.DecBasicHandle().MaxInitLen, 16)
+				} else {
+					yyrl1 = 8
+				}
+				yyv1 = make([]string, yyrl1)
+				yyc1 = true
+			}
+			yyh1.ElemContainerState(yyj1)
+
+			var yydb1 bool
+			if yyj1 >= len(yyv1) {
+				yyv1 = append(yyv1, "")
+				yyc1 = true
+
+			}
+			if yydb1 {
+				z.DecSwallow()
+			} else {
+				if r.TryDecodeAsNil() {
+					yyv1[yyj1] = ""
+				} else {
+					yyv1[yyj1] = (string)(r.DecodeString())
+				}
+
+			}
+
+		}
+		if yyj1 < len(yyv1) {
+			yyv1 = yyv1[:yyj1]
+			yyc1 = true
+		} else if yyj1 == 0 && yyv1 == nil {
+			yyv1 = make([]string, 0)
 			yyc1 = true
 		}
 	}

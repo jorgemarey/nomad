@@ -1039,6 +1039,7 @@ func ApiJobToStructJob(job *api.Job) *structs.Job {
 		VaultNamespace: *job.VaultNamespace,
 		Constraints:    ApiConstraintsToStructs(job.Constraints),
 		Affinities:     ApiAffinitiesToStructs(job.Affinities),
+		UI:             ApiJobUIConfigToStructs(job.UI),
 	}
 
 	// Update has been pushed into the task groups. stagger and max_parallel are
@@ -1161,6 +1162,21 @@ func ApiTgToStructsTG(job *structs.Job, taskGroup *api.TaskGroup, tg *structs.Ta
 			DelayFunction: *taskGroup.ReschedulePolicy.DelayFunction,
 			MaxDelay:      *taskGroup.ReschedulePolicy.MaxDelay,
 			Unlimited:     *taskGroup.ReschedulePolicy.Unlimited,
+		}
+	}
+
+	if taskGroup.Disconnect != nil {
+		tg.Disconnect = &structs.DisconnectStrategy{
+			StopOnClientAfter: taskGroup.Disconnect.StopOnClientAfter,
+			Replace:           taskGroup.Disconnect.Replace,
+		}
+
+		if taskGroup.Disconnect.Reconcile != nil {
+			tg.Disconnect.Reconcile = *taskGroup.Disconnect.Reconcile
+		}
+
+		if taskGroup.Disconnect.LostAfter != nil {
+			tg.Disconnect.LostAfter = *taskGroup.Disconnect.LostAfter
 		}
 	}
 
@@ -1304,20 +1320,7 @@ func ApiTaskToStructsTask(job *structs.Job, group *structs.TaskGroup,
 		}
 	}
 
-	if len(apiTask.VolumeMounts) > 0 {
-		structsTask.VolumeMounts = []*structs.VolumeMount{}
-		for _, mount := range apiTask.VolumeMounts {
-			if mount != nil && mount.Volume != nil {
-				structsTask.VolumeMounts = append(structsTask.VolumeMounts,
-					&structs.VolumeMount{
-						Volume:          *mount.Volume,
-						Destination:     *mount.Destination,
-						ReadOnly:        *mount.ReadOnly,
-						PropagationMode: *mount.PropagationMode,
-					})
-			}
-		}
-	}
+	structsTask.VolumeMounts = apiVolumeMountsToStructs(apiTask.VolumeMounts)
 
 	if len(apiTask.ScalingPolicies) > 0 {
 		structsTask.ScalingPolicies = []*structs.ScalingPolicy{}
@@ -1339,11 +1342,12 @@ func ApiTaskToStructsTask(job *structs.Job, group *structs.TaskGroup,
 		for _, ta := range apiTask.Artifacts {
 			structsTask.Artifacts = append(structsTask.Artifacts,
 				&structs.TaskArtifact{
-					GetterSource:  *ta.GetterSource,
-					GetterOptions: maps.Clone(ta.GetterOptions),
-					GetterHeaders: maps.Clone(ta.GetterHeaders),
-					GetterMode:    *ta.GetterMode,
-					RelativeDest:  *ta.RelativeDest,
+					GetterSource:   *ta.GetterSource,
+					GetterOptions:  maps.Clone(ta.GetterOptions),
+					GetterHeaders:  maps.Clone(ta.GetterHeaders),
+					GetterMode:     *ta.GetterMode,
+					GetterInsecure: *ta.GetterInsecure,
+					RelativeDest:   *ta.RelativeDest,
 				})
 		}
 	}
@@ -1408,6 +1412,11 @@ func ApiTaskToStructsTask(job *structs.Job, group *structs.TaskGroup,
 		act := ApiActionToStructsAction(job, action)
 		structsTask.Actions = append(structsTask.Actions, act)
 	}
+
+	if apiTask.Schedule != nil {
+		sched := apiScheduleToStructsSchedule(apiTask.Schedule)
+		structsTask.Schedule = sched
+	}
 }
 
 // apiWaitConfigToStructsWaitConfig is a copy and type conversion between the API
@@ -1456,6 +1465,21 @@ func ApiActionToStructsAction(job *structs.Job, action *api.Action) *structs.Act
 		Args:    slices.Clone(action.Args),
 		Command: action.Command,
 	}
+}
+
+func apiScheduleToStructsSchedule(s *api.TaskSchedule) *structs.TaskSchedule {
+	if s.Cron == nil {
+		return nil
+	}
+
+	sched := &structs.TaskSchedule{
+		Cron: &structs.TaskScheduleCron{
+			Start:    s.Cron.Start,
+			End:      s.Cron.End,
+			Timezone: s.Cron.Timezone,
+		},
+	}
+	return sched
 }
 
 func ApiResourcesToStructs(in *api.Resources) *structs.Resources {
@@ -1881,6 +1905,7 @@ func apiConnectSidecarServiceProxyToStructs(in *api.ConsulProxy) *structs.Consul
 		LocalServicePort:    in.LocalServicePort,
 		Upstreams:           apiUpstreamsToStructs(in.Upstreams),
 		Expose:              apiConsulExposeConfigToStructs(expose),
+		TransparentProxy:    apiConnectTransparentProxyToStructs(in.TransparentProxy),
 		Config:              maps.Clone(in.Config),
 	}
 }
@@ -1933,6 +1958,21 @@ func apiConsulExposeConfigToStructs(in *api.ConsulExposeConfig) *structs.ConsulE
 	}
 }
 
+func apiConnectTransparentProxyToStructs(in *api.ConsulTransparentProxy) *structs.ConsulTransparentProxy {
+	if in == nil {
+		return nil
+	}
+	return &structs.ConsulTransparentProxy{
+		UID:                  in.UID,
+		OutboundPort:         in.OutboundPort,
+		ExcludeInboundPorts:  in.ExcludeInboundPorts,
+		ExcludeOutboundPorts: in.ExcludeOutboundPorts,
+		ExcludeOutboundCIDRs: in.ExcludeOutboundCIDRs,
+		ExcludeUIDs:          in.ExcludeUIDs,
+		NoDNS:                in.NoDNS,
+	}
+}
+
 func apiConsulExposePathsToStructs(in []*api.ConsulExposePath) []structs.ConsulExposePath {
 	if len(in) == 0 {
 		return nil
@@ -1953,6 +1993,7 @@ func apiConnectSidecarTaskToStructs(in *api.SidecarTask) *structs.SidecarTask {
 	if in == nil {
 		return nil
 	}
+
 	return &structs.SidecarTask{
 		Name:          in.Name,
 		Driver:        in.Driver,
@@ -1965,7 +2006,32 @@ func apiConnectSidecarTaskToStructs(in *api.SidecarTask) *structs.SidecarTask {
 		KillSignal:    in.KillSignal,
 		KillTimeout:   in.KillTimeout,
 		LogConfig:     apiLogConfigToStructs(in.LogConfig),
+		VolumeMounts:  apiVolumeMountsToStructs(in.VolumeMounts),
 	}
+}
+
+func apiVolumeMountsToStructs(in []*api.VolumeMount) []*structs.VolumeMount {
+	if in == nil {
+		return nil
+	}
+	if len(in) == 0 {
+		return []*structs.VolumeMount{}
+	}
+
+	out := []*structs.VolumeMount{}
+	for _, mount := range in {
+		if mount != nil && mount.Volume != nil {
+			out = append(out,
+				&structs.VolumeMount{
+					Volume:          *mount.Volume,
+					Destination:     *mount.Destination,
+					ReadOnly:        *mount.ReadOnly,
+					PropagationMode: *mount.PropagationMode,
+					SELinuxLabel:    *mount.SELinuxLabel,
+				})
+		}
+	}
+	return out
 }
 
 func apiConsulToStructs(in *api.Consul) *structs.Consul {
@@ -2041,6 +2107,30 @@ func ApiAffinitiesToStructs(in []*api.Affinity) []*structs.Affinity {
 	}
 
 	return out
+}
+
+func ApiJobUIConfigToStructs(jobUI *api.JobUIConfig) *structs.JobUIConfig {
+	if jobUI == nil {
+		return nil
+	}
+
+	var links []*structs.JobUILink
+	if len(jobUI.Links) > 0 {
+		links = make([]*structs.JobUILink, len(jobUI.Links))
+		for i, link := range jobUI.Links {
+			links[i] = &structs.JobUILink{
+				Label: link.Label,
+				Url:   link.URL,
+			}
+		}
+	} else {
+		links = nil
+	}
+
+	return &structs.JobUIConfig{
+		Description: jobUI.Description,
+		Links:       links,
+	}
 }
 
 func ApiAffinityToStructs(a1 *api.Affinity) *structs.Affinity {

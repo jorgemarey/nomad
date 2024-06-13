@@ -182,7 +182,7 @@ func (n *Namespace) namespaceTerminalLocally(namespace string) (bool, error) {
 		return false, err
 	}
 
-	iter, err := snap.JobsByNamespace(nil, namespace)
+	iter, err := snap.JobsByNamespace(nil, namespace, state.SortDefault)
 	if err != nil {
 		return false, err
 	}
@@ -276,7 +276,7 @@ func (n *Namespace) ListNamespaces(args *structs.NamespaceListRequest, reply *st
 				ns := raw.(*structs.Namespace)
 
 				// Only return namespaces allowed by acl
-				if aclObj == nil || aclObj.AllowNamespace(ns.Name) {
+				if aclObj.AllowNamespace(ns.Name) {
 					reply.Namespaces = append(reply.Namespaces, ns)
 				}
 			}

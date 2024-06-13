@@ -41,9 +41,9 @@ func (m *metric) Query() string {
 }
 
 func TestMetrics(t *testing.T) {
-	// Run via the e2e suite; requires Windows and AWS specific attributes.
+	// Run via the e2e suite. Requires AWS attributes.
 
-	// Wait for the cluster to be ready
+	// Wait for the cluster to be ready.
 	cluster3.Establish(t,
 		cluster3.Leader(),
 		cluster3.LinuxClients(1),

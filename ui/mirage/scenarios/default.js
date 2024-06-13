@@ -28,6 +28,7 @@ export const allScenarios = {
   policiesTestCluster,
   rolesTestCluster,
   namespacesTestCluster,
+  jobsIndexTestCluster,
   ...topoScenarios,
   ...sysbatchScenarios,
 };
@@ -57,9 +58,39 @@ export default function (server) {
 
 // Scenarios
 
+function jobsIndexTestCluster(server) {
+  faker.seed(1);
+  server.createList('agent', 1, 'withConsulLink', 'withVaultLink');
+  server.createList('node', 1);
+  server.create('node-pool');
+
+  const jobsToCreate = 55;
+  for (let i = 0; i < jobsToCreate; i++) {
+    let groupCount = Math.floor(Math.random() * 2) + 1;
+    server.create('job', {
+      name: `Job ${i + 1}`,
+      resourceSpec: Array(groupCount).fill('M: 256, C: 500'),
+      groupAllocCount: Math.floor(Math.random() * 3) + 1,
+      modifyIndex: i + 1,
+    });
+  }
+  server.create('job', 'periodic', {
+    name: 'Periodic Job',
+    modifyIndex: jobsToCreate + 1,
+    childrenCount: 3,
+  });
+
+  server.create('job', 'parameterized', {
+    name: 'Parameterized Job',
+    modifyIndex: jobsToCreate + 2,
+    childrenCount: 5,
+  });
+}
+
 function smallCluster(server) {
   faker.seed(1);
   server.create('feature', { name: 'Dynamic Application Sizing' });
+  server.create('feature', { name: 'Sentinel Policies' });
   server.createList('agent', 3, 'withConsulLink', 'withVaultLink');
   server.createList('node-pool', 2);
   server.createList('node', 5);
@@ -71,7 +102,7 @@ function smallCluster(server) {
     },
     'withMeta'
   );
-  server.createList('job', 1, { createRecommendations: true });
+  server.createList('job', 10, { createRecommendations: true });
   server.create('job', {
     withGroupServices: true,
     withTaskServices: true,
@@ -314,6 +345,25 @@ function smallCluster(server) {
     name: 'hcl-definition-job',
     id: 'display-hcl',
     namespaceId: 'default',
+  });
+
+  server.create('job', {
+    name: 'ui-block-job',
+    id: 'ui-block-job',
+    ui: {
+      Links: [
+        {
+          Label: 'HashiCorp',
+          Url: 'https://hashicorp.com',
+        },
+        {
+          Label: 'Nomad',
+          Url: 'https://nomadproject.io',
+        },
+      ],
+      Description:
+        'A job with a UI-block defined description and links. It has **bold text** and everything!',
+    },
   });
 
   server.createList('allocFile', 5);
@@ -574,6 +624,7 @@ function variableTestCluster(server) {
 }
 
 function policiesTestCluster(server) {
+  server.create('feature', { name: 'Sentinel Policies' });
   faker.seed(1);
   createTokens(server);
   server.createList('agent', 3, 'withConsulLink', 'withVaultLink');

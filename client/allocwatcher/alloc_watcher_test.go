@@ -29,7 +29,7 @@ import (
 // fakeAllocRunner implements AllocRunnerMeta
 type fakeAllocRunner struct {
 	alloc       *structs.Allocation
-	AllocDir    *allocdir.AllocDir
+	AllocDir    allocdir.Interface
 	Broadcaster *cstructs.AllocBroadcaster
 }
 
@@ -44,12 +44,12 @@ func newFakeAllocRunner(t *testing.T, logger hclog.Logger) *fakeAllocRunner {
 
 	return &fakeAllocRunner{
 		alloc:       alloc,
-		AllocDir:    allocdir.NewAllocDir(logger, path, alloc.ID),
+		AllocDir:    allocdir.NewAllocDir(logger, path, path, alloc.ID),
 		Broadcaster: cstructs.NewAllocBroadcaster(logger),
 	}
 }
 
-func (f *fakeAllocRunner) GetAllocDir() *allocdir.AllocDir {
+func (f *fakeAllocRunner) GetAllocDir() allocdir.Interface {
 	return f.AllocDir
 }
 
