@@ -45,6 +45,9 @@ func (j jobVaultHook) Mutate(job *structs.Job) (*structs.Job, []error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if ns == nil {
+		return nil, nil, fmt.Errorf("namespace %s not found", job.Namespace)
+	}
 	if ns.VaultConfiguration != nil && ns.VaultConfiguration.Default != "" {
 		defaultCluster = ns.VaultConfiguration.Default
 	}

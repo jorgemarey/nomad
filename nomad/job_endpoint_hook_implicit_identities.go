@@ -31,7 +31,7 @@ func (h jobImplicitIdentitiesHook) Mutate(job *structs.Job) (*structs.Job, []err
 				h.handleConsulService(s, tg)
 				hasIdentity = hasIdentity || s.Identity != nil
 			}
-			if len(t.Templates) > 0 {
+			if len(t.Templates) > 0 { // TODO(meigas): should be fixed, maybe we want consul token and don't have templates or the tempalte doesn't use consul
 				h.handleConsulTasks(t, tg)
 			}
 			h.handleVault(t)

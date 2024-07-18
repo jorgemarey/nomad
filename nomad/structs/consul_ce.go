@@ -8,7 +8,7 @@ package structs
 
 func (c *Consul) GetNamespace() string {
 	if c != nil && c.Namespace != "" {
-		return c.Namespace
+		return c.Namespace // TODO(meigas): should we return default?
 	}
 	return ""
 }

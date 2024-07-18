@@ -138,6 +138,9 @@ func (j jobConsulHook) Mutate(job *structs.Job) (*structs.Job, []error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if ns == nil {
+		return nil, nil, fmt.Errorf("namespace %s not found", job.Namespace)
+	}
 	if ns.ConsulConfiguration != nil && ns.ConsulConfiguration.Default != "" {
 		defaultCluster = ns.ConsulConfiguration.Default
 	}
