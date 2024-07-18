@@ -4,6 +4,7 @@
 package allocrunner
 
 import (
+	"context"
 	"fmt"
 
 	consulapi "github.com/hashicorp/consul/api"
@@ -23,11 +24,13 @@ type consulHook struct {
 	allocdir                allocdir.Interface
 	widmgr                  widmgr.IdentityManager
 	consulConfigs           map[string]*structsc.ConsulConfig
-	consulClientConstructor func(*structsc.ConsulConfig, log.Logger) (consul.Client, error)
+	consulClientConstructor consul.ConsulClientFunc
 	hookResources           *cstructs.AllocHookResources
 	envBuilder              *taskenv.Builder
 
-	logger log.Logger
+	logger           log.Logger
+	shutdownCtx      context.Context
+	shutdownCancelFn context.CancelFunc
 }
 
 type consulHookConfig struct {
@@ -39,7 +42,7 @@ type consulHookConfig struct {
 	consulConfigs map[string]*structsc.ConsulConfig
 	// consulClientConstructor injects the function that will return a consul
 	// client (eases testing)
-	consulClientConstructor func(*structsc.ConsulConfig, log.Logger) (consul.Client, error)
+	consulClientConstructor consul.ConsulClientFunc
 
 	// hookResources is used for storing and retrieving Consul tokens
 	hookResources *cstructs.AllocHookResources
@@ -51,6 +54,7 @@ type consulHookConfig struct {
 }
 
 func newConsulHook(cfg consulHookConfig) *consulHook {
+	shutdownCtx, shutdownCancelFn := context.WithCancel(context.Background())
 	h := &consulHook{
 		alloc:                   cfg.alloc,
 		allocdir:                cfg.allocdir,
@@ -59,6 +63,8 @@ func newConsulHook(cfg consulHookConfig) *consulHook {
 		consulClientConstructor: cfg.consulClientConstructor,
 		hookResources:           cfg.hookResources,
 		envBuilder:              cfg.envBuilder(),
+		shutdownCtx:             shutdownCtx,
+		shutdownCancelFn:        shutdownCancelFn,
 	}
 	h.logger = cfg.logger.Named(h.Name())
 	return h
@@ -227,7 +233,12 @@ func (h *consulHook) getConsulToken(cluster string, req consul.JWTLoginRequest) 
 		return nil, fmt.Errorf("failed to retrieve Consul client for cluster %s: %v", cluster, err)
 	}
 
-	return client.DeriveTokenWithJWT(req)
+	t, err := client.DeriveTokenWithJWT(req)
+	if err == nil {
+		err = client.TokenPreflightCheck(h.shutdownCtx, t)
+	}
+
+	return t, err
 }
 
 func (h *consulHook) clientForCluster(cluster string) (consul.Client, error) {
@@ -248,6 +259,11 @@ func (h *consulHook) Postrun() error {
 	}
 	h.hookResources.SetConsulTokens(tokens)
 	return nil
+}
+
+// Shutdown will get called when the client is gracefully stopping.
+func (h *consulHook) Shutdown() {
+	h.shutdownCancelFn()
 }
 
 // Destroy cleans up any remaining Consul tokens if the alloc is GC'd or fails

@@ -65,18 +65,23 @@ var (
 
 	// Nvidia-container-runtime environment variable names
 	nvidiaVisibleDevices = "NVIDIA_VISIBLE_DEVICES"
+
+	// We support "process" and "hyper-v" isolation modes on windows
+	windowsIsolationModes = []string{windowsIsolationModeProcess, windowsIsolationModeHyperV}
 )
 
 const (
-	dockerLabelAllocID       = "com.hashicorp.nomad.alloc_id"
-	dockerLabelJobName       = "com.hashicorp.nomad.job_name"
-	dockerLabelJobID         = "com.hashicorp.nomad.job_id"
-	dockerLabelTaskGroupName = "com.hashicorp.nomad.task_group_name"
-	dockerLabelTaskName      = "com.hashicorp.nomad.task_name"
-	dockerLabelNamespace     = "com.hashicorp.nomad.namespace"
-	dockerLabelNodeName      = "com.hashicorp.nomad.node_name"
-	dockerLabelNodeID        = "com.hashicorp.nomad.node_id"
-	dockerLabelParentJobID   = "com.hashicorp.nomad.parent_job_id"
+	dockerLabelAllocID          = "com.hashicorp.nomad.alloc_id"
+	dockerLabelJobName          = "com.hashicorp.nomad.job_name"
+	dockerLabelJobID            = "com.hashicorp.nomad.job_id"
+	dockerLabelTaskGroupName    = "com.hashicorp.nomad.task_group_name"
+	dockerLabelTaskName         = "com.hashicorp.nomad.task_name"
+	dockerLabelNamespace        = "com.hashicorp.nomad.namespace"
+	dockerLabelNodeName         = "com.hashicorp.nomad.node_name"
+	dockerLabelNodeID           = "com.hashicorp.nomad.node_id"
+	dockerLabelParentJobID      = "com.hashicorp.nomad.parent_job_id"
+	windowsIsolationModeProcess = "process"
+	windowsIsolationModeHyperV  = "hyperv"
 )
 
 type pauseContainerStore struct {
@@ -349,8 +354,13 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 		return nil, nil, fmt.Errorf("Failed to create long operations docker client: %v", err)
 	}
 
-	id, err := d.createImage(cfg, &driverConfig, dockerClient)
+	id, user, err := d.createImage(cfg, &driverConfig, dockerClient)
 	if err != nil {
+		return nil, nil, err
+	}
+
+	// validate the image user (windows only)
+	if err := validateImageUser(user, cfg.User, &driverConfig, d.config); err != nil {
 		return nil, nil, err
 	}
 
@@ -547,7 +557,7 @@ CREATE:
 			}
 		}
 
-		if attempted < 5 {
+		if attempted < d.config.ContainerExistsAttempts {
 			attempted++
 			backoff = helper.Backoff(50*time.Millisecond, time.Minute, attempted)
 			time.Sleep(backoff)
@@ -602,7 +612,7 @@ START:
 
 // createImage creates a docker image either by pulling it from a registry or by
 // loading it from the file system
-func (d *Driver) createImage(task *drivers.TaskConfig, driverConfig *TaskConfig, client *docker.Client) (string, error) {
+func (d *Driver) createImage(task *drivers.TaskConfig, driverConfig *TaskConfig, client *docker.Client) (string, string, error) {
 	image := driverConfig.Image
 	repo, tag := parseDockerImage(image)
 
@@ -615,7 +625,11 @@ func (d *Driver) createImage(task *drivers.TaskConfig, driverConfig *TaskConfig,
 		if dockerImage, _ := client.InspectImage(image); dockerImage != nil {
 			// Image exists so just increment its reference count
 			d.coordinator.IncrementImageReference(dockerImage.ID, image, task.ID)
-			return dockerImage.ID, nil
+			var user string
+			if dockerImage.Config != nil {
+				user = dockerImage.Config.User
+			}
+			return dockerImage.ID, user, nil
 		}
 	}
 
@@ -625,17 +639,17 @@ func (d *Driver) createImage(task *drivers.TaskConfig, driverConfig *TaskConfig,
 	}
 
 	// Download the image
-	return d.pullImage(task, driverConfig, client, repo, tag)
+	return d.pullImage(task, driverConfig, repo, tag)
 }
 
 // pullImage creates an image by pulling it from a docker registry
-func (d *Driver) pullImage(task *drivers.TaskConfig, driverConfig *TaskConfig, client *docker.Client, repo, tag string) (id string, err error) {
+func (d *Driver) pullImage(task *drivers.TaskConfig, driverConfig *TaskConfig, repo, tag string) (id, user string, err error) {
 	authOptions, err := d.resolveRegistryAuthentication(driverConfig, repo)
 	if err != nil {
 		if driverConfig.AuthSoftFail {
 			d.logger.Warn("Failed to find docker repo auth", "repo", repo, "error", err)
 		} else {
-			return "", fmt.Errorf("Failed to find docker auth for repo %q: %v", repo, err)
+			return "", "", fmt.Errorf("Failed to find docker auth for repo %q: %v", repo, err)
 		}
 	}
 
@@ -656,7 +670,7 @@ func (d *Driver) pullImage(task *drivers.TaskConfig, driverConfig *TaskConfig, c
 
 	pullDur, err := time.ParseDuration(driverConfig.ImagePullTimeout)
 	if err != nil {
-		return "", fmt.Errorf("Failed to parse image_pull_timeout: %v", err)
+		return "", "", fmt.Errorf("Failed to parse image_pull_timeout: %v", err)
 	}
 
 	return d.coordinator.PullImage(driverConfig.Image, authOptions, task.ID, d.emitEventFunc(task), pullDur, d.config.pullActivityTimeoutDuration)
@@ -689,28 +703,32 @@ func (d *Driver) resolveRegistryAuthentication(driverConfig *TaskConfig, repo st
 }
 
 // loadImage creates an image by loading it from the file system
-func (d *Driver) loadImage(task *drivers.TaskConfig, driverConfig *TaskConfig, client *docker.Client) (id string, err error) {
+func (d *Driver) loadImage(task *drivers.TaskConfig, driverConfig *TaskConfig, client *docker.Client) (id string, user string, err error) {
 
 	archive := filepath.Join(task.TaskDir().LocalDir, driverConfig.LoadImage)
 	d.logger.Debug("loading image from disk", "archive", archive)
 
 	f, err := os.Open(archive)
 	if err != nil {
-		return "", fmt.Errorf("unable to open image archive: %v", err)
+		return "", "", fmt.Errorf("unable to open image archive: %v", err)
 	}
 
 	if err := client.LoadImage(docker.LoadImageOptions{InputStream: f}); err != nil {
-		return "", err
+		return "", "", err
 	}
 	f.Close()
 
 	dockerImage, err := client.InspectImage(driverConfig.Image)
 	if err != nil {
-		return "", recoverableErrTimeouts(err)
+		return "", "", recoverableErrTimeouts(err)
 	}
 
 	d.coordinator.IncrementImageReference(dockerImage.ID, driverConfig.Image, task.ID)
-	return dockerImage.ID, nil
+	var imageUser string
+	if dockerImage.Config != nil {
+		imageUser = dockerImage.Config.User
+	}
+	return dockerImage.ID, imageUser, nil
 }
 
 func (d *Driver) convertAllocPathsForWindowsLCOW(task *drivers.TaskConfig, image string) error {
@@ -973,10 +991,18 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		return c, fmt.Errorf("requested runtime %q is not allowed", containerRuntime)
 	}
 
-	// Only windows supports alternative isolations modes
-	isolationMode := driverConfig.Isolation
-	if runtime.GOOS != "windows" && isolationMode != "" {
-		return c, fmt.Errorf("Failed to create container configuration, cannot use isolation mode \"%s\" on %s", isolationMode, runtime.GOOS)
+	// Validate isolation modes on windows
+	if runtime.GOOS != "windows" {
+		if driverConfig.Isolation != "" {
+			return c, fmt.Errorf("Failed to create container configuration, cannot use isolation mode \"%s\" on %s", driverConfig.Isolation, runtime.GOOS)
+		}
+	} else {
+		if driverConfig.Isolation == "" {
+			driverConfig.Isolation = windowsIsolationModeHyperV
+		}
+		if !slices.Contains(windowsIsolationModes, driverConfig.Isolation) {
+			return c, fmt.Errorf("Unsupported isolation mode \"%s\"", driverConfig.Isolation)
+		}
 	}
 
 	memory, memoryReservation := memoryLimits(driverConfig.MemoryHardLimit, task.Resources.NomadResources.Memory)
@@ -999,8 +1025,9 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	hostConfig := &docker.HostConfig{
 		// do not set cgroup parent anymore
 
-		Memory:            memory,            // hard limit
-		MemoryReservation: memoryReservation, // soft limit
+		Memory:            memory,                   // hard limit
+		MemoryReservation: memoryReservation,        // soft limit
+		OomScoreAdj:       driverConfig.OOMScoreAdj, // ignored on platforms other than linux
 
 		CPUShares:  task.Resources.LinuxResources.CPUShares,
 		CPUSetCPUs: task.Resources.LinuxResources.CpusetCpus,

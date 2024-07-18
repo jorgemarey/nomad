@@ -534,6 +534,7 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 	// Setup telemetry related config
 	conf.StatsCollectionInterval = agentConfig.Telemetry.collectionInterval
 	conf.DisableDispatchedJobSummaryMetrics = agentConfig.Telemetry.DisableDispatchedJobSummaryMetrics
+	conf.DisableQuotaUtilizationMetrics = agentConfig.Telemetry.DisableQuotaUtilizationMetrics
 	conf.DisableRPCRateMetricsLabels = agentConfig.Telemetry.DisableRPCRateMetricsLabels
 
 	if d, err := time.ParseDuration(agentConfig.Limits.RPCHandshakeTimeout); err != nil {
@@ -736,6 +737,9 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	if agentConfig.Client.NetworkInterface != "" {
 		conf.NetworkInterface = agentConfig.Client.NetworkInterface
 	}
+
+	conf.PreferredAddressFamily = agentConfig.Client.PreferredAddressFamily
+
 	conf.ChrootEnv = agentConfig.Client.ChrootEnv
 	conf.Options = agentConfig.Client.Options
 	if agentConfig.Client.NetworkSpeed != 0 {

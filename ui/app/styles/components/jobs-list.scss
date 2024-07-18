@@ -42,3 +42,13 @@
     justify-self: end;
   }
 }
+
+#jobs-list-cache-warning {
+  margin-bottom: 1rem;
+}
+
+.status-cell {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}

@@ -241,6 +241,23 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 		return err
 	}
 
+	// Enforce Sentinel policies. Pass a copy of the job to prevent
+	// sentinel from altering it.
+	ns, err := snap.NamespaceByName(nil, args.RequestNamespace())
+	if err != nil {
+		return err
+	}
+
+	policyWarnings, err := j.enforceSubmitJob(args.PolicyOverride, args.Job.Copy(),
+		existingJob, args.GetIdentity().GetACLToken(), ns)
+	if err != nil {
+		return err
+	}
+	if policyWarnings != nil {
+		warnings = append(warnings, policyWarnings)
+		reply.Warnings = helper.MergeMultierrorWarnings(warnings...)
+	}
+
 	// Create or Update Consul Configuration Entries defined in the job. For now
 	// Nomad only supports Configuration Entries types
 	// - "ingress-gateway" for managing Ingress Gateways
@@ -268,23 +285,6 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 				}
 			}
 		}
-	}
-
-	// Enforce Sentinel policies. Pass a copy of the job to prevent
-	// sentinel from altering it.
-	ns, err := snap.NamespaceByName(nil, args.RequestNamespace())
-	if err != nil {
-		return err
-	}
-
-	policyWarnings, err := j.enforceSubmitJob(args.PolicyOverride, args.Job.Copy(),
-		existingJob, args.GetIdentity().GetACLToken(), ns)
-	if err != nil {
-		return err
-	}
-	if policyWarnings != nil {
-		warnings = append(warnings, policyWarnings)
-		reply.Warnings = helper.MergeMultierrorWarnings(warnings...)
 	}
 
 	// Clear the Vault token
@@ -1067,6 +1067,14 @@ func (j *Job) Scale(args *structs.JobScaleRequest, reply *structs.JobRegisterRes
 
 		if deployment != nil && deployment.Active() && deployment.JobCreateIndex == job.CreateIndex {
 			return structs.NewErrRPCCoded(400, "job scaling blocked due to active deployment")
+		}
+
+		// If JobModifyIndex set, check it before trying to apply
+		if args.JobModifyIndex > 0 {
+			if args.JobModifyIndex != job.JobModifyIndex {
+				return fmt.Errorf("%s %d: job exists with conflicting job modify index: %d",
+					RegisterEnforceIndexErrPrefix, args.JobModifyIndex, job.JobModifyIndex)
+			}
 		}
 
 		// Commit the job update

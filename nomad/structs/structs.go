@@ -868,8 +868,16 @@ type JobScaleRequest struct {
 	Message string
 	Error   bool
 	Meta    map[string]interface{}
+
 	// PolicyOverride is set when the user is attempting to override any policies
 	PolicyOverride bool
+
+	// If EnforceIndex is set then the job will only be scaled if the passed
+	// JobModifyIndex matches the current Jobs index. If the index is zero,
+	// EnforceIndex is ignored.
+	EnforceIndex   bool
+	JobModifyIndex uint64
+
 	WriteRequest
 }
 
@@ -2665,6 +2673,7 @@ func (r *Resources) Add(delta *Resources) {
 
 	r.CPU += delta.CPU
 	r.MemoryMB += delta.MemoryMB
+	r.Cores += delta.Cores
 	if delta.MemoryMaxMB > 0 {
 		r.MemoryMaxMB += delta.MemoryMaxMB
 	} else {
@@ -2737,6 +2746,14 @@ const (
 	NodeNetworkAF_IPv4 NodeNetworkAF = "ipv4"
 	NodeNetworkAF_IPv6 NodeNetworkAF = "ipv6"
 )
+
+// Validate validates that NodeNetworkAF has a legal value.
+func (n NodeNetworkAF) Validate() error {
+	if n == "" || n == NodeNetworkAF_IPv4 || n == NodeNetworkAF_IPv6 {
+		return nil
+	}
+	return fmt.Errorf(`network address family must be one of: "", %q, %q`, NodeNetworkAF_IPv4, NodeNetworkAF_IPv6)
+}
 
 type NodeNetworkAddress struct {
 	Family        NodeNetworkAF
@@ -2860,6 +2877,9 @@ func (d *DNSConfig) IsZero() bool {
 // NetworkResource is used to represent available network
 // resources
 type NetworkResource struct {
+	// msgpack omit empty fields during serialization
+	_struct bool `codec:",omitempty"` // nolint: structcheck
+
 	Mode          string     // Mode of the network
 	Device        string     // Name of the device
 	CIDR          string     // CIDR block of addresses
@@ -2869,6 +2889,7 @@ type NetworkResource struct {
 	DNS           *DNSConfig // DNS Configuration
 	ReservedPorts []Port     // Host Reserved ports
 	DynamicPorts  []Port     // Host Dynamically assigned ports
+	CNI           *CNIConfig // CNIConfig Configuration
 }
 
 func (n *NetworkResource) Hash() uint32 {
@@ -3200,7 +3221,7 @@ func (n *NodeResources) Comparable() *ComparableResources {
 	c := &ComparableResources{
 		Flattened: AllocatedTaskResources{
 			Cpu: AllocatedCpuResources{
-				CpuShares:     int64(n.Processors.Topology.UsableCompute()),
+				CpuShares:     int64(n.Processors.Topology.TotalCompute()),
 				ReservedCores: reservableCores,
 			},
 			Memory: AllocatedMemoryResources{
@@ -3800,11 +3821,13 @@ func (a *AllocatedResources) Comparable() *ComparableResources {
 	return c
 }
 
-// OldTaskResources returns the pre-0.9.0 map of task resources
+// OldTaskResources returns the pre-0.9.0 map of task resources. This
+// functionality is still used within the scheduling code.
 func (a *AllocatedResources) OldTaskResources() map[string]*Resources {
 	m := make(map[string]*Resources, len(a.Tasks))
 	for name, res := range a.Tasks {
 		m[name] = &Resources{
+			Cores:       len(res.Cpu.ReservedCores),
 			CPU:         int(res.Cpu.CpuShares),
 			MemoryMB:    int(res.Memory.MemoryMB),
 			MemoryMaxMB: int(res.Memory.MemoryMaxMB),
@@ -7171,6 +7194,7 @@ func (tg *TaskGroup) validateNetworks() error {
 	portLabels := make(map[string]string)
 	// host_network -> static port tracking
 	staticPortsIndex := make(map[string]map[int]string)
+	cniArgKeys := set.New[string](len(tg.Networks))
 
 	for _, net := range tg.Networks {
 		for _, port := range append(net.ReservedPorts, net.DynamicPorts...) {
@@ -7208,6 +7232,26 @@ func (tg *TaskGroup) validateNetworks() error {
 			} else if port.To > math.MaxUint16 {
 				err := fmt.Errorf("Port %q cannot be mapped to a port (%d) greater than %d", port.Label, port.To, math.MaxUint16)
 				mErr.Errors = append(mErr.Errors, err)
+			}
+		}
+		// Validate the cniArgs in each network resource. Make sure there are no duplicate Args in
+		// different network resources or illegal characters (;) in key or value ;)
+		if net.CNI != nil {
+			for k, v := range net.CNI.Args {
+				if cniArgKeys.Contains(k) {
+					err := fmt.Errorf("duplicate CNI arg %q", k)
+					mErr.Errors = append(mErr.Errors, err)
+				} else {
+					cniArgKeys.Insert(k)
+				}
+				if strings.Contains(k, ";") {
+					err := fmt.Errorf("invalid ';' character in CNI arg key %q", k)
+					mErr.Errors = append(mErr.Errors, err)
+				}
+				if strings.Contains(v, ";") {
+					err := fmt.Errorf("invalid ';' character in CNI arg value %q", v)
+					mErr.Errors = append(mErr.Errors, err)
+				}
 			}
 		}
 
@@ -10650,7 +10694,18 @@ type DeploymentStatusUpdate struct {
 // RescheduleTracker encapsulates previous reschedule events
 type RescheduleTracker struct {
 	Events []*RescheduleEvent
+
+	// LastReschedule represents whether the most recent attempt to reschedule
+	// the allocation (if any) was successful
+	LastReschedule RescheduleTrackerAnnotation
 }
+
+type RescheduleTrackerAnnotation string
+
+const (
+	LastRescheduleSuccess       RescheduleTrackerAnnotation = "ok"
+	LastRescheduleFailedToPlace RescheduleTrackerAnnotation = "no placement"
+)
 
 func (rt *RescheduleTracker) Copy() *RescheduleTracker {
 	if rt == nil {
@@ -10826,6 +10881,14 @@ const (
 	AllocClientStatusLost     = "lost"
 	AllocClientStatusUnknown  = "unknown"
 )
+
+// terminalAllocationStatuses lists allocation statutes that we consider
+// terminal
+var terminalAllocationStatuses = []string{
+	AllocClientStatusComplete,
+	AllocClientStatusFailed,
+	AllocClientStatusLost,
+}
 
 // Allocation is used to allocate the placement of a task group to a node.
 type Allocation struct {
@@ -11144,12 +11207,7 @@ func (a *Allocation) ServerTerminalStatus() bool {
 
 // ClientTerminalStatus returns if the client status is terminal and will no longer transition
 func (a *Allocation) ClientTerminalStatus() bool {
-	switch a.ClientStatus {
-	case AllocClientStatusComplete, AllocClientStatusFailed, AllocClientStatusLost:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(terminalAllocationStatuses, a.ClientStatus)
 }
 
 // ShouldReschedule returns if the allocation is eligible to be rescheduled according
@@ -11227,7 +11285,9 @@ func (a *Allocation) NextRescheduleTime() (time.Time, bool) {
 		return time.Time{}, false
 	}
 
-	if a.DesiredStatus == AllocDesiredStatusStop || a.ClientStatus != AllocClientStatusFailed || failTime.IsZero() || reschedulePolicy == nil {
+	if (a.DesiredStatus == AllocDesiredStatusStop && !a.LastRescheduleFailed()) ||
+		(a.ClientStatus != AllocClientStatusFailed && a.ClientStatus != AllocClientStatusLost) ||
+		failTime.IsZero() || reschedulePolicy == nil {
 		return time.Time{}, false
 	}
 
@@ -11655,6 +11715,16 @@ func (a *Allocation) HasAnyPausedTasks() bool {
 	return false
 }
 
+// LastRescheduleFailed returns whether the scheduler previously attempted to
+// reschedule this allocation but failed to find a placement
+func (a *Allocation) LastRescheduleFailed() bool {
+	if a.RescheduleTracker == nil {
+		return false
+	}
+	return a.RescheduleTracker.LastReschedule != "" &&
+		a.RescheduleTracker.LastReschedule != LastRescheduleSuccess
+}
+
 // IdentityClaims are the input to a JWT identifying a workload. It
 // should never be serialized to msgpack unsigned.
 type IdentityClaims struct {
@@ -11836,6 +11906,11 @@ func (a *AllocListStub) SetEventDisplayMessages() {
 // to its ReschedulePolicy and the current state of its reschedule trackers
 func (a *AllocListStub) RescheduleEligible(reschedulePolicy *ReschedulePolicy, failTime time.Time) bool {
 	return a.RescheduleTracker.RescheduleEligible(reschedulePolicy, failTime)
+}
+
+// ClientTerminalStatus returns if the client status is terminal and will no longer transition
+func (a *AllocListStub) ClientTerminalStatus() bool {
+	return slices.Contains(terminalAllocationStatuses, a.ClientStatus)
 }
 
 func setDisplayMsg(taskStates map[string]*TaskState) {

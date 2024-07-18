@@ -256,6 +256,11 @@ type ClientConfig struct {
 	// Interface to use for network fingerprinting
 	NetworkInterface string `hcl:"network_interface"`
 
+	// Sort the IP addresses by the preferred IP family. This is useful when
+	// the interface has multiple IP addresses and the client should prefer
+	// one over the other.
+	PreferredAddressFamily structs.NodeNetworkAF `hcl:"preferred_address_family"`
+
 	// NetworkSpeed is used to override any detected or default network link
 	// speed.
 	NetworkSpeed int `hcl:"network_speed"`
@@ -983,6 +988,10 @@ type Telemetry struct {
 	// high numbers of single count dispatch jobs as the metrics for each take up
 	// a small memory overhead.
 	DisableDispatchedJobSummaryMetrics bool `hcl:"disable_dispatched_job_summary_metrics"`
+
+	// DisableQuotaUtilizationMetrics allows to disable publishing of quota
+	// utilization metrics
+	DisableQuotaUtilizationMetrics bool `hcl:"disable_quota_utilization_metrics"`
 
 	// DisableRPCRateMetricsLabels drops the label for the identity of the
 	// requester when publishing metrics on RPC rate on the server. This may be
@@ -2264,6 +2273,11 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 	if b.NetworkInterface != "" {
 		result.NetworkInterface = b.NetworkInterface
 	}
+
+	if b.PreferredAddressFamily != "" {
+		result.PreferredAddressFamily = b.PreferredAddressFamily
+	}
+
 	if b.NetworkSpeed != 0 {
 		result.NetworkSpeed = b.NetworkSpeed
 	}
@@ -2518,6 +2532,9 @@ func (t *Telemetry) Merge(b *Telemetry) *Telemetry {
 
 	if b.DisableDispatchedJobSummaryMetrics {
 		result.DisableDispatchedJobSummaryMetrics = b.DisableDispatchedJobSummaryMetrics
+	}
+	if b.DisableQuotaUtilizationMetrics {
+		result.DisableQuotaUtilizationMetrics = b.DisableQuotaUtilizationMetrics
 	}
 	if b.DisableRPCRateMetricsLabels {
 		result.DisableRPCRateMetricsLabels = b.DisableRPCRateMetricsLabels

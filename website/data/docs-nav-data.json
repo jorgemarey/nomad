@@ -455,6 +455,10 @@
             "path": "commands/alloc/logs"
           },
           {
+            "title": "pause",
+            "path": "commands/alloc/pause"
+          },
+          {
             "title": "restart",
             "path": "commands/alloc/restart"
           },
@@ -1798,6 +1802,10 @@
         "path": "job-specification/scaling"
       },
       {
+        "title": "schedule",
+        "path": "job-specification/schedule"
+      },
+      {
         "title": "service",
         "path": "job-specification/service"
       },
@@ -2125,10 +2133,6 @@
             "href": "/tools/autoscaling/agent/policy_eval"
           },
           {
-            "title": "source",
-            "href": "/tools/autoscaling/agent/source"
-          },
-          {
             "title": "strategy",
             "href": "/tools/autoscaling/agent/strategy"
           },
@@ -2340,6 +2344,10 @@
       {
         "title": "Considerations for Stateful Workloads",
         "path": "operations/stateful-workloads"
+      },
+      {
+        "title": "Benchmarking Nomad",
+        "path": "operations/benchmarking"
       }
     ]
   },
