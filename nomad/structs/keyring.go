@@ -9,10 +9,13 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/go-jose/go-jose/v3"
+	wrapping "github.com/hashicorp/go-kms-wrapping/v2"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/crypto"
 	"github.com/hashicorp/nomad/helper/uuid"
@@ -75,6 +78,33 @@ func NewRootKey(algorithm EncryptionAlgorithm) (*RootKey, error) {
 	return rootKey, nil
 }
 
+func (k *RootKey) Copy() *RootKey {
+	return &RootKey{
+		Meta:   k.Meta.Copy(),
+		Key:    slices.Clone(k.Key),
+		RSAKey: slices.Clone(k.RSAKey),
+	}
+}
+
+// MakeInactive returns a copy of the RootKey with the meta state set to active
+func (k *RootKey) MakeActive() *RootKey {
+	return &RootKey{
+		Meta:   k.Meta.MakeActive(),
+		Key:    slices.Clone(k.Key),
+		RSAKey: slices.Clone(k.RSAKey),
+	}
+}
+
+// MakeInactive returns a copy of the RootKey with the meta state set to
+// inactive
+func (k *RootKey) MakeInactive() *RootKey {
+	return &RootKey{
+		Meta:   k.Meta.MakeInactive(),
+		Key:    slices.Clone(k.Key),
+		RSAKey: slices.Clone(k.RSAKey),
+	}
+}
+
 // RootKeyMeta is the metadata used to refer to a RootKey. It is
 // stored in raft.
 type RootKeyMeta struct {
@@ -84,15 +114,70 @@ type RootKeyMeta struct {
 	CreateIndex uint64
 	ModifyIndex uint64
 	State       RootKeyState
+	PublishTime int64
+}
+
+// KEKProviderName enum are the built-in KEK providers.
+type KEKProviderName string
+
+const (
+	KEKProviderAEAD          KEKProviderName = "aead"
+	KEKProviderAWSKMS                        = "awskms"
+	KEKProviderAzureKeyVault                 = "azurekeyvault"
+	KEKProviderGCPCloudKMS                   = "gcpckms"
+	KEKProviderVaultTransit                  = "transit"
+)
+
+// KEKProviderConfig is the server configuration for an external KMS provider
+// the server will use as a Key Encryption Key (KEK) for encrypting/decrypting
+// the DEK.
+type KEKProviderConfig struct {
+	Provider string            `hcl:",key"`
+	Name     string            `hcl:"name"`
+	Active   bool              `hcl:"active"`
+	Config   map[string]string `hcl:"-" json:"-"`
+
+	// ExtraKeysHCL gets used by HCL to surface unknown keys. The parser will
+	// then read these keys to create the Config map, so that we don't need a
+	// nested "config" block/map in the config file
+	ExtraKeysHCL []string `hcl:",unusedKeys" json:"-"`
+}
+
+func (c *KEKProviderConfig) Copy() *KEKProviderConfig {
+	return &KEKProviderConfig{
+		Provider: c.Provider,
+		Active:   c.Active,
+		Name:     c.Name,
+		Config:   maps.Clone(c.Config),
+	}
+}
+
+// Merge is used to merge two configurations. Note that Provider and Name should
+// always be identical before we merge.
+func (c *KEKProviderConfig) Merge(o *KEKProviderConfig) *KEKProviderConfig {
+	result := c.Copy()
+	result.Active = o.Active
+	for k, v := range o.Config {
+		result.Config[k] = v
+	}
+	return result
+}
+
+func (c *KEKProviderConfig) ID() string {
+	if c.Name == "" {
+		return c.Provider
+	}
+	return c.Provider + "." + c.Name
 }
 
 // RootKeyState enum describes the lifecycle of a root key.
 type RootKeyState string
 
 const (
-	RootKeyStateInactive RootKeyState = "inactive"
-	RootKeyStateActive                = "active"
-	RootKeyStateRekeying              = "rekeying"
+	RootKeyStateInactive     RootKeyState = "inactive"
+	RootKeyStateActive                    = "active"
+	RootKeyStateRekeying                  = "rekeying"
+	RootKeyStatePrepublished              = "prepublished"
 
 	// RootKeyStateDeprecated is, itself, deprecated and is no longer in
 	// use. For backwards compatibility, any existing keys with this state will
@@ -122,33 +207,66 @@ type RootKeyMetaStub struct {
 	State      RootKeyState
 }
 
-// Active indicates his key is the one currently being used for
-// crypto operations (at most one key can be Active)
-func (rkm *RootKeyMeta) Active() bool {
+// IsActive indicates this key is the one currently being used for crypto
+// operations (at most one key can be Active)
+func (rkm *RootKeyMeta) IsActive() bool {
 	return rkm.State == RootKeyStateActive
 }
 
-func (rkm *RootKeyMeta) SetActive() {
-	rkm.State = RootKeyStateActive
+// MakeActive returns a copy of the RootKeyMeta with the state set to active
+func (rkm *RootKeyMeta) MakeActive() *RootKeyMeta {
+	out := rkm.Copy()
+	if out != nil {
+		out.State = RootKeyStateActive
+		out.PublishTime = 0
+	}
+	return out
 }
 
-// Rekeying indicates that variables encrypted with this key should be
+// IsRekeying indicates that variables encrypted with this key should be
 // rekeyed
-func (rkm *RootKeyMeta) Rekeying() bool {
+func (rkm *RootKeyMeta) IsRekeying() bool {
 	return rkm.State == RootKeyStateRekeying
 }
 
-func (rkm *RootKeyMeta) SetRekeying() {
-	rkm.State = RootKeyStateRekeying
+// MakeRekeying returns a copy of the RootKeyMeta with the state set to rekeying
+func (rkm *RootKeyMeta) MakeRekeying() *RootKeyMeta {
+	out := rkm.Copy()
+	if out != nil {
+		out.State = RootKeyStateRekeying
+	}
+	return out
 }
 
-func (rkm *RootKeyMeta) SetInactive() {
-	rkm.State = RootKeyStateInactive
+// MakePrepublished returns a copy of the RootKeyMeta with the state set to
+// prepublished at the time t
+func (rkm *RootKeyMeta) MakePrepublished(t int64) *RootKeyMeta {
+	out := rkm.Copy()
+	if out != nil {
+		out.PublishTime = t
+		out.State = RootKeyStatePrepublished
+	}
+	return out
 }
 
-// Inactive indicates that this key is no longer being used to encrypt new
+// IsPrepublished indicates that this key has been published and is pending
+// being promoted to active
+func (rkm *RootKeyMeta) IsPrepublished() bool {
+	return rkm.State == RootKeyStatePrepublished
+}
+
+// MakeInactive returns a copy of the RootKeyMeta with the state set to inactive
+func (rkm *RootKeyMeta) MakeInactive() *RootKeyMeta {
+	out := rkm.Copy()
+	if out != nil {
+		out.State = RootKeyStateInactive
+	}
+	return out
+}
+
+// IsInactive indicates that this key is no longer being used to encrypt new
 // variables or workload identities.
-func (rkm *RootKeyMeta) Inactive() bool {
+func (rkm *RootKeyMeta) IsInactive() bool {
 	return rkm.State == RootKeyStateInactive || rkm.State == RootKeyStateDeprecated
 }
 
@@ -184,7 +302,7 @@ func (rkm *RootKeyMeta) Validate() error {
 	}
 	switch rkm.State {
 	case RootKeyStateInactive, RootKeyStateActive,
-		RootKeyStateRekeying, RootKeyStateDeprecated:
+		RootKeyStateRekeying, RootKeyStateDeprecated, RootKeyStatePrepublished:
 	default:
 		return fmt.Errorf("root key state %q is invalid", rkm.State)
 	}
@@ -192,13 +310,24 @@ func (rkm *RootKeyMeta) Validate() error {
 }
 
 // KeyEncryptionKeyWrapper is the struct that gets serialized for the on-disk
-// KMS wrapper. This struct includes the server-specific key-wrapping key and
-// should never be sent over RPC.
+// KMS wrapper. When using the AEAD provider, this struct includes the
+// server-specific key-wrapping key. This struct should never be sent over RPC
+// or written to Raft.
 type KeyEncryptionKeyWrapper struct {
-	Meta                       *RootKeyMeta
-	EncryptedDataEncryptionKey []byte `json:"DEK"`
-	EncryptedRSAKey            []byte `json:"RSAKey"`
-	KeyEncryptionKey           []byte `json:"KEK"`
+	Meta *RootKeyMeta
+
+	Provider                 string             `json:"Provider,omitempty"`
+	ProviderID               string             `json:"ProviderID,omitempty"`
+	WrappedDataEncryptionKey *wrapping.BlobInfo `json:"WrappedDEK,omitempty"`
+	WrappedRSAKey            *wrapping.BlobInfo `json:"WrappedRSAKey,omitempty"`
+	KeyEncryptionKey         []byte             `json:"KEK,omitempty"`
+
+	// These fields were used for AEAD before we added support for external
+	// KMS. The wrapped key returned from the go-kms-wrapper library includes
+	// the ciphertext but we need all the fields in order to decrypt. We'll
+	// leave these fields so we can load keys from older servers.
+	EncryptedDataEncryptionKey []byte `json:"DEK,omitempty"`
+	EncryptedRSAKey            []byte `json:"RSAKey,omitempty"`
 }
 
 // EncryptionAlgorithm chooses which algorithm is used for
@@ -211,8 +340,9 @@ const (
 
 // KeyringRotateRootKeyRequest is the argument to the Keyring.Rotate RPC
 type KeyringRotateRootKeyRequest struct {
-	Algorithm EncryptionAlgorithm
-	Full      bool
+	Algorithm   EncryptionAlgorithm
+	Full        bool
+	PublishTime int64
 	WriteRequest
 }
 
@@ -261,7 +391,7 @@ type KeyringGetRootKeyResponse struct {
 
 // KeyringUpdateRootKeyMetaRequest is used internally for key
 // replication so that we have a request wrapper for writing the
-// metadata to the FSM without including the key material
+// metadata to the FSM without including the key material.
 type KeyringUpdateRootKeyMetaRequest struct {
 	RootKeyMeta *RootKeyMeta
 	Rekey       bool

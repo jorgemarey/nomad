@@ -6,8 +6,12 @@
 package allocrunner
 
 import (
+	"context"
 	"errors"
+	"math/rand"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/containerd/go-cni"
@@ -22,6 +26,252 @@ import (
 	"github.com/shoenig/test/must"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLoadCNIConf_confParser(t *testing.T) {
+	confDir := t.TempDir()
+
+	writeFile := func(t *testing.T, filename, content string) {
+		t.Helper()
+		path := filepath.Join(confDir, filename)
+		must.NoError(t, os.WriteFile(path, []byte(content), 0644))
+		t.Cleanup(func() {
+			test.NoError(t, os.Remove(path))
+		})
+	}
+
+	cases := []struct {
+		name, file, content string
+		expectErr           string
+	}{
+		{
+			name: "good-conflist",
+			file: "good.conflist", content: `
+{
+  "cniVersion": "1.0.0",
+  "name": "good-conflist",
+  "plugins": [{
+    "type": "cool-plugin"
+  }]
+}`,
+		},
+		{
+			name: "good-conf",
+			file: "good.conf", content: `
+{
+  "cniVersion": "1.0.0",
+  "name": "good-conf",
+  "type": "cool-plugin"
+}`,
+		},
+		{
+			name: "good-json",
+			file: "good.json", content: `
+{
+  "cniVersion": "1.0.0",
+  "name": "good-json",
+  "type": "cool-plugin"
+}`,
+		},
+		{
+			name:      "no-config",
+			expectErr: "no CNI network config found in",
+		},
+		{
+			name: "invalid-conflist",
+			file: "invalid.conflist", content: "{invalid}",
+			expectErr: "error parsing configuration list:",
+		},
+		{
+			name: "invalid-conf",
+			file: "invalid.conf", content: "{invalid}",
+			expectErr: "error parsing configuration:",
+		},
+		{
+			name: "invalid-json",
+			file: "invalid.json", content: "{invalid}",
+			expectErr: "error parsing configuration:",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.file != "" && tc.content != "" {
+				writeFile(t, tc.file, tc.content)
+			}
+
+			parser, err := loadCNIConf(confDir, tc.name)
+			if tc.expectErr != "" {
+				must.ErrorContains(t, err, tc.expectErr)
+				return
+			}
+			must.NoError(t, err)
+			opt, err := parser.getOpt()
+			must.NoError(t, err)
+			c, err := cni.New(opt)
+			must.NoError(t, err)
+
+			config := c.GetConfig()
+			must.Len(t, 1, config.Networks, must.Sprint("expect 1 network in config"))
+			plugins := config.Networks[0].Config.Plugins
+			must.Len(t, 1, plugins, must.Sprint("expect 1 plugin in network"))
+			must.Eq(t, "cool-plugin", plugins[0].Network.Type)
+		})
+	}
+}
+
+func TestSetup(t *testing.T) {
+	ci.Parallel(t)
+
+	testCases := []struct {
+		name         string
+		modAlloc     func(*structs.Allocation)
+		setupErrors  []string
+		expectResult *structs.AllocNetworkStatus
+		expectErr    string
+		expectArgs   map[string]string
+	}{
+		{
+			name: "defaults",
+			expectResult: &structs.AllocNetworkStatus{
+				InterfaceName: "eth0",
+				Address:       "99.99.99.99",
+			},
+			expectArgs: map[string]string{
+				"IgnoreUnknown": "true",
+			},
+		},
+		{
+			name:        "error once and succeed on retry",
+			setupErrors: []string{"sad day"},
+			expectResult: &structs.AllocNetworkStatus{
+				InterfaceName: "eth0",
+				Address:       "99.99.99.99",
+			},
+			expectArgs: map[string]string{
+				"IgnoreUnknown": "true",
+			},
+		},
+		{
+			name:        "error too many times",
+			setupErrors: []string{"sad day", "sad again", "the last straw"},
+			expectErr:   "sad day", // should return the first error
+		},
+		{
+			name: "with cni args",
+			modAlloc: func(a *structs.Allocation) {
+				tg := a.Job.LookupTaskGroup(a.TaskGroup)
+				tg.Networks = []*structs.NetworkResource{{
+					CNI: &structs.CNIConfig{
+						Args: map[string]string{
+							"first_arg": "example",
+							"new_arg":   "example_2",
+						},
+					},
+				}}
+			},
+			expectResult: &structs.AllocNetworkStatus{
+				InterfaceName: "eth0",
+				Address:       "99.99.99.99",
+			},
+			expectArgs: map[string]string{
+				"IgnoreUnknown": "true",
+				"first_arg":     "example",
+				"new_arg":       "example_2",
+			},
+		},
+		{
+			name: "with args and tproxy",
+			modAlloc: func(a *structs.Allocation) {
+				tg := a.Job.LookupTaskGroup(a.TaskGroup)
+				tg.Networks = []*structs.NetworkResource{{
+					CNI: &structs.CNIConfig{
+						Args: map[string]string{
+							"extra_arg": "example",
+						},
+					},
+					DNS: &structs.DNSConfig{},
+					ReservedPorts: []structs.Port{
+						{
+							Label:       "http",
+							Value:       9002,
+							To:          9002,
+							HostNetwork: "default",
+						},
+					},
+				}}
+				tg.Services[0].PortLabel = "http"
+				tg.Services[0].Connect.SidecarService.Proxy = &structs.ConsulProxy{
+					TransparentProxy: &structs.ConsulTransparentProxy{},
+				}
+			},
+			expectResult: &structs.AllocNetworkStatus{
+				InterfaceName: "eth0",
+				Address:       "99.99.99.99",
+				DNS: &structs.DNSConfig{
+					Servers: []string{"192.168.1.117"},
+				},
+			},
+			expectArgs: map[string]string{
+				"IgnoreUnknown":          "true",
+				"extra_arg":              "example",
+				"CONSUL_IPTABLES_CONFIG": `{"ConsulDNSIP":"192.168.1.117","ConsulDNSPort":8600,"ProxyUserID":"101","ProxyInboundPort":9999,"ProxyOutboundPort":15001,"ExcludeInboundPorts":["9002"],"ExcludeOutboundPorts":null,"ExcludeOutboundCIDRs":null,"ExcludeUIDs":null,"NetNS":"/var/run/docker/netns/nonsense-ns","IptablesProvider":null}`,
+			},
+		},
+	}
+
+	nodeAddrs := map[string]string{
+		"consul.dns.addr": "192.168.1.117",
+		"consul.dns.port": "8600",
+	}
+	nodeMeta := map[string]string{
+		"connect.transparent_proxy.default_outbound_port": "15001",
+		"connect.transparent_proxy.default_uid":           "101",
+	}
+
+	src := rand.NewSource(1000)
+	r := rand.New(src)
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakePlugin := newMockCNIPlugin()
+			fakePlugin.setupErrors = tc.setupErrors
+
+			c := &cniNetworkConfigurator{
+				nodeAttrs: nodeAddrs,
+				nodeMeta:  nodeMeta,
+				logger:    testlog.HCLogger(t),
+				cni:       fakePlugin,
+				rand:      r,
+				nsOpts:    &nsOpts{},
+			}
+
+			alloc := mock.ConnectAlloc()
+			if tc.modAlloc != nil {
+				tc.modAlloc(alloc)
+			}
+
+			spec := &drivers.NetworkIsolationSpec{
+				Mode:   "group",
+				Path:   "/var/run/docker/netns/nonsense-ns",
+				Labels: map[string]string{"docker_sandbox_container_id": "bogus"},
+			}
+
+			// method under test
+			result, err := c.Setup(context.Background(), alloc, spec)
+			if tc.expectErr == "" {
+				must.NoError(t, err)
+				must.Eq(t, tc.expectResult, result)
+				must.Eq(t, tc.expectArgs, c.nsOpts.args)
+				expectCalls := len(tc.setupErrors) + 1
+				must.Eq(t, fakePlugin.counter.Get()["Setup"], expectCalls,
+					must.Sprint("unexpected call count"))
+			} else {
+				must.Nil(t, result, must.Sprint("expect nil result on error"))
+				must.ErrorContains(t, err, tc.expectErr)
+			}
+		})
+	}
+}
 
 type mockIPTables struct {
 	listCall  [2]string

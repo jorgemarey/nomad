@@ -29,7 +29,6 @@ import (
 	"strings"
 	"time"
 
-	jwt "github.com/go-jose/go-jose/v3/jwt"
 	"github.com/hashicorp/cronexpr"
 	"github.com/hashicorp/go-msgpack/v2/codec"
 	"github.com/hashicorp/go-multierror"
@@ -2441,6 +2440,7 @@ type Resources struct {
 	Networks    Networks
 	Devices     ResourceDevices
 	NUMA        *NUMA
+	SecretsMB   int
 }
 
 const (
@@ -2511,6 +2511,13 @@ func (r *Resources) Validate() error {
 		mErr.Errors = append(mErr.Errors, fmt.Errorf("MemoryMaxMB value (%d) should be larger than MemoryMB value (%d)", r.MemoryMaxMB, r.MemoryMB))
 	}
 
+	if r.SecretsMB > r.MemoryMB {
+		mErr.Errors = append(mErr.Errors, fmt.Errorf("SecretsMB value (%d) cannot be larger than MemoryMB value (%d)", r.SecretsMB, r.MemoryMB))
+	}
+	if r.SecretsMB < 0 {
+		mErr.Errors = append(mErr.Errors, fmt.Errorf("SecretsMB value (%d) cannot be negative", r.SecretsMB))
+	}
+
 	return mErr.ErrorOrNil()
 }
 
@@ -2538,6 +2545,9 @@ func (r *Resources) Merge(other *Resources) {
 	if len(other.Devices) != 0 {
 		r.Devices = other.Devices
 	}
+	if other.SecretsMB != 0 {
+		r.SecretsMB = other.SecretsMB
+	}
 }
 
 // Equal Resources.
@@ -2557,7 +2567,8 @@ func (r *Resources) Equal(o *Resources) bool {
 		r.DiskMB == o.DiskMB &&
 		r.IOPS == o.IOPS &&
 		r.Networks.Equal(&o.Networks) &&
-		r.Devices.Equal(&o.Devices)
+		r.Devices.Equal(&o.Devices) &&
+		r.SecretsMB == o.SecretsMB
 }
 
 // ResourceDevices are part of Resources.
@@ -2654,6 +2665,7 @@ func (r *Resources) Copy() *Resources {
 		Networks:    r.Networks.Copy(),
 		Devices:     r.Devices.Copy(),
 		NUMA:        r.NUMA.Copy(),
+		SecretsMB:   r.SecretsMB,
 	}
 }
 
@@ -2680,6 +2692,7 @@ func (r *Resources) Add(delta *Resources) {
 		r.MemoryMaxMB += delta.MemoryMB
 	}
 	r.DiskMB += delta.DiskMB
+	r.SecretsMB += delta.SecretsMB
 
 	for _, n := range delta.Networks {
 		// Find the matching interface by IP or CIDR
@@ -6134,6 +6147,21 @@ type JobScalingEvents struct {
 	ModifyIndex uint64
 }
 
+func (j *JobScalingEvents) Copy() *JobScalingEvents {
+	if j == nil {
+		return nil
+	}
+	njse := new(JobScalingEvents)
+	*njse = *j
+
+	njse.ScalingEvents = make(map[string][]*ScalingEvent, len(j.ScalingEvents))
+	for taskGroup, events := range j.ScalingEvents {
+		njse.ScalingEvents[taskGroup] = helper.CopySlice(events)
+	}
+
+	return njse
+}
+
 // NewScalingEvent method for ScalingEvent objects.
 func NewScalingEvent(message string) *ScalingEvent {
 	return &ScalingEvent{
@@ -6169,19 +6197,17 @@ type ScalingEvent struct {
 	CreateIndex uint64
 }
 
-func (e *ScalingEvent) SetError(error bool) *ScalingEvent {
-	e.Error = error
-	return e
-}
+func (e *ScalingEvent) Copy() *ScalingEvent {
+	if e == nil {
+		return nil
+	}
+	ne := new(ScalingEvent)
+	*ne = *e
 
-func (e *ScalingEvent) SetMeta(meta map[string]interface{}) *ScalingEvent {
-	e.Meta = meta
-	return e
-}
-
-func (e *ScalingEvent) SetEvalID(evalID string) *ScalingEvent {
-	e.EvalID = &evalID
-	return e
+	ne.Count = pointer.Copy(e.Count)
+	ne.Meta = maps.Clone(e.Meta)
+	ne.EvalID = pointer.Copy(e.EvalID)
+	return ne
 }
 
 // ScalingEventRequest is by for Job.Scale endpoint
@@ -7235,7 +7261,7 @@ func (tg *TaskGroup) validateNetworks() error {
 			}
 		}
 		// Validate the cniArgs in each network resource. Make sure there are no duplicate Args in
-		// different network resources or illegal characters (;) in key or value ;)
+		// different network resources or invalid characters (;) in key or value ;)
 		if net.CNI != nil {
 			for k, v := range net.CNI.Args {
 				if cniArgKeys.Contains(k) {
@@ -7244,6 +7270,11 @@ func (tg *TaskGroup) validateNetworks() error {
 				} else {
 					cniArgKeys.Insert(k)
 				}
+				// CNI_ARGS is a ";"-separated string of "key=val", so a ";"
+				// in either key or val would confuse plugins (or libraries)
+				// that parse that string.
+				// Pre-validating this here protects job authors from submitting
+				// a job that will most likely error later on the client anyway.
 				if strings.Contains(k, ";") {
 					err := fmt.Errorf("invalid ';' character in CNI arg key %q", k)
 					mErr.Errors = append(mErr.Errors, err)
@@ -8062,9 +8093,10 @@ func (t *Task) Canonicalize(job *Job, tg *TaskGroup) {
 
 	// If there was no default identity, always create one.
 	if t.Identity == nil {
-		t.Identity = &WorkloadIdentity{}
+		t.Identity = DefaultWorkloadIdentity()
+	} else {
+		t.Identity.Canonicalize()
 	}
-	t.Identity.Canonicalize()
 }
 
 func (t *Task) GoString() string {
@@ -11723,140 +11755,6 @@ func (a *Allocation) LastRescheduleFailed() bool {
 	}
 	return a.RescheduleTracker.LastReschedule != "" &&
 		a.RescheduleTracker.LastReschedule != LastRescheduleSuccess
-}
-
-// IdentityClaims are the input to a JWT identifying a workload. It
-// should never be serialized to msgpack unsigned.
-type IdentityClaims struct {
-	Namespace    string `json:"nomad_namespace"`
-	JobID        string `json:"nomad_job_id"`
-	AllocationID string `json:"nomad_allocation_id"`
-	TaskName     string `json:"nomad_task,omitempty"`
-	ServiceName  string `json:"nomad_service,omitempty"`
-
-	ConsulNamespace string `json:"consul_namespace,omitempty"`
-	VaultNamespace  string `json:"vault_namespace,omitempty"`
-	VaultRole       string `json:"vault_role,omitempty"`
-
-	jwt.Claims
-}
-
-// NewIdentityClaims returns new workload identity claims. Since it may be
-// called with a denormalized Allocation, the Job must be passed in distinctly.
-//
-// ID claim is random (nondeterministic) so multiple calls with the same values
-// will not return equal claims by design. JWT IDs should never collide.
-func NewIdentityClaims(job *Job, alloc *Allocation, wihandle *WIHandle, wid *WorkloadIdentity, now time.Time) *IdentityClaims {
-	tg := job.LookupTaskGroup(alloc.TaskGroup)
-	if tg == nil {
-		return nil
-	}
-
-	if wid == nil {
-		return nil
-	}
-
-	jwtnow := jwt.NewNumericDate(now.UTC())
-	claims := &IdentityClaims{
-		Namespace:    alloc.Namespace,
-		JobID:        alloc.JobID,
-		AllocationID: alloc.ID,
-		Claims: jwt.Claims{
-			NotBefore: jwtnow,
-			IssuedAt:  jwtnow,
-		},
-	}
-
-	// If this is a child job, use the parent's ID
-	if job.ParentID != "" {
-		claims.JobID = job.ParentID
-	}
-
-	var taskName string
-
-	switch wihandle.WorkloadType {
-	case WorkloadTypeService:
-		serviceName := wihandle.WorkloadIdentifier
-		if wihandle.InterpolatedWorkloadIdentifier != "" {
-			serviceName = wihandle.InterpolatedWorkloadIdentifier
-		}
-		claims.ServiceName = serviceName
-
-		// Find task name if this is a task service.
-		for _, t := range tg.Tasks {
-			for _, s := range t.Services {
-				if s.Name == serviceName {
-					taskName = t.Name
-					break
-				}
-			}
-			if taskName != "" {
-				break
-			}
-		}
-
-	case WorkloadTypeTask:
-		taskName = wihandle.WorkloadIdentifier
-		claims.TaskName = taskName
-
-	default:
-		// in case of an unknown workload type we quit
-		return nil
-	}
-
-	// Add ConsulNamespace and VaultNamespace claims if necessary.
-	if taskName != "" {
-		task := tg.LookupTask(taskName)
-		if task == nil {
-			return nil
-		}
-
-		if wid.IsConsul() {
-			if task.Consul != nil {
-				claims.ConsulNamespace = task.Consul.Namespace
-			} else if tg.Consul != nil {
-				claims.ConsulNamespace = tg.Consul.Namespace
-			}
-		}
-
-		if wid.IsVault() && task.Vault != nil {
-			claims.VaultNamespace = task.Vault.Namespace
-			claims.VaultRole = task.Vault.Role
-		}
-
-	} else if wid.IsConsul() && tg.Consul != nil {
-		claims.ConsulNamespace = tg.Consul.Namespace
-	}
-
-	claims.Audience = slices.Clone(wid.Audience)
-	claims.setSubject(job, alloc.TaskGroup, wihandle.WorkloadIdentifier, wid.Name)
-	claims.setExp(now, wid)
-
-	claims.ID = uuid.Generate()
-
-	return claims
-}
-
-// setSubject creates the standard subject claim for workload identities.
-func (claims *IdentityClaims) setSubject(job *Job, group, widentifier, id string) {
-	claims.Subject = strings.Join([]string{
-		job.Region,
-		job.Namespace,
-		job.ID,
-		group,
-		widentifier,
-		id,
-	}, ":")
-}
-
-// setExp sets the absolute time at which these identity claims expire.
-func (claims *IdentityClaims) setExp(now time.Time, wid *WorkloadIdentity) {
-	if wid.TTL == 0 {
-		// No expiry
-		return
-	}
-
-	claims.Expiry = jwt.NewNumericDate(now.Add(wid.TTL))
 }
 
 // AllocationDiff is another named type for Allocation (to use the same fields),

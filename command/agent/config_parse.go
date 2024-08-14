@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/hashicorp/hcl"
@@ -92,6 +93,13 @@ func ParseConfigFile(path string) (*Config, error) {
 		}
 	}
 
+	matches = list.Filter("keyring")
+	if len(matches.Items) > 0 {
+		if err := parseKeyringConfigs(c, matches); err != nil {
+			return nil, fmt.Errorf("error parsing 'keyring': %w", err)
+		}
+	}
+
 	// convert strings to time.Durations
 	tds := []durationConversionMap{
 		{"gc_interval", &c.Client.GCInterval, &c.Client.GCIntervalHCL, nil},
@@ -171,6 +179,8 @@ func ParseConfigFile(path string) (*Config, error) {
 				c.Client.TemplateConfig.NomadRetry.MaxBackoff = d
 			},
 		},
+		{"reporting.export_interval",
+			&c.Reporting.ExportInterval, &c.Reporting.ExportIntervalHCL, nil},
 	}
 
 	// Parse durations for Consul and Vault config blocks if provided.
@@ -328,6 +338,11 @@ func extraKeys(c *Config) error {
 	for _, k := range []string{"datadog_tags"} {
 		helper.RemoveEqualFold(&c.ExtraKeysHCL, k)
 		helper.RemoveEqualFold(&c.ExtraKeysHCL, "telemetry")
+	}
+
+	helper.RemoveEqualFold(&c.ExtraKeysHCL, "keyring")
+	for _, provider := range c.KEKProviders {
+		helper.RemoveEqualFold(&c.ExtraKeysHCL, provider.Provider)
 	}
 
 	// Remove reporting extra keys
@@ -519,6 +534,49 @@ func parseConsuls(c *Config, list *ast.ObjectList) error {
 			cc.TaskIdentity = &taskIdentity
 		}
 	}
+
+	return nil
+}
+
+// parseKeyringConfigs parses the keyring blocks. At this point we have a list
+// of ast.Nodes and a KEKProviderConfig for each one. The KEKProviderConfig has
+// the unknown fields (provider-specific config) but not their values. So we
+// decode the ast.Node into a map and then read out the values for the unknown
+// fields. The results get added to the KEKProviderConfig's Config field
+func parseKeyringConfigs(c *Config, keyringBlocks *ast.ObjectList) error {
+	if len(keyringBlocks.Items) == 0 {
+		return nil
+	}
+
+	for idx, obj := range keyringBlocks.Items {
+		provider := c.KEKProviders[idx]
+		if len(provider.ExtraKeysHCL) == 0 {
+			continue
+		}
+
+		provider.Config = map[string]string{}
+
+		var m map[string]interface{}
+		if err := hcl.DecodeObject(&m, obj.Val); err != nil {
+			return err
+		}
+
+		for _, extraKey := range provider.ExtraKeysHCL {
+			val, ok := m[extraKey].(string)
+			if !ok {
+				return fmt.Errorf("failed to decode key %q to string", extraKey)
+			}
+			provider.Config[extraKey] = val
+		}
+
+		// clear the extra keys for these blocks because we've already handled
+		// them and don't want them to bubble up to the caller
+		provider.ExtraKeysHCL = nil
+	}
+
+	sort.Slice(c.KEKProviders, func(i, j int) bool {
+		return c.KEKProviders[i].ID() < c.KEKProviders[j].ID()
+	})
 
 	return nil
 }

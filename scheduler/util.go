@@ -368,6 +368,8 @@ func nonNetworkResourcesUpdated(a, b *structs.Resources) comparison {
 		return difference("task devices", a.Devices, b.Devices)
 	case !a.NUMA.Equal(b.NUMA):
 		return difference("numa", a.NUMA, b.NUMA)
+	case a.SecretsMB != b.SecretsMB:
+		return difference("task secrets", a.SecretsMB, b.SecretsMB)
 	}
 	return same
 }
@@ -540,6 +542,10 @@ func networkUpdated(netA, netB []*structs.NetworkResource) comparison {
 
 		if !an.DNS.Equal(bn.DNS) {
 			return difference("network dns", an.DNS, bn.DNS)
+		}
+
+		if !an.CNI.Equal(bn.CNI) {
+			return difference("network cni", an.CNI, bn.CNI)
 		}
 
 		aPorts, bPorts := networkPortMap(an), networkPortMap(bn)

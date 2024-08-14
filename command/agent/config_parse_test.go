@@ -344,8 +344,25 @@ var basicConfig = &Config{
 		},
 	},
 	Reporting: &config.ReportingConfig{
+		ExportAddress:     "http://localhost:8080",
+		ExportIntervalHCL: "15m",
+		ExportInterval:    time.Minute * 15,
 		License: &config.LicenseReportingConfig{
 			Enabled: pointer.Of(true),
+		},
+	},
+	KEKProviders: []*structs.KEKProviderConfig{
+		{
+			Provider: "aead",
+			Active:   false,
+		},
+		{
+			Provider: "awskms",
+			Active:   true,
+			Config: map[string]string{
+				"region":     "us-east-1",
+				"kms_key_id": "alias/kms-nomad-keyring",
+			},
 		},
 	},
 }
@@ -413,7 +430,7 @@ var pluginConfig = &Config{
 		},
 	},
 	Reporting: &config.ReportingConfig{
-		&config.LicenseReportingConfig{},
+		License: &config.LicenseReportingConfig{},
 	},
 	Consuls: []*config.ConsulConfig{},
 	Vaults:  []*config.VaultConfig{},
@@ -468,7 +485,7 @@ var nonoptConfig = &Config{
 	HTTPAPIResponseHeaders:    map[string]string{},
 	Sentinel:                  nil,
 	Reporting: &config.ReportingConfig{
-		&config.LicenseReportingConfig{},
+		License: &config.LicenseReportingConfig{},
 	},
 	Consuls: []*config.ConsulConfig{},
 	Vaults:  []*config.VaultConfig{},
@@ -481,6 +498,7 @@ func TestConfig_ParseMerge(t *testing.T) {
 	must.NoError(t, err)
 
 	actual, err := ParseConfigFile(path)
+	must.NoError(t, err)
 
 	// The Vault connection retry interval is an internal only configuration
 	// option, and therefore needs to be added here to ensure the test passes.
@@ -599,7 +617,7 @@ func (c *Config) addDefaults() {
 	}
 	if c.Reporting == nil {
 		c.Reporting = &config.ReportingConfig{
-			&config.LicenseReportingConfig{
+			License: &config.LicenseReportingConfig{
 				Enabled: pointer.Of(false),
 			},
 		}
@@ -751,6 +769,16 @@ var sample0 = &Config{
 		CleanupDeadServers: pointer.Of(true),
 	},
 	Reporting: config.DefaultReporting(),
+	KEKProviders: []*structs.KEKProviderConfig{
+		{
+			Provider: "awskms",
+			Active:   true,
+			Config: map[string]string{
+				"region":     "us-east-1",
+				"kms_key_id": "alias/kms-nomad-keyring",
+			},
+		},
+	},
 }
 
 func TestConfig_ParseSample0(t *testing.T) {
@@ -867,7 +895,21 @@ var sample1 = &Config{
 		CleanupDeadServers: pointer.Of(true),
 	},
 	Reporting: &config.ReportingConfig{
-		&config.LicenseReportingConfig{},
+		License: &config.LicenseReportingConfig{},
+	},
+	KEKProviders: []*structs.KEKProviderConfig{
+		{
+			Provider: "aead",
+			Active:   false,
+		},
+		{
+			Provider: "awskms",
+			Active:   true,
+			Config: map[string]string{
+				"region":     "us-east-1",
+				"kms_key_id": "alias/kms-nomad-keyring",
+			},
+		},
 	},
 }
 

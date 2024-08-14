@@ -348,4 +348,17 @@ reporting {
   license {
     enabled = true
   }
+
+  address         = "http://localhost:8080"
+  export_interval = "15m"
+}
+
+keyring "awskms" {
+  active     = true
+  region     = "us-east-1"
+  kms_key_id = "alias/kms-nomad-keyring"
+}
+
+keyring "aead" {
+  active = false
 }
