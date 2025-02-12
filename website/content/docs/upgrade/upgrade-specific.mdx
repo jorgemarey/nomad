@@ -2,8 +2,7 @@
 layout: docs
 page_title: Upgrade Guides
 description: |-
-  Specific versions of Nomad may have additional information about the upgrade
-  process beyond the standard flow.
+  Review upgrade details for specific versions of Nomad.
 ---
 
 # Upgrade Guides
@@ -13,7 +12,110 @@ upgrade. However, specific versions of Nomad may have more details provided for
 their upgrades as a result of new features or changed behavior. This page is
 used to document those details separately from the standard upgrade flow.
 
-## Nomad 1.8.3 (UNRELEASED)
+## Nomad 1.9.5
+
+#### CNI plugins
+
+Nomad 1.9.5 includes a bug fix for restoring allocation networking after a
+client host reboot. This fix requires recent versions of the CNI reference
+plugins (minimum 1.2.0) and will fallback to the existing behavior if the CNI
+reference plugins cannot support the fix.
+
+We recommend installing the CNI reference plugins from the [CNI project release
+page](https://github.com/containernetworking/plugins/releases) rather than your
+Linux distribution's package manager.
+
+## Nomad 1.9.4
+
+#### Security updates to default deny lists
+
+In Nomad 1.9.4, the default `function_denylist` includes `executeTemplate`, as
+a measure to prevent accidental or malicious infinitely recursive execution.
+Users that require `executeTemplate` should update their
+[configuration](/nomad/docs/job-specification/template#function_denylist).
+
+Additionally, the [default client env deny
+list](/nomad/docs/configuration/client#env-denylist) includes more environment
+variables. Users who need some of these secure environment variables passed to
+their tasks should consult the list and overwrite it in the configuration.
+
+## Nomad 1.9.3
+
+In Nomad 1.9.3, the mechanism used for calculating when objects are eligible
+for garbage collection changes to a clock-based one. This has two consequences.
+First, it allows to set arbitrarily long GC intervals. Second, it requires that
+Nomad servers are kept roughly in sync time-wise, because GC can originate in a
+follower.
+
+Nomad 1.9.2 contained a bug that could drop all cluster state on upgrade and
+has been removed from downloads.
+
+## Nomad 1.9.0
+
+#### Dropped support for older clients
+
+Nomad 1.9.0 removes support for Nomad client agents older than 1.6.0. Older
+nodes fail heartbeats. Nomad servers mark the workloads on those nodes
+as lost and reschedule them normally according to the job's [reschedule][]
+block.
+
+#### Keyring In Raft
+
+Nomad 1.9.0 stores keys used for signing Workload Identity and encrypting
+Variables in Raft, instead of storing key material in the external
+keystore. When using external KMS or Vault transit encryption for the
+[`keyring`](/nomad/docs/configuration/keyring) provider, the key encryption key
+(KEK) is stored outside of Nomad and no cleartext key material exists on disk.
+When using the default AEAD provider, the key encryption key (KEK) is stored in
+Raft alongside the encrypted data encryption keys (DEK).
+
+Nomad automatically migrates the key storage for all key material on the
+first [`root_key_gc_interval`][] after all servers are upgraded to 1.9.0. The
+existing on-disk keystore is required to restore servers from older snapshots,
+so you should continue to back up the on-disk keystore until you no longer need
+those older snapshots.
+
+#### Support for HCLv1 removed
+
+Nomad 1.9.0 no longer supports the HCLv1 format for job specifications. Using
+the `-hcl1` option for the `job run`, `job plan`, and `job validate` commands
+will no longer work.
+
+One common use of `-hcl1` was when specifying [Docker
+labels](/nomad/docs/drivers/docker#labels) with dots in their keys such as for
+DataDog autodiscovery:
+
+```hcl
+labels {
+  "com.datadoghq.ad.check_names"  = "[\"openmetrics\"]"
+  "com.datadoghq.ad.init_configs" = "[{}]"
+  # ...
+}
+```
+
+Quoted keys are invalid in HCLv2 blocks and must be specified with a
+list-of-maps syntax:
+
+```hcl
+labels = [
+  {
+    "com.datadoghq.ad.check_names"  = "[\"openmetrics\"]"
+    "com.datadoghq.ad.init_configs" = "[{}]"
+    # ...
+  }
+]
+```
+
+## Nomad 1.8.4
+
+#### Default Docker `infra_image` changed
+
+Due to the deprecation of the third-party `gcr.io` registry, the default Docker
+[`infra_image`][] is now `registry.k8s.io/pause-<arch>:3.3`. If you do not
+override the default, clients using the `docker` driver will make outbound
+requests to the new registry.
+
+## Nomad 1.8.3
 
 #### Nomad keyring rotation
 
@@ -82,7 +184,7 @@ In Nomad 1.7.0 the `raw_exec` plugin option for `no_cgroups` became ineffective.
 Starting in Nomad 1.8.0 attempting to set the `no_cgroups` in `raw_exec` plugin
 configuration will result in an error when starting the agent.
 
-## Nomad 1.7.11 (UNRELEASED)
+## Nomad 1.7.11
 
 <EnterpriseAlert inline />
 
@@ -261,7 +363,7 @@ cgroup to halt the process group of a Task before issuing a kill signal to each
 process. Starting in Nomad 1.7.0 this behavior is always enabled (and a similar
 mechanism has always been enabled on cgroups v2 systems).
 
-## Nomad 1.6.14 (UNRELEASED)
+## Nomad 1.6.14
 
 <EnterpriseAlert inline />
 
@@ -2082,7 +2184,7 @@ deleted and then Nomad 0.3.0 can be launched.
 [`distinct_property`]: /nomad/docs/job-specification/constraint#distinct_property
 [`extra_hosts`]: /nomad/docs/drivers/docker#extra_hosts
 [`linux capabilities`]: https://docs.docker.com/engine/reference/run/#runtime-privilege-and-linux-capabilities
-[`Local`]: /consul/docs/security/acl/acl-tokens#token-attributes
+[`Local`]: /consul/docs/security/acl/tokens#token-attributes
 [`log_file`]: /nomad/docs/configuration#log_file
 [`raft protocol`]: /nomad/docs/configuration/server#raft_protocol
 [`rejoin_after_leave`]: /nomad/docs/configuration/server#rejoin_after_leave
@@ -2098,7 +2200,7 @@ deleted and then Nomad 0.3.0 can be launched.
 [alloc_overlap]: https://github.com/hashicorp/nomad/issues/10440
 [allow_caps_exec]: /nomad/docs/drivers/exec#allow_caps
 [allow_caps_java]: /nomad/docs/drivers/java#allow_caps
-[anon_token]: /consul/docs/security/acl/acl-tokens#special-purpose-tokens
+[anon_token]: /consul/docs/security/acl/tokens#special-purpose-tokens
 [api_jobs_parse]: /nomad/api-docs/jobs#parse-job
 [artifact_env]: /nomad/docs/configuration/client#set_environment_variables
 [artifact_fs_isolation]: /nomad/docs/configuration/client#disable_filesystem_isolation
@@ -2152,6 +2254,7 @@ deleted and then Nomad 0.3.0 can be launched.
 [preemption]: /nomad/docs/concepts/scheduling/preemption
 [proxy_concurrency]: /nomad/docs/job-specification/sidecar_task#proxy_concurrency
 [reserved]: /nomad/docs/configuration/client#reserved-parameters
+[`root_key_gc_interval`]: /nomad/docs/configuration/server#root_key_gc_interval
 [task-config]: /nomad/docs/job-specification/task#config
 [template_gid]: /nomad/docs/job-specification/template#gid
 [template_uid]: /nomad/docs/job-specification/template#uid
@@ -2164,3 +2267,5 @@ deleted and then Nomad 0.3.0 can be launched.
 [vault_grace]: /nomad/docs/job-specification/template
 [Workload Identity]: /nomad/docs/concepts/workload-identity
 [Process Isolation]: https://learn.microsoft.com/en-us/virtualization/windowscontainers/manage-containers/hyperv-container#process-isolation
+[reschedule]: /nomad/docs/jobs-specification/reschedule
+[`infra_image`]: /nomad/docs/drivers/docker#infra_image

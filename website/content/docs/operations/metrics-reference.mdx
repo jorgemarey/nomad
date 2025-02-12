@@ -188,6 +188,20 @@ Nomad will emit [tagged metrics][tagged-metrics], in the below format:
 | `nomad.client.unallocated.memory`         | Total amount of memory free for the scheduler to allocate to tasks                   | Megabytes  | Gauge   | datacenter, host, node_class, node_id, node_pool, node_scheduling_eligibility, node_status       |
 | `nomad.client.uptime`                     | Uptime of the host running the Nomad client                                          | Seconds    | Gauge   | datacenter, host, node_class, node_id, node_pool, node_scheduling_eligibility, node_status       |
 
+### Client Hook Metrics
+
+Nomad will emit metrics allowing you to monitor and alert on allocation and task hook performance.
+If you do not need these, they can be disabled via the [`disable_allocation_hook_metrics`][]
+configuration parameter.
+
+| Metric                                    | Description                                           | Unit         | Type    | Labels                                                      |
+|-------------------------------------------|-------------------------------------------------------|--------------|---------|-------------------------------------------------------------|
+| `nomad.client.alloc_hook.prerun.failed`   | Number of hook executions that resulted in an error   | Integer      | Counter | datacenter, host, node_class, node_id, node_pool, hook_name |
+| `nomad.client.alloc_hook.prerun.success`  | Number of hook executions that completed successfully | Integer      | Counter | datacenter, host, node_class, node_id, node_pool, hook_name |
+| `nomad.client.alloc_hook.prerun.elapsed`  | The time it took the hook to run                      | Milliseconds | Timer   | datacenter, host, node_class, node_id, node_pool, hook_name |
+| `nomad.client.task_hook.prestart.failed`  | Number of hook executions that resulted in an error   | Integer      | Counter | datacenter, host, node_class, node_id, node_pool, hook_name |
+| `nomad.client.task_hook.prestart.success` | Number of hook executions that completed successfully | Integer      | Counter | datacenter, host, node_class, node_id, node_pool, hook_name |
+| `nomad.client.task_hook.prestart.elapsed` | The time it took the hook to run                      | Milliseconds | Timer   | datacenter, host, node_class, node_id, node_pool, hook_name |
 
 ## Allocation Metrics
 
@@ -356,6 +370,7 @@ those listed in [Key Metrics](#key-metrics) above.
 | `nomad.nomad.fsm.apply_deployment_promotion`         | Time elapsed to apply `ApplyDeploymentPromotion` raft entry                                                                                            | Milliseconds             | Timer   | host                                                    |
 | `nomad.nomad.fsm.apply_deployment_status_update`     | Time elapsed to apply `ApplyDeploymentStatusUpdate` raft entry                                                                                         | Milliseconds             | Timer   | host                                                    |
 | `nomad.nomad.fsm.apply_job_stability`                | Time elapsed to apply `ApplyJobStability` raft entry                                                                                                   | Milliseconds             | Timer   | host                                                    |
+| `nomad.nomad.fsm.apply_job_version_tag`              | Time elapsed to apply `ApplyJobVersionTag` raft entry                                                                                                  | Milliseconds             | Timer   | host                                                    |
 | `nomad.nomad.fsm.apply_namespace_delete`             | Time elapsed to apply `ApplyNamespaceDelete` raft entry                                                                                                | Milliseconds             | Timer   | host                                                    |
 | `nomad.nomad.fsm.apply_namespace_upsert`             | Time elapsed to apply `ApplyNamespaceUpsert` raft entry                                                                                                | Milliseconds             | Timer   | host                                                    |
 | `nomad.nomad.fsm.apply_node_pool_upsert`             | Time elapsed to apply `ApplyNodePoolUpsert` raft entry                                                                                                 | Milliseconds             | Timer   | host                                                    |
@@ -520,3 +535,4 @@ Agent metrics are emitted by all Nomad agents running in either client or server
 [tagged-metrics]: /nomad/docs/operations/metrics-reference#tagged-metrics
 [sticky]: /nomad/docs/job-specification/ephemeral_disk#sticky
 [s_port_plan_failure]: https://developer.hashicorp.com/nomad/s/port-plan-failure
+[`disable_allocation_hook_metrics`]: /nomad/docs/configuration/telemetry#disable_allocation_hook_metrics

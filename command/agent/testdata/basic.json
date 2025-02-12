@@ -76,6 +76,7 @@
       "alloc_mounts_dir": "/tmp/mounts",
       "bridge_network_name": "custom_bridge_name",
       "bridge_network_subnet": "custom_bridge_subnet",
+      "bridge_network_subnet_ipv6": "custom_bridge_subnet_ipv6",
       "chroot_env": [
         {
           "/opt/myapp/bin": "/bin",
@@ -368,6 +369,7 @@
   "syslog_facility": "LOCAL1",
   "telemetry": [
     {
+      "disable_allocation_hook_metrics": true,
       "in_memory_collection_interval": "1m",
       "in_memory_retention_period": "24h",
       "collection_interval": "3s",
@@ -389,7 +391,6 @@
       "rpc_upgrade_mode": true,
       "tls_cipher_suites": "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
       "tls_min_version": "tls12",
-      "tls_prefer_server_cipher_suites": true,
       "verify_https_client": true,
       "verify_server_hostname": true
     }

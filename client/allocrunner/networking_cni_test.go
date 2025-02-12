@@ -137,7 +137,12 @@ func TestSetup(t *testing.T) {
 				Address:       "99.99.99.99",
 			},
 			expectArgs: map[string]string{
-				"IgnoreUnknown": "true",
+				"IgnoreUnknown":    "true",
+				"NOMAD_ALLOC_ID":   "7cd08c6c-86c8-0bfa-f7ca-338466447711",
+				"NOMAD_GROUP_NAME": "web",
+				"NOMAD_JOB_ID":     "mock-service",
+				"NOMAD_NAMESPACE":  "default",
+				"NOMAD_REGION":     "global",
 			},
 		},
 		{
@@ -148,7 +153,12 @@ func TestSetup(t *testing.T) {
 				Address:       "99.99.99.99",
 			},
 			expectArgs: map[string]string{
-				"IgnoreUnknown": "true",
+				"IgnoreUnknown":    "true",
+				"NOMAD_ALLOC_ID":   "7cd08c6c-86c8-0bfa-f7ca-338466447711",
+				"NOMAD_GROUP_NAME": "web",
+				"NOMAD_JOB_ID":     "mock-service",
+				"NOMAD_NAMESPACE":  "default",
+				"NOMAD_REGION":     "global",
 			},
 		},
 		{
@@ -174,9 +184,31 @@ func TestSetup(t *testing.T) {
 				Address:       "99.99.99.99",
 			},
 			expectArgs: map[string]string{
-				"IgnoreUnknown": "true",
-				"first_arg":     "example",
-				"new_arg":       "example_2",
+				"IgnoreUnknown":    "true",
+				"first_arg":        "example",
+				"new_arg":          "example_2",
+				"NOMAD_ALLOC_ID":   "7cd08c6c-86c8-0bfa-f7ca-338466447711",
+				"NOMAD_GROUP_NAME": "web",
+				"NOMAD_JOB_ID":     "mock-service",
+				"NOMAD_NAMESPACE":  "default",
+				"NOMAD_REGION":     "global",
+			},
+		},
+		{
+			name: "cni workload with invalid job id and namespace",
+			modAlloc: func(a *structs.Allocation) {
+				a.Job.ID = "this;does;not;work"
+				a.Namespace = "no;chance"
+			},
+			expectResult: &structs.AllocNetworkStatus{
+				InterfaceName: "eth0",
+				Address:       "99.99.99.99",
+			},
+			expectArgs: map[string]string{
+				"IgnoreUnknown":    "true",
+				"NOMAD_ALLOC_ID":   "7cd08c6c-86c8-0bfa-f7ca-338466447711",
+				"NOMAD_GROUP_NAME": "web",
+				"NOMAD_REGION":     "global",
 			},
 		},
 		{
@@ -215,6 +247,11 @@ func TestSetup(t *testing.T) {
 				"IgnoreUnknown":          "true",
 				"extra_arg":              "example",
 				"CONSUL_IPTABLES_CONFIG": `{"ConsulDNSIP":"192.168.1.117","ConsulDNSPort":8600,"ProxyUserID":"101","ProxyInboundPort":9999,"ProxyOutboundPort":15001,"ExcludeInboundPorts":["9002"],"ExcludeOutboundPorts":null,"ExcludeOutboundCIDRs":null,"ExcludeUIDs":null,"NetNS":"/var/run/docker/netns/nonsense-ns","IptablesProvider":null}`,
+				"NOMAD_ALLOC_ID":         "7cd08c6c-86c8-0bfa-f7ca-338466447711",
+				"NOMAD_GROUP_NAME":       "web",
+				"NOMAD_JOB_ID":           "mock-service",
+				"NOMAD_NAMESPACE":        "default",
+				"NOMAD_REGION":           "global",
 			},
 		},
 	}
@@ -246,6 +283,8 @@ func TestSetup(t *testing.T) {
 			}
 
 			alloc := mock.ConnectAlloc()
+			alloc.ID = "7cd08c6c-86c8-0bfa-f7ca-338466447711" // Fix the ID for easier testing
+			alloc.Job.ID = "mock-service"                     // Fix the ID for easier testing
 			if tc.modAlloc != nil {
 				tc.modAlloc(alloc)
 			}
@@ -257,7 +296,7 @@ func TestSetup(t *testing.T) {
 			}
 
 			// method under test
-			result, err := c.Setup(context.Background(), alloc, spec)
+			result, err := c.Setup(context.Background(), alloc, spec, true)
 			if tc.expectErr == "" {
 				must.NoError(t, err)
 				must.Eq(t, tc.expectResult, result)
@@ -273,51 +312,10 @@ func TestSetup(t *testing.T) {
 	}
 }
 
-type mockIPTables struct {
-	listCall  [2]string
-	listRules []string
-	listErr   error
-
-	deleteCall [2]string
-	deleteErr  error
-
-	clearCall [2]string
-	clearErr  error
-}
-
-func (ipt *mockIPTables) List(table, chain string) ([]string, error) {
-	ipt.listCall[0], ipt.listCall[1] = table, chain
-	return ipt.listRules, ipt.listErr
-}
-
-func (ipt *mockIPTables) Delete(table, chain string, rule ...string) error {
-	ipt.deleteCall[0], ipt.deleteCall[1] = table, chain
-	return ipt.deleteErr
-}
-
-func (ipt *mockIPTables) ClearAndDeleteChain(table, chain string) error {
-	ipt.clearCall[0], ipt.clearCall[1] = table, chain
-	return ipt.clearErr
-}
-
-func (ipt *mockIPTables) assert(t *testing.T, jumpChain string) {
-	// List assertions
-	must.Eq(t, "nat", ipt.listCall[0])
-	must.Eq(t, "POSTROUTING", ipt.listCall[1])
-
-	// Delete assertions
-	must.Eq(t, "nat", ipt.deleteCall[0])
-	must.Eq(t, "POSTROUTING", ipt.deleteCall[1])
-
-	// Clear assertions
-	must.Eq(t, "nat", ipt.clearCall[0])
-	must.Eq(t, jumpChain, ipt.clearCall[1])
-}
-
 func TestCNI_forceCleanup(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		c := cniNetworkConfigurator{logger: testlog.HCLogger(t)}
-		ipt := &mockIPTables{
+		ipt := &mockIPTablesCleanup{
 			listRules: []string{
 				`-A POSTROUTING -m comment --comment "CNI portfwd requiring masquerade" -j CNI-HOSTPORT-MASQ`,
 				`-A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE`,
@@ -330,12 +328,24 @@ func TestCNI_forceCleanup(t *testing.T) {
 		}
 		err := c.forceCleanup(ipt, "2dd71cac-2b1e-ff08-167c-735f7f9f4964")
 		must.NoError(t, err)
-		ipt.assert(t, "CNI-5d36f286cfbb35c5776509ec")
+
+		// List assertions
+		must.Eq(t, "nat", ipt.listCall[0])
+		must.Eq(t, "POSTROUTING", ipt.listCall[1])
+
+		// Delete assertions
+		must.Eq(t, "nat", ipt.deleteCall[0])
+		must.Eq(t, "POSTROUTING", ipt.deleteCall[1])
+
+		// Clear assertions
+		must.Eq(t, "nat", ipt.clearCall[0])
+		jumpChain := "CNI-5d36f286cfbb35c5776509ec"
+		must.Eq(t, jumpChain, ipt.clearCall[1])
 	})
 
 	t.Run("missing allocation", func(t *testing.T) {
 		c := cniNetworkConfigurator{logger: testlog.HCLogger(t)}
-		ipt := &mockIPTables{
+		ipt := &mockIPTablesCleanup{
 			listRules: []string{
 				`-A POSTROUTING -m comment --comment "CNI portfwd requiring masquerade" -j CNI-HOSTPORT-MASQ`,
 				`-A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE`,
@@ -347,19 +357,19 @@ func TestCNI_forceCleanup(t *testing.T) {
 			},
 		}
 		err := c.forceCleanup(ipt, "2dd71cac-2b1e-ff08-167c-735f7f9f4964")
-		must.EqError(t, err, "failed to find postrouting rule for alloc 2dd71cac-2b1e-ff08-167c-735f7f9f4964")
+		must.NoError(t, err, must.Sprint("absent rule should not error"))
 	})
 
 	t.Run("list error", func(t *testing.T) {
 		c := cniNetworkConfigurator{logger: testlog.HCLogger(t)}
-		ipt := &mockIPTables{listErr: errors.New("list error")}
+		ipt := &mockIPTablesCleanup{listErr: errors.New("list error")}
 		err := c.forceCleanup(ipt, "2dd71cac-2b1e-ff08-167c-735f7f9f4964")
 		must.EqError(t, err, "failed to list iptables rules: list error")
 	})
 
 	t.Run("delete error", func(t *testing.T) {
 		c := cniNetworkConfigurator{logger: testlog.HCLogger(t)}
-		ipt := &mockIPTables{
+		ipt := &mockIPTablesCleanup{
 			deleteErr: errors.New("delete error"),
 			listRules: []string{
 				`-A POSTROUTING -s 172.26.64.217/32 -m comment --comment "name: \"nomad\" id: \"2dd71cac-2b1e-ff08-167c-735f7f9f4964\"" -j CNI-5d36f286cfbb35c5776509ec`,
@@ -371,7 +381,7 @@ func TestCNI_forceCleanup(t *testing.T) {
 
 	t.Run("clear error", func(t *testing.T) {
 		c := cniNetworkConfigurator{logger: testlog.HCLogger(t)}
-		ipt := &mockIPTables{
+		ipt := &mockIPTablesCleanup{
 			clearErr: errors.New("clear error"),
 			listRules: []string{
 				`-A POSTROUTING -s 172.26.64.217/32 -m comment --comment "name: \"nomad\" id: \"2dd71cac-2b1e-ff08-167c-735f7f9f4964\"" -j CNI-5d36f286cfbb35c5776509ec`,
@@ -453,6 +463,39 @@ func TestCNI_cniToAllocNet_Invalid(t *testing.T) {
 	allocNet, err := c.cniToAllocNet(cniResult)
 	require.Error(t, err)
 	require.Nil(t, allocNet)
+}
+
+func TestCNI_cniToAllocNet_Dualstack(t *testing.T) {
+	ci.Parallel(t)
+
+	cniResult := &cni.Result{
+		Interfaces: map[string]*cni.Config{
+			"eth0": {
+				Sandbox: "at-the-park",
+				IPConfigs: []*cni.IPConfig{
+					{IP: net.IPv4zero}, // 0.0.0.0
+					{IP: net.IPv6zero}, // ::
+				},
+			},
+			// "a" puts this lexicographically first when sorted
+			"a-skippable-interface": {
+				// no Sandbox, so should be skipped
+				IPConfigs: []*cni.IPConfig{
+					{IP: net.IPv4(127, 3, 2, 1)},
+				},
+			},
+		},
+	}
+
+	c := &cniNetworkConfigurator{
+		logger: testlog.HCLogger(t),
+	}
+	allocNet, err := c.cniToAllocNet(cniResult)
+	must.NoError(t, err)
+	must.NotNil(t, allocNet)
+	test.Eq(t, "0.0.0.0", allocNet.Address)
+	test.Eq(t, "::", allocNet.AddressIPv6)
+	test.Eq(t, "eth0", allocNet.InterfaceName)
 }
 
 func TestCNI_addCustomCNIArgs(t *testing.T) {

@@ -313,6 +313,10 @@ type CSIVolume struct {
 
 	CreateIndex uint64
 	ModifyIndex uint64
+
+	// Creation and modification times stored as UnixNano
+	CreateTime int64
+	ModifyTime int64
 }
 
 // GetID implements the IDGetter interface, required for pagination.
@@ -364,14 +368,21 @@ type CSIVolListStub struct {
 
 	CreateIndex uint64
 	ModifyIndex uint64
+
+	// Create and modify times stored as UnixNano
+	CreateTime int64
+	ModifyTime int64
 }
 
 // NewCSIVolume creates the volume struct. No side-effects
 func NewCSIVolume(volumeID string, index uint64) *CSIVolume {
+	now := time.Now().UnixNano()
 	out := &CSIVolume{
 		ID:          volumeID,
 		CreateIndex: index,
 		ModifyIndex: index,
+		CreateTime:  now,
+		ModifyTime:  now,
 	}
 
 	out.newStructs()
@@ -421,6 +432,8 @@ func (v *CSIVolume) Stub() *CSIVolListStub {
 		ResourceExhausted:   v.ResourceExhausted,
 		CreateIndex:         v.CreateIndex,
 		ModifyIndex:         v.ModifyIndex,
+		CreateTime:          v.CreateTime,
+		ModifyTime:          v.ModifyTime,
 	}
 }
 
@@ -833,15 +846,20 @@ func (v *CSIVolume) Merge(other *CSIVolume) error {
 			"volume parameters cannot be updated"))
 	}
 
-	// Context is mutable and will be used during controller
-	// validation
-	v.Context = other.Context
+	// Context is mutable and will be used during controller validation, but we
+	// need to ensure we don't remove context that's been previously stored
+	// server-side if the user has submitted an update without adding it to the
+	// spec manually (which we should not require)
+	if len(other.Context) != 0 {
+		v.Context = other.Context
+	}
 	return errs.ErrorOrNil()
 }
 
 // Request and response wrappers
 type CSIVolumeRegisterRequest struct {
-	Volumes []*CSIVolume
+	Volumes   []*CSIVolume
+	Timestamp int64 // UnixNano
 	WriteRequest
 }
 
@@ -860,7 +878,8 @@ type CSIVolumeDeregisterResponse struct {
 }
 
 type CSIVolumeCreateRequest struct {
-	Volumes []*CSIVolume
+	Volumes   []*CSIVolume
+	Timestamp int64 // UnixNano
 	WriteRequest
 }
 
@@ -917,6 +936,7 @@ type CSIVolumeClaimRequest struct {
 	AccessMode     CSIVolumeAccessMode
 	AttachmentMode CSIVolumeAttachmentMode
 	State          CSIVolumeClaimState
+	Timestamp      int64 // UnixNano
 	WriteRequest
 }
 
@@ -1097,14 +1117,21 @@ type CSIPlugin struct {
 
 	CreateIndex uint64
 	ModifyIndex uint64
+
+	// Create and modify times stored as UnixNano
+	CreateTime int64
+	ModifyTime int64
 }
 
 // NewCSIPlugin creates the plugin struct. No side-effects
 func NewCSIPlugin(id string, index uint64) *CSIPlugin {
+	now := time.Now().UnixNano()
 	out := &CSIPlugin{
 		ID:          id,
 		CreateIndex: index,
 		ModifyIndex: index,
+		CreateTime:  now,
+		ModifyTime:  now,
 	}
 
 	out.newStructs()

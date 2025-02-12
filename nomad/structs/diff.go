@@ -847,6 +847,11 @@ func serviceDiff(old, new *Service, contextual bool) *ObjectDiff {
 		diff.Objects = append(diff.Objects, wiDiffs)
 	}
 
+	// Weights diffs
+	if weightsDiffs := weightsDiff(old.Weights, new.Weights, contextual); weightsDiffs != nil {
+		diff.Objects = append(diff.Objects, weightsDiffs)
+	}
+
 	return diff
 }
 
@@ -2809,10 +2814,10 @@ func portDiffs(old, new []Port, dynamic bool, contextual bool) []*ObjectDiff {
 	oldPorts := makeSet(old)
 	newPorts := makeSet(new)
 
-	var filter []string
+	filter := []string{"_struct"}
 	name := "Static Port"
 	if dynamic {
-		filter = []string{"Value"}
+		filter = []string{"_struct", "Value", "IgnoreCollision"}
 		name = "Dynamic Port"
 	}
 
@@ -2984,6 +2989,42 @@ func idSliceDiffs(old, new []*WorkloadIdentity, contextual bool) []*ObjectDiff {
 	}
 	sort.Sort(ObjectDiffs(diffs))
 	return diffs
+}
+
+func weightsDiff(oldWeights *ServiceWeights, newWeights *ServiceWeights, contextual bool) *ObjectDiff {
+	if reflect.DeepEqual(oldWeights, newWeights) {
+		return nil
+	}
+
+	flatten := func(weights *ServiceWeights) map[string]string {
+		m := map[string]string{}
+		if weights.Passing > 0 {
+			m["Passing"] = strconv.Itoa(weights.Passing)
+		}
+		if weights.Warning > 0 {
+			m["Warning"] = strconv.Itoa(weights.Warning)
+		}
+		return m
+	}
+
+	diff := &ObjectDiff{Type: DiffTypeNone, Name: "Weights"}
+	var oldPrimitiveFlat, newPrimitiveFlat map[string]string
+	if oldWeights == nil {
+		diff.Type = DiffTypeAdded
+		newPrimitiveFlat = flatten(newWeights)
+	} else if newWeights == nil {
+		diff.Type = DiffTypeDeleted
+		oldPrimitiveFlat = flatten(oldWeights)
+	} else {
+		diff.Type = DiffTypeEdited
+		oldPrimitiveFlat = flatten(oldWeights)
+		newPrimitiveFlat = flatten(newWeights)
+	}
+
+	// Diff the primitive fields.
+	diff.Fields = fieldDiffs(oldPrimitiveFlat, newPrimitiveFlat, contextual)
+
+	return diff
 }
 
 // idDiff returns the diff of two identity objects. If contextual diff is

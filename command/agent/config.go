@@ -360,10 +360,15 @@ type ClientConfig struct {
 	// bridge network mode
 	BridgeNetworkName string `hcl:"bridge_network_name"`
 
-	// BridgeNetworkSubnet is the subnet to allocate IP addresses from when
+	// BridgeNetworkSubnet is the subnet to allocate IPv4 addresses from when
 	// creating allocations with bridge networking mode. This range is local to
 	// the host
 	BridgeNetworkSubnet string `hcl:"bridge_network_subnet"`
+
+	// BridgeNetworkSubnetIPv6 is the subnet to allocate IPv6 addresses when
+	// creating allocations with bridge networking mode. This range is local to
+	// the host
+	BridgeNetworkSubnetIPv6 string `hcl:"bridge_network_subnet_ipv6"`
 
 	// BridgeNetworkHairpinMode is whether or not to enable hairpin mode on the
 	// internal bridge network
@@ -967,17 +972,19 @@ type Telemetry struct {
 	InMemoryRetentionPeriod string        `hcl:"in_memory_retention_period"`
 	inMemoryRetentionPeriod time.Duration `hcl:"-"`
 
-	StatsiteAddr             string        `hcl:"statsite_address"`
-	StatsdAddr               string        `hcl:"statsd_address"`
-	DataDogAddr              string        `hcl:"datadog_address"`
-	DataDogTags              []string      `hcl:"datadog_tags"`
-	PrometheusMetrics        bool          `hcl:"prometheus_metrics"`
-	DisableHostname          bool          `hcl:"disable_hostname"`
-	UseNodeName              bool          `hcl:"use_node_name"`
-	CollectionInterval       string        `hcl:"collection_interval"`
-	collectionInterval       time.Duration `hcl:"-"`
-	PublishAllocationMetrics bool          `hcl:"publish_allocation_metrics"`
-	PublishNodeMetrics       bool          `hcl:"publish_node_metrics"`
+	StatsiteAddr                  string        `hcl:"statsite_address"`
+	StatsdAddr                    string        `hcl:"statsd_address"`
+	DataDogAddr                   string        `hcl:"datadog_address"`
+	DataDogTags                   []string      `hcl:"datadog_tags"`
+	PrometheusMetrics             bool          `hcl:"prometheus_metrics"`
+	DisableHostname               bool          `hcl:"disable_hostname"`
+	UseNodeName                   bool          `hcl:"use_node_name"`
+	CollectionInterval            string        `hcl:"collection_interval"`
+	collectionInterval            time.Duration `hcl:"-"`
+	PublishAllocationMetrics      bool          `hcl:"publish_allocation_metrics"`
+	PublishNodeMetrics            bool          `hcl:"publish_node_metrics"`
+	IncludeAllocMetadataInMetrics bool          `hcl:"include_alloc_metadata_in_metrics"`
+	AllowedMetadataKeysInMetrics  []string      `hcl:"allowed_metadata_keys_in_metrics"`
 
 	// PrefixFilter allows for filtering out metrics from being collected
 	PrefixFilter []string `hcl:"prefix_filter"`
@@ -1001,6 +1008,10 @@ type Telemetry struct {
 	// useful to control metrics collection costs in environments where request
 	// rate is well-controlled but cardinality of requesters is high.
 	DisableRPCRateMetricsLabels bool `hcl:"disable_rpc_rate_metrics_labels"`
+
+	// DisableAllocationHookMetrics allows operators to disable emitting hook
+	// metrics.
+	DisableAllocationHookMetrics *bool `hcl:"disable_allocation_hook_metrics"`
 
 	// Circonus: see https://github.com/circonus-labs/circonus-gometrics
 	// for more details on the various configuration options.
@@ -1341,6 +1352,8 @@ func DevConfig(mode *devModeConfig) *Config {
 	conf.Telemetry.PrometheusMetrics = true
 	conf.Telemetry.PublishAllocationMetrics = true
 	conf.Telemetry.PublishNodeMetrics = true
+	conf.Telemetry.IncludeAllocMetadataInMetrics = true
+	conf.Telemetry.AllowedMetadataKeysInMetrics = []string{}
 
 	if mode.consulMode {
 		conf.Consuls[0].ServiceIdentity = &config.WorkloadIdentityConfig{
@@ -1444,12 +1457,13 @@ func DefaultConfig() *Config {
 		},
 		SyslogFacility: "LOCAL0",
 		Telemetry: &Telemetry{
-			InMemoryCollectionInterval: "10s",
-			inMemoryCollectionInterval: 10 * time.Second,
-			InMemoryRetentionPeriod:    "1m",
-			inMemoryRetentionPeriod:    1 * time.Minute,
-			CollectionInterval:         "1s",
-			collectionInterval:         1 * time.Second,
+			InMemoryCollectionInterval:   "10s",
+			inMemoryCollectionInterval:   10 * time.Second,
+			InMemoryRetentionPeriod:      "1m",
+			inMemoryRetentionPeriod:      1 * time.Minute,
+			CollectionInterval:           "1s",
+			collectionInterval:           1 * time.Second,
+			DisableAllocationHookMetrics: pointer.Of(false),
 		},
 		TLSConfig:          &config.TLSConfig{},
 		Sentinel:           &config.SentinelConfig{},
@@ -2441,7 +2455,9 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 	if b.BridgeNetworkSubnet != "" {
 		result.BridgeNetworkSubnet = b.BridgeNetworkSubnet
 	}
-
+	if b.BridgeNetworkSubnetIPv6 != "" {
+		result.BridgeNetworkSubnetIPv6 = b.BridgeNetworkSubnetIPv6
+	}
 	if b.BridgeNetworkHairpinMode {
 		result.BridgeNetworkHairpinMode = true
 	}
@@ -2523,6 +2539,10 @@ func (t *Telemetry) Merge(b *Telemetry) *Telemetry {
 	if b.PublishAllocationMetrics {
 		result.PublishAllocationMetrics = true
 	}
+	if b.IncludeAllocMetadataInMetrics {
+		result.IncludeAllocMetadataInMetrics = true
+	}
+	result.AllowedMetadataKeysInMetrics = append(result.AllowedMetadataKeysInMetrics, b.AllowedMetadataKeysInMetrics...)
 	if b.CirconusAPIToken != "" {
 		result.CirconusAPIToken = b.CirconusAPIToken
 	}
@@ -2579,6 +2599,9 @@ func (t *Telemetry) Merge(b *Telemetry) *Telemetry {
 	}
 	if b.DisableRPCRateMetricsLabels {
 		result.DisableRPCRateMetricsLabels = b.DisableRPCRateMetricsLabels
+	}
+	if b.DisableAllocationHookMetrics != nil {
+		result.DisableAllocationHookMetrics = b.DisableAllocationHookMetrics
 	}
 
 	return &result

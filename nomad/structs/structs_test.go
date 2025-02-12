@@ -397,6 +397,18 @@ func TestJob_Validate(t *testing.T) {
 				"Task Group web should have an ephemeral disk object",
 			},
 		},
+		{
+			name: "VersionTag Description length",
+			job: &Job{
+				Type: JobTypeService,
+				VersionTag: &JobVersionTag{
+					Description: strings.Repeat("a", 1001),
+				},
+			},
+			expErr: []string{
+				"Tagged version description must be under 1000 characters",
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -752,6 +764,7 @@ func testJob() *Job {
 							},
 						},
 						Identity: &WorkloadIdentity{
+							Name: "foo",
 							Env:  true,
 							File: true,
 						},
@@ -1518,7 +1531,7 @@ func TestTaskGroup_Validate(t *testing.T) {
 			tg: &TaskGroup{
 				Networks: []*NetworkResource{
 					{
-						DynamicPorts: []Port{{"http", 0, 80, ""}},
+						DynamicPorts: []Port{{Label: "http", To: 80}},
 					},
 				},
 				Tasks: []*Task{
@@ -1526,7 +1539,7 @@ func TestTaskGroup_Validate(t *testing.T) {
 						Resources: &Resources{
 							Networks: []*NetworkResource{
 								{
-									DynamicPorts: []Port{{"http", 0, 80, ""}},
+									DynamicPorts: []Port{{Label: "http", To: 80}},
 								},
 							},
 						},
@@ -2065,6 +2078,31 @@ func TestTaskGroupNetwork_Validate(t *testing.T) {
 			},
 			ErrContains: "invalid ';' character in CNI arg value \"first_value;",
 		},
+		{
+			TG: &TaskGroup{
+				Name: "testing-port-ignore-collision-ok",
+				Networks: []*NetworkResource{{
+					Mode: "host",
+					ReservedPorts: []Port{
+						{Label: "one", Value: 10, IgnoreCollision: true},
+						{Label: "two", Value: 10, IgnoreCollision: true},
+					},
+				}},
+			},
+		},
+		{
+			TG: &TaskGroup{
+				Name: "testing-port-ignore-collision-non-host-network-mode",
+				Networks: []*NetworkResource{{
+					Mode: "not-host",
+					ReservedPorts: []Port{
+						{Label: "one", Value: 10, IgnoreCollision: true},
+						{Label: "two", Value: 10, IgnoreCollision: true},
+					},
+				}},
+			},
+			ErrContains: "collision may not be ignored on non-host network mode",
+		},
 	}
 
 	for i := range cases {
@@ -2274,17 +2312,52 @@ func TestTask_Validate_Resources(t *testing.T) {
 				MemoryMaxMB: -1,
 			},
 		},
+		{
+			name: "numa devices do not match",
+			res: &Resources{
+				CPU:      100,
+				MemoryMB: 200,
+				Devices: []*RequestedDevice{
+					{
+						Name:  "evilcorp/gpu",
+						Count: 2,
+					},
+					{
+						Name:  "fpga",
+						Count: 1,
+					},
+					{
+						Name:  "net/nic/model1",
+						Count: 1,
+					},
+				},
+				NUMA: &NUMA{
+					Affinity: "require",
+					Devices:  []string{"evilcorp/gpu", "bad/bad", "fpga"},
+				},
+			},
+			err: "numa device \"bad/bad\" not requested as task resource",
+		},
+		{
+			name: "numa affinity not valid",
+			res: &Resources{
+				CPU:      100,
+				MemoryMB: 200,
+				NUMA: &NUMA{
+					Affinity: "bad",
+				},
+			},
+			err: "numa affinity must be one of none, prefer, or require",
+		},
 	}
 
-	for i := range cases {
-		tc := cases[i]
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.res.Validate()
 			if tc.err == "" {
-				require.NoError(t, err)
+				must.NoError(t, err)
 			} else {
-				require.Error(t, err)
-				require.Contains(t, err.Error(), tc.err)
+				must.ErrorContains(t, err, tc.err)
 			}
 		})
 	}
@@ -3770,7 +3843,7 @@ func TestResource_Add(t *testing.T) {
 			{
 				CIDR:          "10.0.0.0/8",
 				MBits:         100,
-				ReservedPorts: []Port{{"ssh", 22, 0, ""}},
+				ReservedPorts: []Port{{Label: "ssh", Value: 22}},
 			},
 		},
 	}
@@ -3783,7 +3856,13 @@ func TestResource_Add(t *testing.T) {
 			{
 				IP:            "10.0.0.1",
 				MBits:         50,
-				ReservedPorts: []Port{{"web", 80, 0, ""}},
+				ReservedPorts: []Port{{Label: "web", Value: 80}},
+			},
+		},
+		Devices: []*RequestedDevice{
+			{
+				Name:  "nvidia/gpu/Tesla M60",
+				Count: 1,
 			},
 		},
 	}
@@ -3800,7 +3879,13 @@ func TestResource_Add(t *testing.T) {
 			{
 				CIDR:          "10.0.0.0/8",
 				MBits:         150,
-				ReservedPorts: []Port{{"ssh", 22, 0, ""}, {"web", 80, 0, ""}},
+				ReservedPorts: []Port{{Label: "ssh", Value: 22}, {Label: "web", Value: 80}},
+			},
+		},
+		Devices: []*RequestedDevice{
+			{
+				Name:  "nvidia/gpu/Tesla M60",
+				Count: 1,
 			},
 		},
 	}
@@ -3816,7 +3901,7 @@ func TestResource_Add_Network(t *testing.T) {
 		Networks: []*NetworkResource{
 			{
 				MBits:        50,
-				DynamicPorts: []Port{{"http", 0, 80, ""}, {"https", 0, 443, ""}},
+				DynamicPorts: []Port{{Label: "http", To: 80}, {Label: "https", To: 443}},
 			},
 		},
 	}
@@ -3824,7 +3909,7 @@ func TestResource_Add_Network(t *testing.T) {
 		Networks: []*NetworkResource{
 			{
 				MBits:        25,
-				DynamicPorts: []Port{{"admin", 0, 8080, ""}},
+				DynamicPorts: []Port{{Label: "admin", To: 8080}},
 			},
 		},
 	}
@@ -3836,7 +3921,7 @@ func TestResource_Add_Network(t *testing.T) {
 		Networks: []*NetworkResource{
 			{
 				MBits:        75,
-				DynamicPorts: []Port{{"http", 0, 80, ""}, {"https", 0, 443, ""}, {"admin", 0, 8080, ""}},
+				DynamicPorts: []Port{{Label: "http", To: 80}, {Label: "https", To: 443}, {Label: "admin", To: 8080}},
 			},
 		},
 	}
@@ -3863,7 +3948,7 @@ func TestComparableResources_Subtract(t *testing.T) {
 				{
 					CIDR:          "10.0.0.0/8",
 					MBits:         100,
-					ReservedPorts: []Port{{"ssh", 22, 0, ""}},
+					ReservedPorts: []Port{{Label: "ssh", Value: 22}},
 				},
 			},
 		},
@@ -3886,7 +3971,7 @@ func TestComparableResources_Subtract(t *testing.T) {
 				{
 					CIDR:          "10.0.0.0/8",
 					MBits:         20,
-					ReservedPorts: []Port{{"ssh", 22, 0, ""}},
+					ReservedPorts: []Port{{Label: "ssh", Value: 22}},
 				},
 			},
 		},
@@ -3910,7 +3995,7 @@ func TestComparableResources_Subtract(t *testing.T) {
 				{
 					CIDR:          "10.0.0.0/8",
 					MBits:         100,
-					ReservedPorts: []Port{{"ssh", 22, 0, ""}},
+					ReservedPorts: []Port{{Label: "ssh", Value: 22}},
 				},
 			},
 		},
@@ -4979,6 +5064,17 @@ func TestTaskArtifact_Hash(t *testing.T) {
 			GetterMode:     "g",
 			GetterInsecure: true,
 			RelativeDest:   "i",
+		},
+		{
+			GetterSource: "b",
+			GetterOptions: map[string]string{
+				"c": "c",
+				"d": "e",
+			},
+			GetterMode:     "g",
+			GetterInsecure: true,
+			RelativeDest:   "i",
+			Chown:          true,
 		},
 	}
 
@@ -6426,10 +6522,17 @@ func TestDispatchPayloadConfig_Validate(t *testing.T) {
 func TestScalingPolicy_Canonicalize(t *testing.T) {
 	ci.Parallel(t)
 
+	job := &Job{Namespace: "prod", ID: "example"}
+	tg := &TaskGroup{Name: "web"}
+	task := &Task{Name: "httpd"}
+
 	cases := []struct {
 		name     string
 		input    *ScalingPolicy
 		expected *ScalingPolicy
+		job      *Job
+		tg       *TaskGroup
+		task     *Task
 	}{
 		{
 			name:     "empty policy",
@@ -6441,14 +6544,42 @@ func TestScalingPolicy_Canonicalize(t *testing.T) {
 			input:    &ScalingPolicy{Type: "other-type"},
 			expected: &ScalingPolicy{Type: "other-type"},
 		},
+		{
+			name:  "policy with type and task group",
+			input: &ScalingPolicy{Type: "other-type"},
+			expected: &ScalingPolicy{
+				Type: "other-type",
+				Target: map[string]string{
+					ScalingTargetNamespace: "prod",
+					ScalingTargetJob:       "example",
+					ScalingTargetGroup:     "web",
+				},
+			},
+			job: job,
+			tg:  tg,
+		},
+		{
+			name:  "policy with type and task",
+			input: &ScalingPolicy{Type: "other-type"},
+			expected: &ScalingPolicy{
+				Type: "other-type",
+				Target: map[string]string{
+					ScalingTargetNamespace: "prod",
+					ScalingTargetJob:       "example",
+					ScalingTargetGroup:     "web",
+					ScalingTargetTask:      "httpd",
+				},
+			},
+			job:  job,
+			tg:   tg,
+			task: task,
+		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			require := require.New(t)
-
-			c.input.Canonicalize()
-			require.Equal(c.expected, c.input)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.input.Canonicalize(tc.job, tc.tg, tc.task)
+			must.Eq(t, tc.expected, tc.input)
 		})
 	}
 }
@@ -6724,12 +6855,12 @@ func TestNetworkResourcesEquals(t *testing.T) {
 				{
 					IP:            "10.0.0.1",
 					MBits:         50,
-					ReservedPorts: []Port{{"web", 80, 0, ""}},
+					ReservedPorts: []Port{{Label: "web", Value: 80}},
 				},
 				{
 					IP:            "10.0.0.1",
 					MBits:         50,
-					ReservedPorts: []Port{{"web", 80, 0, ""}},
+					ReservedPorts: []Port{{Label: "web", Value: 80}},
 				},
 			},
 			true,
@@ -6740,12 +6871,12 @@ func TestNetworkResourcesEquals(t *testing.T) {
 				{
 					IP:            "10.0.0.0",
 					MBits:         50,
-					ReservedPorts: []Port{{"web", 80, 0, ""}},
+					ReservedPorts: []Port{{Label: "web", Value: 80}},
 				},
 				{
 					IP:            "10.0.0.1",
 					MBits:         50,
-					ReservedPorts: []Port{{"web", 80, 0, ""}},
+					ReservedPorts: []Port{{Label: "web", Value: 80}},
 				},
 			},
 			false,
@@ -6756,12 +6887,12 @@ func TestNetworkResourcesEquals(t *testing.T) {
 				{
 					IP:            "10.0.0.1",
 					MBits:         40,
-					ReservedPorts: []Port{{"web", 80, 0, ""}},
+					ReservedPorts: []Port{{Label: "web", Value: 80}},
 				},
 				{
 					IP:            "10.0.0.1",
 					MBits:         50,
-					ReservedPorts: []Port{{"web", 80, 0, ""}},
+					ReservedPorts: []Port{{Label: "web", Value: 80}},
 				},
 			},
 			false,
@@ -6772,12 +6903,12 @@ func TestNetworkResourcesEquals(t *testing.T) {
 				{
 					IP:            "10.0.0.1",
 					MBits:         50,
-					ReservedPorts: []Port{{"web", 80, 0, ""}},
+					ReservedPorts: []Port{{Label: "web", Value: 80}},
 				},
 				{
 					IP:            "10.0.0.1",
 					MBits:         50,
-					ReservedPorts: []Port{{"web", 80, 0, ""}, {"web", 80, 0, ""}},
+					ReservedPorts: []Port{{Label: "web", Value: 80}, {Label: "web", Value: 80}},
 				},
 			},
 			false,
@@ -6788,7 +6919,7 @@ func TestNetworkResourcesEquals(t *testing.T) {
 				{
 					IP:            "10.0.0.1",
 					MBits:         50,
-					ReservedPorts: []Port{{"web", 80, 0, ""}},
+					ReservedPorts: []Port{{Label: "web", Value: 80}},
 				},
 				{
 					IP:            "10.0.0.1",
@@ -6804,12 +6935,12 @@ func TestNetworkResourcesEquals(t *testing.T) {
 				{
 					IP:            "10.0.0.1",
 					MBits:         50,
-					ReservedPorts: []Port{{"web", 80, 0, ""}},
+					ReservedPorts: []Port{{Label: "web", Value: 80}},
 				},
 				{
 					IP:            "10.0.0.1",
 					MBits:         50,
-					ReservedPorts: []Port{{"notweb", 80, 0, ""}},
+					ReservedPorts: []Port{{Label: "notweb", Value: 80}},
 				},
 			},
 			false,
@@ -6820,12 +6951,12 @@ func TestNetworkResourcesEquals(t *testing.T) {
 				{
 					IP:           "10.0.0.1",
 					MBits:        50,
-					DynamicPorts: []Port{{"web", 80, 0, ""}},
+					DynamicPorts: []Port{{Label: "web", Value: 80}},
 				},
 				{
 					IP:           "10.0.0.1",
 					MBits:        50,
-					DynamicPorts: []Port{{"web", 80, 0, ""}, {"web", 80, 0, ""}},
+					DynamicPorts: []Port{{Label: "web", Value: 80}, {Label: "web", Value: 80}},
 				},
 			},
 			false,
@@ -6836,7 +6967,7 @@ func TestNetworkResourcesEquals(t *testing.T) {
 				{
 					IP:           "10.0.0.1",
 					MBits:        50,
-					DynamicPorts: []Port{{"web", 80, 0, ""}},
+					DynamicPorts: []Port{{Label: "web", Value: 80}},
 				},
 				{
 					IP:           "10.0.0.1",
@@ -6852,12 +6983,12 @@ func TestNetworkResourcesEquals(t *testing.T) {
 				{
 					IP:           "10.0.0.1",
 					MBits:        50,
-					DynamicPorts: []Port{{"web", 80, 0, ""}},
+					DynamicPorts: []Port{{Label: "web", Value: 80}},
 				},
 				{
 					IP:           "10.0.0.1",
 					MBits:        50,
-					DynamicPorts: []Port{{"notweb", 80, 0, ""}},
+					DynamicPorts: []Port{{Label: "notweb", Value: 80}},
 				},
 			},
 			false,
@@ -7365,7 +7496,7 @@ func TestAllocatedResources_Canonicalize(t *testing.T) {
 						Networks: Networks{
 							{
 								IP:           "127.0.0.1",
-								DynamicPorts: []Port{{"admin", 8080, 0, "default"}},
+								DynamicPorts: []Port{{Label: "admin", Value: 8080, HostNetwork: "default"}},
 							},
 						},
 					},
@@ -7377,7 +7508,7 @@ func TestAllocatedResources_Canonicalize(t *testing.T) {
 						Networks: Networks{
 							{
 								IP:           "127.0.0.1",
-								DynamicPorts: []Port{{"admin", 8080, 0, "default"}},
+								DynamicPorts: []Port{{Label: "admin", Value: 8080, HostNetwork: "default"}},
 							},
 						},
 					},
@@ -7401,7 +7532,7 @@ func TestAllocatedResources_Canonicalize(t *testing.T) {
 						Networks: Networks{
 							{
 								IP:           "127.0.0.1",
-								DynamicPorts: []Port{{"admin", 8080, 0, "default"}},
+								DynamicPorts: []Port{{Label: "admin", Value: 8080, HostNetwork: "default"}},
 							},
 						},
 					},
@@ -7423,7 +7554,7 @@ func TestAllocatedResources_Canonicalize(t *testing.T) {
 						Networks: Networks{
 							{
 								IP:           "127.0.0.1",
-								DynamicPorts: []Port{{"admin", 8080, 0, "default"}},
+								DynamicPorts: []Port{{Label: "admin", Value: 8080, HostNetwork: "default"}},
 							},
 						},
 					},
@@ -7628,6 +7759,185 @@ func TestComparableResources_Superset(t *testing.T) {
 	}
 }
 
+func TestAllocatedResources_Comparable_Flattened(t *testing.T) {
+	ci.Parallel(t)
+
+	allocationResources := AllocatedResources{
+		TaskLifecycles: map[string]*TaskLifecycleConfig{
+			"prestart-task": {
+				Hook:    TaskLifecycleHookPrestart,
+				Sidecar: false,
+			},
+			"poststop-task": {
+				Hook:    TaskLifecycleHookPoststop,
+				Sidecar: false,
+			},
+		},
+		Tasks: map[string]*AllocatedTaskResources{
+			"prestart-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares: 2000,
+				},
+			},
+			"main-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares: 4000,
+				},
+			},
+			"poststop-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares: 1000,
+				},
+			},
+		},
+	}
+
+	// The output of Flattened should return the resource required during the execution of the largest lifecycle
+	must.Eq(t, 4000, allocationResources.Comparable().Flattened.Cpu.CpuShares)
+	must.Len(t, 0, allocationResources.Comparable().Flattened.Cpu.ReservedCores)
+
+	allocationResources = AllocatedResources{
+		TaskLifecycles: map[string]*TaskLifecycleConfig{
+			"prestart-task": {
+				Hook:    TaskLifecycleHookPrestart,
+				Sidecar: false,
+			},
+			"prestart-sidecar-task": {
+				Hook:    TaskLifecycleHookPrestart,
+				Sidecar: true,
+			},
+			"poststop-task": {
+				Hook:    TaskLifecycleHookPoststop,
+				Sidecar: false,
+			},
+		},
+		Tasks: map[string]*AllocatedTaskResources{
+			"prestart-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares:     1000,
+					ReservedCores: []uint16{0},
+				},
+			},
+			"prestart-sidecar-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares:     2000,
+					ReservedCores: []uint16{1, 2},
+				},
+			},
+			"main-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares:     2000,
+					ReservedCores: []uint16{3, 4},
+				},
+			},
+			"poststop-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares:     1000,
+					ReservedCores: []uint16{5},
+				},
+			},
+		},
+	}
+
+	// Reserved core resources are claimed throughout the lifespan of the allocation
+	must.Eq(t, 6000, allocationResources.Comparable().Flattened.Cpu.CpuShares)
+	must.Len(t, 6, allocationResources.Comparable().Flattened.Cpu.ReservedCores)
+
+	allocationResources = AllocatedResources{
+		TaskLifecycles: map[string]*TaskLifecycleConfig{
+			"prestart-task": {
+				Hook:    TaskLifecycleHookPrestart,
+				Sidecar: false,
+			},
+			"poststop-task": {
+				Hook:    TaskLifecycleHookPoststop,
+				Sidecar: false,
+			},
+		},
+		Tasks: map[string]*AllocatedTaskResources{
+			"prestart-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares: 1000,
+				},
+			},
+			"main-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares:     2000,
+					ReservedCores: []uint16{1, 2},
+				},
+			},
+			"poststop-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares: 1000,
+				},
+			},
+		},
+	}
+
+	// Reserved core resources are claimed throughout the lifespan of the allocation,
+	// but the prestart and poststop task can reuse the CpuShares. It's important to
+	// note that we will only claim 1000 MHz as part of the share slice.
+	must.Eq(t, 3000, allocationResources.Comparable().Flattened.Cpu.CpuShares)
+	must.Len(t, 2, allocationResources.Comparable().Flattened.Cpu.ReservedCores)
+
+	allocationResources = AllocatedResources{
+		TaskLifecycles: map[string]*TaskLifecycleConfig{
+			"prestart-task": {
+				Hook:    TaskLifecycleHookPrestart,
+				Sidecar: false,
+			},
+			"prestart-sidecar-task": {
+				Hook:    TaskLifecycleHookPrestart,
+				Sidecar: true,
+			},
+			"poststart-task": {
+				Hook:    TaskLifecycleHookPoststart,
+				Sidecar: false,
+			},
+			"poststop-task": {
+				Hook:    TaskLifecycleHookPoststop,
+				Sidecar: false,
+			},
+		},
+		Tasks: map[string]*AllocatedTaskResources{
+			"prestart-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares:     2000,
+					ReservedCores: []uint16{0, 1},
+				},
+			},
+			"prestart-sidecar-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares:     2000,
+					ReservedCores: []uint16{2, 3},
+				},
+			},
+			"main-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares:     1000,
+					ReservedCores: []uint16{4},
+				},
+			},
+			"poststart-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares:     2000,
+					ReservedCores: []uint16{5, 6},
+				},
+			},
+			"poststop-task": {
+				Cpu: AllocatedCpuResources{
+					CpuShares:     2000,
+					ReservedCores: []uint16{7, 8},
+				},
+			},
+		},
+	}
+
+	// The output of Flattened should return the resource required during the execution of the largest lifecycle
+	must.Eq(t, 9000, allocationResources.Comparable().Flattened.Cpu.CpuShares)
+	must.Len(t, 9, allocationResources.Comparable().Flattened.Cpu.ReservedCores)
+}
+
 func requireErrors(t *testing.T, err error, expected ...string) {
 	t.Helper()
 	require.Error(t, err)
@@ -7740,7 +8050,7 @@ func TestTaskArtifact_Equal(t *testing.T) {
 	ci.Parallel(t)
 
 	must.Equal[*TaskArtifact](t, nil, nil)
-	must.NotEqual[*TaskArtifact](t, nil, new(TaskArtifact))
+	must.NotEqual(t, nil, new(TaskArtifact))
 
 	must.StructEqual(t, &TaskArtifact{
 		GetterSource:  "source",
@@ -7763,7 +8073,11 @@ func TestTaskArtifact_Equal(t *testing.T) {
 	}, {
 		Field: "RelativeDest",
 		Apply: func(ta *TaskArtifact) { ta.RelativeDest = "./alloc" },
-	}})
+	}, {
+		Field: "Chown",
+		Apply: func(ta *TaskArtifact) { ta.Chown = true },
+	},
+	})
 }
 
 func TestVault_Equal(t *testing.T) {

@@ -60,10 +60,6 @@ type TaskTemplateManager struct {
 	// runner is the consul-template runner
 	runner *manager.Runner
 
-	// handle is used to execute scripts
-	handle     interfaces.ScriptExecutor
-	handleLock sync.Mutex
-
 	// signals is a lookup map from the string representation of a signal to its
 	// actual signal
 	signals map[string]os.Signal
@@ -220,14 +216,6 @@ func (tm *TaskTemplateManager) Stop() {
 	}
 }
 
-// SetDriverHandle sets the executor
-func (tm *TaskTemplateManager) SetDriverHandle(executor interfaces.ScriptExecutor) {
-	tm.handleLock.Lock()
-	defer tm.handleLock.Unlock()
-	tm.handle = executor
-
-}
-
 // run is the long lived loop that handles errors and templates being rendered
 func (tm *TaskTemplateManager) run() {
 	// Runner is nil if there are no templates
@@ -289,6 +277,10 @@ func (tm *TaskTemplateManager) handleFirstRender() {
 		<-eventTimer.C
 	}
 
+	// dirtyEvents are events that actually rendered to disk and need to trigger
+	// their respective change_mode operation
+	dirtyEvents := map[string]*manager.RenderEvent{}
+
 	// outstandingEvent tracks whether there is an outstanding event that should
 	// be fired.
 	outstandingEvent := false
@@ -320,22 +312,25 @@ WAIT:
 				continue
 			}
 
-			dirty := false
 			for _, event := range events {
 				// This template hasn't been rendered
 				if event.LastWouldRender.IsZero() {
 					continue WAIT
 				}
-				if event.WouldRender && event.DidRender {
-					dirty = true
+				// If the template _actually_ rendered to disk, mark it
+				// dirty. We track events here so that onTemplateRendered
+				// doesn't go back to the runner's RenderedEvents and process
+				// events that don't make us dirty.
+				if !event.LastDidRender.IsZero() {
+					dirtyEvents[event.Template.ID()] = event
 				}
 			}
 
 			// if there's a driver handle then the task is already running and
 			// that changes how we want to behave on first render
-			if dirty && tm.config.Lifecycle.IsRunning() {
+			if len(dirtyEvents) > 0 && tm.config.Lifecycle.IsRunning() {
 				handledRenders := make(map[string]time.Time, len(tm.config.Templates))
-				tm.onTemplateRendered(handledRenders, time.Time{})
+				tm.onTemplateRendered(handledRenders, time.Time{}, dirtyEvents)
 			}
 
 			break WAIT
@@ -429,12 +424,13 @@ func (tm *TaskTemplateManager) handleTemplateRerenders(allRenderedTime time.Time
 					SetFailsTask().
 					SetDisplayMessage(fmt.Sprintf("Template failed: %v", err)))
 		case <-tm.runner.TemplateRenderedCh():
-			tm.onTemplateRendered(handledRenders, allRenderedTime)
+			events := tm.runner.RenderEvents()
+			tm.onTemplateRendered(handledRenders, allRenderedTime, events)
 		}
 	}
 }
 
-func (tm *TaskTemplateManager) onTemplateRendered(handledRenders map[string]time.Time, allRenderedTime time.Time) {
+func (tm *TaskTemplateManager) onTemplateRendered(handledRenders map[string]time.Time, allRenderedTime time.Time, events map[string]*manager.RenderEvent) {
 
 	var handling []string
 	signals := make(map[string]struct{})
@@ -442,7 +438,6 @@ func (tm *TaskTemplateManager) onTemplateRendered(handledRenders map[string]time
 	restart := false
 	var splay time.Duration
 
-	events := tm.runner.RenderEvents()
 	for id, event := range events {
 
 		// First time through
@@ -583,19 +578,10 @@ func (tm *TaskTemplateManager) handleScriptError(script *structs.ChangeScript, m
 func (tm *TaskTemplateManager) processScript(script *structs.ChangeScript, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	if tm.handle == nil {
-		failureMsg := fmt.Sprintf(
-			"Template failed to run script %v with arguments %v because task driver handle is not available",
-			script.Command,
-			script.Args,
-		)
-		tm.handleScriptError(script, failureMsg)
-		return
-	}
-	_, exitCode, err := tm.handle.Exec(script.Timeout, script.Command, script.Args)
+	_, exitCode, err := tm.config.Lifecycle.Exec(script.Timeout, script.Command, script.Args)
 	if err != nil {
 		failureMsg := fmt.Sprintf(
-			"Template failed to run script %v with arguments %v on change: %v Exit code: %v",
+			"Template failed to run script %v with arguments %v on change: %v. Exit code: %v",
 			script.Command,
 			script.Args,
 			err,
@@ -606,7 +592,7 @@ func (tm *TaskTemplateManager) processScript(script *structs.ChangeScript, wg *s
 	}
 	if exitCode != 0 {
 		failureMsg := fmt.Sprintf(
-			"Template ran script %v with arguments %v on change but it exited with code code: %v",
+			"Template ran script %v with arguments %v on change but it exited with code: %v",
 			script.Command,
 			script.Args,
 			exitCode,
@@ -617,10 +603,9 @@ func (tm *TaskTemplateManager) processScript(script *structs.ChangeScript, wg *s
 	tm.config.Events.EmitEvent(structs.NewTaskEvent(structs.TaskHookMessage).
 		SetDisplayMessage(
 			fmt.Sprintf(
-				"Template successfully ran script %v with arguments: %v. Exit code: %v",
+				"Template successfully ran script %v with arguments: %v. Exit code: 0",
 				script.Command,
 				script.Args,
-				exitCode,
 			)))
 }
 

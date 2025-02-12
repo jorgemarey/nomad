@@ -144,6 +144,7 @@ func Job() *structs.Job {
 		CreateIndex:    42,
 		ModifyIndex:    99,
 		JobModifyIndex: 99,
+		SubmitTime:     time.Now().UTC().Add(-6 * time.Hour).UnixNano(),
 	}
 	job.Canonicalize()
 	return job
@@ -189,7 +190,7 @@ func JobWithScalingPolicy() (*structs.Job, *structs.ScalingPolicy) {
 		Policy:  map[string]interface{}{},
 		Enabled: true,
 	}
-	policy.TargetTaskGroup(job, job.TaskGroups[0])
+	policy.Canonicalize(job, job.TaskGroups[0], nil)
 	job.TaskGroups[0].Scaling = policy
 	return job, policy
 }

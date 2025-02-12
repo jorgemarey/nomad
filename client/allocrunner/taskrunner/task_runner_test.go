@@ -18,10 +18,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/armon/go-metrics"
 	"github.com/golang/snappy"
 	consulapi "github.com/hashicorp/consul/api"
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/client/allocdir"
+	"github.com/hashicorp/nomad/client/allocrunner/hookstats"
 	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
 	"github.com/hashicorp/nomad/client/allocrunner/taskrunner/getter"
 	"github.com/hashicorp/nomad/client/config"
@@ -2866,6 +2868,40 @@ func TestTaskRunner_BaseLabels(t *testing.T) {
 	require.Equal(alloc.Namespace, labels["namespace"])
 }
 
+// TestTaskRunner_BaseLabels_IncludesAllocMetadata tests that the base labels include
+// the allocation metadata fields using the provided allowed list of keys
+func TestTaskRunner_BaseLabels_IncludesAllocMetadata(t *testing.T) {
+	ci.Parallel(t)
+
+	alloc := mock.BatchAlloc()
+	alloc.Namespace = "not-default"
+	job := alloc.Job
+	job.Meta = map[string]string{"owner": "HashiCorp", "my-key": "my-value", "some_dynamic_value": "now()"}
+	task := job.TaskGroups[0].Tasks[0]
+	task.Driver = "raw_exec"
+	task.Config = map[string]interface{}{
+		"command": "whoami",
+	}
+
+	trConfig, cleanup := testTaskRunnerConfig(t, alloc, task.Name, nil)
+	defer cleanup()
+
+	trConfig.ClientConfig.IncludeAllocMetadataInMetrics = true
+	trConfig.ClientConfig.AllowedMetadataKeysInMetrics = []string{"owner", "my-key"}
+
+	tr, err := NewTaskRunner(trConfig)
+	must.NoError(t, err)
+
+	labels := map[string]string{}
+	for _, e := range tr.baseLabels {
+		labels[e.Name] = e.Value
+	}
+
+	must.Eq(t, "HashiCorp", labels["owner"])
+	must.Eq(t, "my-value", labels["my_key"])
+	must.MapNotContainsKey(t, labels, "some_dynamic_value")
+}
+
 // TestTaskRunner_IdentityHook_Enabled asserts that the identity hook exposes a
 // workload identity to a task.
 func TestTaskRunner_IdentityHook_Enabled(t *testing.T) {
@@ -3064,4 +3100,32 @@ func TestTaskRunner_AllocNetworkStatus(t *testing.T) {
 			must.Eq(t, tc.expect, tr.localState.TaskHandle.Config.DNS)
 		})
 	}
+}
+
+func TestTaskRunner_setHookStatsHandler(t *testing.T) {
+	ci.Parallel(t)
+
+	// Create an task runner that doesn't have any configuration, which means
+	// the operator has not disabled hook metrics.
+	baseTaskRunner := &TaskRunner{
+		clientConfig:     &config.Config{},
+		clientBaseLabels: []metrics.Label{},
+	}
+
+	baseTaskRunner.setHookStatsHandler("platform")
+	handler, ok := baseTaskRunner.hookStatsHandler.(*hookstats.Handler)
+	must.True(t, ok)
+	must.NotNil(t, handler)
+
+	// Create a new allocation runner but explicitly disable hook metrics
+	// collection.
+	baseTaskRunner = &TaskRunner{
+		clientConfig:     &config.Config{DisableAllocationHookMetrics: true},
+		clientBaseLabels: []metrics.Label{},
+	}
+
+	baseTaskRunner.setHookStatsHandler("platform")
+	noopHandler, ok := baseTaskRunner.hookStatsHandler.(*hookstats.NoOpHandler)
+	must.True(t, ok)
+	must.NotNil(t, noopHandler)
 }

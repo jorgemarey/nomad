@@ -1,10 +1,10 @@
 ---
 layout: docs
-page_title: 'Drivers: Docker'
-description: The Docker task driver is used to run Docker based tasks.
+page_title: Docker task driver
+description: Nomad's Docker task driver lets you run Docker-based tasks in your jobs. Learn how to configure job tasks, authenticate against a private repository, use insecure registries, and configure Docker networking. Modify the Docker task driver plugin configuration. Learn about CPU, memory, filesystem IO, and security resource isolation as well as how Nomad handles dangling containers.
 ---
 
-# Docker Driver
+# Docker task driver
 
 Name: `docker`
 
@@ -202,6 +202,21 @@ The `docker` driver supports the following configuration in the job spec. Only
       foo = "bar"
       zip = "zap"
     }
+  }
+  ```
+
+  A more verbose syntax must be used to specify labels with keys that require
+  quoting. For example DataDog's autodiscovery mechanism looks for labels with
+  dots in the key which must be quoted:
+
+  ```hcl
+  config {
+    labels = [
+      {
+        "com.datadoghq.ad.check_names"  =  "[\"openmetrics\"]"
+        "com.datadoghq.ad.init_configs" = "[{}]"
+      }
+    ]
   }
   ```
 
@@ -810,6 +825,13 @@ user to the `docker` group so you can run Nomad without root:
 $ sudo usermod -G docker -a nomad
 ```
 
+Nomad clients manage a cpuset cgroup for each task to reserve or share CPU
+[cores][]. In order for Nomad to be compatible with Docker's own cgroups
+management, it must write to cgroups owned by Docker, which requires running as
+root. If Nomad is not running as root, CPU isolation and NUMA-aware scheduling
+will not function correctly for workloads with `resources.cores`, including
+workloads using task drivers other than `docker` on the same host.
+
 For the best performance and security features you should use recent versions
 of the Linux Kernel and Docker daemon.
 
@@ -1007,8 +1029,9 @@ host system.
 
 - `infra_image` - This is the Docker image to use when creating the parent
   container necessary when sharing network namespaces between tasks. Defaults to
-  `gcr.io/google_containers/pause-<goarch>:3.1`. The image will only be pulled from
-  the container registry if its tag is `latest` or the image doesn't yet exist locally.
+  `registry.k8s.io/pause-<goarch>:3.3`. The image will only be pulled from the
+  container registry if its tag is `latest` or the image doesn't yet exist
+  locally.
 
 - `infra_image_pull_timeout` - A time duration that controls how long Nomad will
   wait before cancelling an in-progress pull of the Docker image as specified in
@@ -1238,3 +1261,4 @@ Windows is relatively new and rapidly evolving you may want to consult the
 [runtime_env]: /nomad/docs/runtime/environment#job-related-variables
 [`--cap-add`]: https://docs.docker.com/engine/reference/run/#runtime-privilege-and-linux-capabilities
 [`--cap-drop`]: https://docs.docker.com/engine/reference/run/#runtime-privilege-and-linux-capabilities
+[cores]: /nomad/docs/job-specification/resources#cores

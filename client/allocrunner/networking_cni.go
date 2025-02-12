@@ -25,10 +25,11 @@ import (
 
 	cni "github.com/containerd/go-cni"
 	cnilibrary "github.com/containernetworking/cni/libcni"
-	"github.com/coreos/go-iptables/iptables"
 	consulIPTables "github.com/hashicorp/consul/sdk/iptables"
 	log "github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/go-set/v2"
+	"github.com/hashicorp/go-set/v3"
+	"github.com/hashicorp/go-version"
+	"github.com/hashicorp/nomad/client/taskenv"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/envoy"
 	"github.com/hashicorp/nomad/nomad/structs"
@@ -59,6 +60,7 @@ type cniNetworkConfigurator struct {
 	rand                    *rand.Rand
 	logger                  log.Logger
 	nsOpts                  *nsOpts
+	newIPTables             func(structs.NodeNetworkAF) (IPTablesCleanup, error)
 }
 
 func newCNINetworkConfigurator(logger log.Logger, cniPath, cniInterfacePrefix, cniConfDir, networkName string, ignorePortMappingHostIP bool, node *structs.Node) (*cniNetworkConfigurator, error) {
@@ -79,6 +81,7 @@ func newCNINetworkConfiguratorWithConf(logger log.Logger, cniPath, cniInterfaceP
 		nodeAttrs:               node.Attributes,
 		nodeMeta:                node.Meta,
 		nsOpts:                  &nsOpts{},
+		newIPTables:             newIPTablesCleanup,
 	}
 	if cniPath == "" {
 		if cniPath = os.Getenv(envCNIPath); cniPath == "" {
@@ -116,8 +119,39 @@ func addCustomCNIArgs(networks []*structs.NetworkResource, cniArgs map[string]st
 	}
 }
 
+func addNomadWorkloadCNIArgs(logger log.Logger, alloc *structs.Allocation, cniArgs map[string]string) {
+	for key, value := range map[string]string{
+		// these are the very same keys that are used to build task env vars
+		taskenv.Region:    alloc.Job.Region, // NOMAD_REGION
+		taskenv.Namespace: alloc.Namespace,  // NOMAD_NAMESPACE
+		taskenv.JobID:     alloc.Job.ID,     // NOMAD_JOB_ID
+		taskenv.GroupName: alloc.TaskGroup,  // NOMAD_GROUP_NAME
+		taskenv.AllocID:   alloc.ID,         // NOMAD_ALLOC_ID
+	} {
+		// job ID and group name may contain ";" but CNI_ARGS are ";"-separated
+		// per the spec, so they may not be used in arg keys or values.
+		if strings.Contains(value, ";") {
+			logger.Warn("Skipping CNI arg because it contains a semicolon",
+				"key", key, "value", value)
+		} else {
+			cniArgs[key] = value
+		}
+	}
+}
+
+var supportsCNICheck = mustCNICheckConstraint()
+
+func mustCNICheckConstraint() version.Constraints {
+	v, err := version.NewConstraint(">= 1.3.0")
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
 // Setup calls the CNI plugins with the add action
-func (c *cniNetworkConfigurator) Setup(ctx context.Context, alloc *structs.Allocation, spec *drivers.NetworkIsolationSpec) (*structs.AllocNetworkStatus, error) {
+func (c *cniNetworkConfigurator) Setup(ctx context.Context, alloc *structs.Allocation, spec *drivers.NetworkIsolationSpec, created bool) (*structs.AllocNetworkStatus, error) {
+
 	if err := c.ensureCNIInitialized(); err != nil {
 		return nil, fmt.Errorf("cni not initialized: %w", err)
 	}
@@ -132,6 +166,9 @@ func (c *cniNetworkConfigurator) Setup(ctx context.Context, alloc *structs.Alloc
 
 	addCustomCNIArgs(tg.Networks, cniArgs)
 
+	// Add NOMAD_* after custom args so it cannot be overridden.
+	addNomadWorkloadCNIArgs(c.logger, alloc, cniArgs)
+
 	portMaps := getPortMapping(alloc, c.ignorePortMappingHostIP)
 
 	tproxyArgs, err := c.setupTransparentProxyArgs(alloc, spec, portMaps)
@@ -144,6 +181,31 @@ func (c *cniNetworkConfigurator) Setup(ctx context.Context, alloc *structs.Alloc
 			return nil, err
 		}
 		cniArgs[ConsulIPTablesConfigEnvVar] = string(iptablesCfg)
+	}
+
+	if !created {
+		// The netns will not be created if it already exists, typically on
+		// agent restart. If the configuration of a prexisting netns is wrong
+		// (ex. after a host reboot for docker created netns), networking will
+		// be broken. CNI's ADD command is not idempotent so we can't simply try
+		// again. Run CHECK to verify the network is still valid. Older plugins
+		// have a broken CHECK, so we have to allow the buggy behavior in the
+		// case of a host reboot with docker-created netns there.
+		cniVersion, err := version.NewSemver(c.nodeAttrs["plugins.cni.version.bridge"])
+		if err == nil && supportsCNICheck.Check(cniVersion) {
+			err := c.cni.Check(ctx, alloc.ID, spec.Path,
+				c.nsOpts.withCapabilityPortMap(portMaps.ports),
+				c.nsOpts.withArgs(cniArgs),
+			)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrCNICheckFailed, err)
+			}
+		} else {
+			c.logger.Debug("network namespace exists but could not check if networking is valid because bridge plugin version was <1.3.0: continuing anyways")
+			return nil, nil
+		}
+		c.logger.Trace("network namespace exists and passed check: skipping setup")
+		return nil, nil
 	}
 
 	// Depending on the version of bridge cni plugin used, a known race could occure
@@ -392,36 +454,51 @@ func (c *cniNetworkConfigurator) cniToAllocNet(res *cni.Result) (*structs.AllocN
 	}
 	sort.Strings(names)
 
-	// Use the first sandbox interface with an IP address
-	for _, name := range names {
-		iface := res.Interfaces[name]
-		if iface == nil {
+	// setStatus sets netStatus.Address and netStatus.InterfaceName
+	// if it finds a suitable interface that has IP address(es)
+	// (at least IPv4, possibly also IPv6)
+	setStatus := func(requireSandbox bool) {
+		for _, name := range names {
+			iface := res.Interfaces[name]
 			// this should never happen but this value is coming from external
 			// plugins so we should guard against it
-			delete(res.Interfaces, name)
-			continue
-		}
+			if iface == nil {
+				continue
+			}
 
-		if iface.Sandbox != "" && len(iface.IPConfigs) > 0 {
-			netStatus.Address = iface.IPConfigs[0].IP.String()
-			netStatus.InterfaceName = name
-			break
+			if requireSandbox && iface.Sandbox == "" {
+				continue
+			}
+
+			for _, ipConfig := range iface.IPConfigs {
+				isIP4 := ipConfig.IP.To4() != nil
+				if netStatus.Address == "" && isIP4 {
+					netStatus.Address = ipConfig.IP.String()
+				}
+				if netStatus.AddressIPv6 == "" && !isIP4 {
+					netStatus.AddressIPv6 = ipConfig.IP.String()
+				}
+			}
+
+			// found a good interface, so we're done
+			if netStatus.Address != "" {
+				netStatus.InterfaceName = name
+				return
+			}
 		}
 	}
+
+	// Use the first sandbox interface with an IP address
+	setStatus(true)
 
 	// If no IP address was found, use the first interface with an address
 	// found as a fallback
 	if netStatus.Address == "" {
-		for _, name := range names {
-			iface := res.Interfaces[name]
-			if len(iface.IPConfigs) > 0 {
-				ip := iface.IPConfigs[0].IP.String()
-				c.logger.Debug("no sandbox interface with an address found CNI result, using first available", "interface", name, "ip", ip)
-				netStatus.Address = ip
-				netStatus.InterfaceName = name
-				break
-			}
-		}
+		setStatus(false)
+		c.logger.Debug("no sandbox interface with an address found CNI result, using first available",
+			"interface", netStatus.InterfaceName,
+			"ip", netStatus.Address,
+		)
 	}
 
 	// If no IP address could be found, return an error
@@ -512,8 +589,20 @@ func (c *cniNetworkConfigurator) Teardown(ctx context.Context, alloc *structs.Al
 	portMap := getPortMapping(alloc, c.ignorePortMappingHostIP)
 
 	if err := c.cni.Remove(ctx, alloc.ID, spec.Path, cni.WithCapabilityPortMap(portMap.ports)); err != nil {
+		c.logger.Warn("error from cni.Remove; attempting manual iptables cleanup", "err", err)
+
+		// best effort cleanup ipv6
+		ipt, iptErr := c.newIPTables(structs.NodeNetworkAF_IPv6)
+		if iptErr != nil {
+			c.logger.Debug("failed to detect ip6tables: %v", iptErr)
+		} else {
+			if err := c.forceCleanup(ipt, alloc.ID); err != nil {
+				c.logger.Warn("ip6tables: %v", err)
+			}
+		}
+
 		// create a real handle to iptables
-		ipt, iptErr := iptables.New()
+		ipt, iptErr = c.newIPTables(structs.NodeNetworkAF_IPv4)
 		if iptErr != nil {
 			return fmt.Errorf("failed to detect iptables: %w", iptErr)
 		}
@@ -522,13 +611,6 @@ func (c *cniNetworkConfigurator) Teardown(ctx context.Context, alloc *structs.Al
 	}
 
 	return nil
-}
-
-// IPTables is a subset of iptables.IPTables
-type IPTables interface {
-	List(table, chain string) ([]string, error)
-	Delete(table, chain string, rule ...string) error
-	ClearAndDeleteChain(table, chain string) error
 }
 
 var (
@@ -541,7 +623,7 @@ var (
 // an allocation that was using bridge networking. The cni library refuses to handle a
 // dirty state - e.g. the pause container is removed out of band, and so we must cleanup
 // iptables ourselves to avoid leaking rules.
-func (c *cniNetworkConfigurator) forceCleanup(ipt IPTables, allocID string) error {
+func (c *cniNetworkConfigurator) forceCleanup(ipt IPTablesCleanup, allocID string) error {
 	const (
 		natTable         = "nat"
 		postRoutingChain = "POSTROUTING"
@@ -566,7 +648,8 @@ func (c *cniNetworkConfigurator) forceCleanup(ipt IPTables, allocID string) erro
 
 	// no rule found for our allocation, just give up
 	if ruleToPurge == "" {
-		return fmt.Errorf("failed to find postrouting rule for alloc %s", allocID)
+		c.logger.Info("iptables cleanup: did not find postrouting rule for alloc", "alloc_id", allocID)
+		return nil
 	}
 
 	// re-create the rule we need to delete, as tokens

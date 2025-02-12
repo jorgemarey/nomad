@@ -22,7 +22,7 @@ import (
 
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/go-multierror"
-	"github.com/hashicorp/go-set/v2"
+	"github.com/hashicorp/go-set/v3"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/args"
 	"github.com/hashicorp/nomad/helper/pointer"
@@ -403,11 +403,6 @@ func (sc *ServiceCheck) validateNomad() error {
 		return errors.New("tls_server_name may only be set for Consul service checks")
 	}
 
-	// tls_skip_verify is consul only
-	if sc.TLSSkipVerify {
-		return errors.New("tls_skip_verify may only be set for Consul service checks")
-	}
-
 	return nil
 }
 
@@ -625,6 +620,7 @@ type Service struct {
 	Connect    *ConsulConnect    // Consul Connect configuration
 	Meta       map[string]string // Consul service meta
 	CanaryMeta map[string]string // Consul service meta when it is a canary
+	Weights    *ServiceWeights   // Service weights for DNS SRV request
 
 	// The values to set for tagged_addresses in Consul service registration.
 	// Does not affect Nomad networking, these are for Consul service discovery.
@@ -678,6 +674,7 @@ func (s *Service) Copy() *Service {
 	ns.CanaryMeta = maps.Clone(s.CanaryMeta)
 	ns.TaggedAddresses = maps.Clone(s.TaggedAddresses)
 
+	ns.Weights = s.Weights.Copy()
 	ns.Identity = s.Identity.Copy()
 
 	return ns
@@ -849,7 +846,7 @@ func (s *Service) validateCheckPort(c *ServiceCheck) error {
 func (s *Service) validateConsulService(mErr *multierror.Error) {
 	// check checks
 	for _, c := range s.Checks {
-		// validat ethe check port
+		// validate the check port
 		if err := s.validateCheckPort(c); err != nil {
 			mErr.Errors = append(mErr.Errors, err)
 			continue
@@ -879,6 +876,11 @@ func (s *Service) validateConsulService(mErr *multierror.Error) {
 		// happen implicitly in a job mutation if there is only one task)
 		if s.Connect.IsNative() && len(s.TaskName) == 0 {
 			mErr.Errors = append(mErr.Errors, fmt.Errorf("Service %s is Connect Native and requires setting the task", s.Name))
+		}
+
+		// if service is connect native a port must be set on the service or consul will reject it
+		if s.Connect.IsNative() && s.PortLabel == "" {
+			mErr.Errors = append(mErr.Errors, fmt.Errorf("Service %s is Connect Native and requires setting the port", s.Name))
 		}
 	}
 }
@@ -960,6 +962,7 @@ func (s *Service) Hash(allocID, taskName string, canary bool) string {
 	hashString(h, s.OnUpdate)
 	hashString(h, s.Namespace)
 	hashIdentity(h, s.Identity)
+	hashWeights(h, s.Weights)
 
 	// Don't hash the provider parameter, so we don't cause churn of all
 	// registered services when upgrading Nomad versions. The provider is not
@@ -996,6 +999,13 @@ func hashConnect(h hash.Hash, connect *ConsulConnect) {
 				hashConfig(h, upstream.Config)
 			}
 		}
+	}
+}
+
+func hashWeights(h hash.Hash, weights *ServiceWeights) {
+	if weights != nil {
+		hashIntIfNonZero(h, "Passing", weights.Passing)
+		hashIntIfNonZero(h, "Warning", weights.Warning)
 	}
 }
 
@@ -1133,11 +1143,49 @@ func (s *Service) Equal(o *Service) bool {
 		return false
 	}
 
+	if !s.Weights.Equal(o.Weights) {
+		return false
+	}
+
 	return true
 }
 
 func (s *Service) IsConsul() bool {
 	return s.Provider == ServiceProviderConsul || s.Provider == ""
+}
+
+// ServiceWeights represents the weights for a service block.
+type ServiceWeights struct {
+	Passing int
+	Warning int
+}
+
+// Copy the block recursively. Returns nil if nil.
+func (c *ServiceWeights) Copy() *ServiceWeights {
+	if c == nil {
+		return nil
+	}
+	return &ServiceWeights{
+		Passing: c.Passing,
+		Warning: c.Warning,
+	}
+}
+
+// Equal returns true if the weights blocks are deeply equal.
+func (c *ServiceWeights) Equal(o *ServiceWeights) bool {
+	if c == nil || o == nil {
+		return c == o
+	}
+
+	if c.Passing != o.Passing {
+		return false
+	}
+
+	if c.Warning != o.Warning {
+		return false
+	}
+
+	return true
 }
 
 // ConsulConnect represents a Consul Connect jobspec block.

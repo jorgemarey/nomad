@@ -5,7 +5,7 @@
 # setup script for Ubuntu Linux 22.04. Assumes that Packer has placed
 # build-time config files at /tmp/linux
 
-set -euo pipefail
+set -xeuo pipefail
 
 NOMAD_PLUGIN_DIR=/opt/nomad/plugins/
 
@@ -19,8 +19,10 @@ export DEBIAN_FRONTEND=noninteractive
 echo 'debconf debconf/frontend select Noninteractive' | sudo debconf-set-selections
 
 mkdir_for_root /opt
+mkdir_for_root /opt/bin # for envoy
 mkdir_for_root /srv/data # for host volumes
 mkdir_for_root /opt/cni/bin
+mkdir_for_root /opt/cni/config
 
 # Dependencies
 sudo apt-get update
@@ -31,7 +33,7 @@ sudo apt-get install -y \
      apt-transport-https ca-certificates gnupg2 stress
 
 # Install hc-install
-curl -o /tmp/hc-install.zip https://releases.hashicorp.com/hc-install/0.5.2/hc-install_0.5.2_linux_amd64.zip
+curl -o /tmp/hc-install.zip https://releases.hashicorp.com/hc-install/0.9.0/hc-install_0.9.0_linux_amd64.zip
 sudo unzip -d /usr/local/bin /tmp/hc-install.zip
 
 # Install sockaddr
@@ -64,27 +66,6 @@ sudo apt-get install -y \
      consul-enterprise \
      nomad
 
-# TODO(tgross: replace with downloading the binary from releases.hashicorp.com
-# once the official 1.4.2 release has shipped
-echo "Installing consul-cni plugin"
-sudo apt-get install -y build-essential git
-
-pushd /tmp
-curl -LO https://go.dev/dl/go1.22.2.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.22.2.linux-amd64.tar.gz
-git clone --depth=1 https://github.com/hashicorp/consul-k8s.git
-pushd consul-k8s
-export PATH="$PATH:/usr/local/go/bin"
-make control-plane-dev
-
-sudo mv control-plane/cni/bin/consul-cni /opt/cni/bin
-sudo chown root:root /opt/cni/bin/consul-cni
-sudo chmod +x /opt/cni/bin/consul-cni
-popd
-popd
-# save us a bunch of disk space
-/usr/local/go/bin/go clean -cache -modcache
-
 # Note: neither service will start on boot because we haven't enabled
 # the systemd unit file and we haven't uploaded any configuration
 # files for Consul and Nomad
@@ -116,6 +97,16 @@ wget -q -O - \
      https://github.com/containernetworking/plugins/releases/download/v1.0.0/cni-plugins-linux-amd64-v1.0.0.tgz \
     | sudo tar -C /opt/cni/bin -xz
 
+echo "Installing consul-cni plugin"
+sudo hc-install install --path /opt/cni/bin --version 1.5.1 consul-cni
+
+echo "Installing custom test plugins"
+# for .conf and .json config tests
+sudo mv /tmp/linux/cni/loopback.* /opt/cni/config/
+# cni_args test plugin and network config
+sudo mv /tmp/linux/cni/cni_args.conflist /opt/cni/config/
+sudo mv /tmp/linux/cni/cni_args.sh /opt/cni/bin/
+
 # Podman
 echo "Installing Podman"
 sudo apt-get -y install podman catatonit
@@ -131,6 +122,16 @@ tar -C /tmp -xf /tmp/pledge-driver.tar.gz
 sudo mv /tmp/nomad-pledge-driver ${NOMAD_PLUGIN_DIR}
 sudo mv /tmp/pledge /usr/local/bin
 sudo chmod +x /usr/local/bin/pledge
+
+# Exec2
+echo "Installing Exec2 Driver"
+sudo hc-install install --path ${NOMAD_PLUGIN_DIR} --version v0.1.0-alpha.2 nomad-driver-exec2
+sudo chmod +x ${NOMAD_PLUGIN_DIR}/nomad-driver-exec2
+
+# Envoy
+echo "Installing Envoy"
+sudo curl -s -S -L -o /opt/bin/envoy https://github.com/envoyproxy/envoy/releases/download/v1.29.4/envoy-1.29.4-linux-x86_64
+sudo chmod +x /opt/bin/envoy
 
 # ECS
 if [ -a "/tmp/linux/nomad-driver-ecs" ]; then

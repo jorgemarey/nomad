@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -2003,6 +2004,45 @@ func TestHTTP_JobDispatch(t *testing.T) {
 	})
 }
 
+func TestHTTP_JobDispatchPayload(t *testing.T) {
+	ci.Parallel(t)
+	httpTest(t, nil, func(s *TestAgent) {
+		// Create the parameterized job
+		job := mock.BatchJob()
+		job.ParameterizedJob = &structs.ParameterizedJobConfig{
+			Payload: "required",
+		}
+
+		// Register the job
+		var resp structs.JobRegisterResponse
+		must.NoError(t, s.Agent.RPC("Job.Register",
+			&structs.JobRegisterRequest{
+				Job: job,
+				WriteRequest: structs.WriteRequest{
+					Region:    "global",
+					Namespace: structs.DefaultNamespace,
+				},
+			}, &resp))
+
+		// Build the request
+		url := "/v1/job/" + job.ID + "/dispatch/payload"
+		body := bytes.NewReader([]byte("any body at all"))
+		req, err := http.NewRequest(http.MethodPut, url, body)
+		must.NoError(t, err)
+
+		// Make the request
+		respW := httptest.NewRecorder()
+		obj, err := s.Server.JobSpecificRequest(respW, req)
+		must.NoError(t, err)
+		must.Eq(t, http.StatusOK, respW.Result().StatusCode)
+
+		// Check the response
+		dispatch := obj.(structs.JobDispatchResponse)
+		must.NotEq(t, "", dispatch.EvalID, must.Sprintf("expect EvalID in: %v", dispatch))
+		must.NotEq(t, "", dispatch.DispatchedJobID, must.Sprintf("expect DispatchedJobID in: %v", dispatch))
+	})
+}
+
 func TestHTTP_JobRevert(t *testing.T) {
 	ci.Parallel(t)
 	httpTest(t, nil, func(s *TestAgent) {
@@ -2708,6 +2748,10 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						TaggedAddresses: map[string]string{
 							"wan": "1.2.3.4",
 						},
+						Weights: &api.ServiceWeights{
+							Passing: 5,
+							Warning: 1,
+						},
 						CheckRestart: &api.CheckRestart{
 							Limit: 4,
 							Grace: pointer.Of(11 * time.Second),
@@ -2820,6 +2864,10 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 								Meta: map[string]string{
 									"servicemeta": "foobar",
 								},
+								Weights: &api.ServiceWeights{
+									Passing: 7,
+									Warning: 2,
+								},
 								CheckRestart: &api.CheckRestart{
 									Limit: 4,
 									Grace: pointer.Of(11 * time.Second),
@@ -2924,6 +2972,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 								},
 								GetterMode:   pointer.Of("dir"),
 								RelativeDest: pointer.Of("dest"),
+								Chown:        true,
 							},
 						},
 						Vault: &api.Vault{
@@ -3147,6 +3196,10 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						TaggedAddresses: map[string]string{
 							"wan": "1.2.3.4",
 						},
+						Weights: &structs.ServiceWeights{
+							Passing: 5,
+							Warning: 1,
+						},
 						OnUpdate: structs.OnUpdateRequireHealthy,
 						Checks: []*structs.ServiceCheck{
 							{
@@ -3263,6 +3316,10 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 								Meta: map[string]string{
 									"servicemeta": "foobar",
 								},
+								Weights: &structs.ServiceWeights{
+									Passing: 7,
+									Warning: 2,
+								},
 								OnUpdate: structs.OnUpdateRequireHealthy,
 								Checks: []*structs.ServiceCheck{
 									{
@@ -3371,6 +3428,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 								},
 								GetterMode:   "dir",
 								RelativeDest: "dest",
+								Chown:        true,
 							},
 						},
 						Vault: &structs.Vault{
@@ -4445,6 +4503,38 @@ func TestConversion_ApiJobUIConfigToStructs(t *testing.T) {
 			},
 		}
 		result := ApiJobUIConfigToStructs(jobUI)
+		must.Eq(t, expected, result)
+	})
+}
+
+func TestConversion_ApiJobVersionTagToStructs(t *testing.T) {
+	t.Run("nil tagged version", func(t *testing.T) {
+		must.Nil(t, ApiJobVersionTagToStructs(nil))
+	})
+
+	t.Run("empty tagged version", func(t *testing.T) {
+		versionTag := &api.JobVersionTag{}
+		expected := &structs.JobVersionTag{
+			Name:        "",
+			Description: "",
+			TaggedTime:  0,
+		}
+		result := ApiJobVersionTagToStructs(versionTag)
+		must.Eq(t, expected, result)
+	})
+
+	t.Run("tagged version with tag and version", func(t *testing.T) {
+		versionTag := &api.JobVersionTag{
+			Name:        "low-latency",
+			Description: "Low latency version",
+			TaggedTime:  1234567890,
+		}
+		expected := &structs.JobVersionTag{
+			Name:        "low-latency",
+			Description: "Low latency version",
+			TaggedTime:  1234567890,
+		}
+		result := ApiJobVersionTagToStructs(versionTag)
 		must.Eq(t, expected, result)
 	})
 }

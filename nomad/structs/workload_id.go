@@ -191,7 +191,7 @@ func (b *IdentityClaimsBuilder) Build(now time.Time) *IdentityClaims {
 	jwtnow := jwt.NewNumericDate(now.UTC())
 	claims := &IdentityClaims{
 		Namespace:    b.alloc.Namespace,
-		JobID:        b.job.ID,
+		JobID:        b.job.GetIDforWorkloadIdentity(),
 		AllocationID: b.alloc.ID,
 		ServiceName:  b.serviceName,
 		Claims: jwt.Claims{
@@ -199,10 +199,6 @@ func (b *IdentityClaimsBuilder) Build(now time.Time) *IdentityClaims {
 			IssuedAt:  jwtnow,
 		},
 		ExtraClaims: b.extras,
-	}
-	// If this is a child job, use the parent's ID
-	if b.job.ParentID != "" {
-		claims.JobID = b.job.ParentID
 	}
 	if b.task != nil && b.wihandle.WorkloadType != WorkloadTypeService {
 		claims.TaskName = b.task.Name
@@ -239,9 +235,10 @@ func (b *IdentityClaimsBuilder) interpolate() {
 		// attributes that always exist
 		"${job.region}", b.job.Region,
 		"${job.namespace}", b.job.Namespace,
-		"${job.id}", b.job.ID,
+		"${job.id}", b.job.GetIDforWorkloadIdentity(),
 		"${job.node_pool}", b.job.NodePool,
 		"${group.name}", b.tg.Name,
+		"${alloc.id}", b.alloc.ID,
 
 		// attributes that conditionally exist
 		"${node.id}", strAttrGet(b.node, func(n *Node) string { return n.ID }),
@@ -263,7 +260,7 @@ func (claims *IdentityClaims) setSubject(job *Job, group, widentifier, id string
 	claims.Subject = strings.Join([]string{
 		job.Region,
 		job.Namespace,
-		job.ID,
+		job.GetIDforWorkloadIdentity(),
 		group,
 		widentifier,
 		id,
@@ -306,8 +303,12 @@ type WorkloadIdentity struct {
 	Env bool
 
 	// File writes the Workload Identity into the Task's secrets directory
-	// if set.
+	// or path specified by Filepath if set.
 	File bool
+
+	// Filepath is used to specify a custom path for the Task's Workload
+	// Identity JWT.
+	Filepath string
 
 	// ServiceName is used to bind the identity to a correct Consul service.
 	ServiceName string
@@ -358,6 +359,7 @@ func (wi *WorkloadIdentity) Copy() *WorkloadIdentity {
 		ChangeSignal: wi.ChangeSignal,
 		Env:          wi.Env,
 		File:         wi.File,
+		Filepath:     wi.Filepath,
 		ServiceName:  wi.ServiceName,
 		TTL:          wi.TTL,
 	}
@@ -389,6 +391,10 @@ func (wi *WorkloadIdentity) Equal(other *WorkloadIdentity) bool {
 	}
 
 	if wi.File != other.File {
+		return false
+	}
+
+	if wi.Filepath != other.Filepath {
 		return false
 	}
 
@@ -462,6 +468,10 @@ func (wi *WorkloadIdentity) Validate() error {
 
 	if wi.TTL < 0 {
 		mErr.Errors = append(mErr.Errors, fmt.Errorf("ttl must be >= 0"))
+	}
+
+	if wi.Filepath != "" && !wi.File {
+		mErr.Errors = append(mErr.Errors, fmt.Errorf("file parameter must be true in order to specify filepath"))
 	}
 
 	return mErr.ErrorOrNil()

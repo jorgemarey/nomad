@@ -17,7 +17,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
 	"github.com/hashicorp/go-multierror"
-	"github.com/hashicorp/go-set/v2"
+	"github.com/hashicorp/go-set/v3"
 	"github.com/hashicorp/nomad/acl"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/pointer"
@@ -258,6 +258,23 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 		reply.Warnings = helper.MergeMultierrorWarnings(warnings...)
 	}
 
+	// Enforce Sentinel policies. Pass a copy of the job to prevent
+	// sentinel from altering it.
+	ns, err := snap.NamespaceByName(nil, args.RequestNamespace())
+	if err != nil {
+		return err
+	}
+
+	policyWarnings, err := j.enforceSubmitJob(args.PolicyOverride, args.Job.Copy(),
+		existingJob, args.GetIdentity().GetACLToken(), ns)
+	if err != nil {
+		return err
+	}
+	if policyWarnings != nil {
+		warnings = append(warnings, policyWarnings)
+		reply.Warnings = helper.MergeMultierrorWarnings(warnings...)
+	}
+
 	// Create or Update Consul Configuration Entries defined in the job. For now
 	// Nomad only supports Configuration Entries types
 	// - "ingress-gateway" for managing Ingress Gateways
@@ -397,7 +414,7 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 		return nil
 	}
 
-	if eval != nil && !submittedEval {
+	if !submittedEval {
 		eval.JobModifyIndex = reply.JobModifyIndex
 		update := &structs.EvalUpdateRequest{
 			Evals:        []*structs.Evaluation{eval},
@@ -606,7 +623,6 @@ func (j *Job) Revert(args *structs.JobRevertRequest, reply *structs.JobRegisterR
 	if err != nil {
 		return err
 	}
-
 	ws := memdb.NewWatchSet()
 	cur, err := snap.JobByID(ws, args.RequestNamespace(), args.JobID)
 	if err != nil {
@@ -631,6 +647,14 @@ func (j *Job) Revert(args *structs.JobRevertRequest, reply *structs.JobRegisterR
 	revJob := jobV.Copy()
 	revJob.VaultToken = args.VaultToken   // use vault token from revert to perform (re)registration
 	revJob.ConsulToken = args.ConsulToken // use consul token from revert to perform (re)registration
+
+	// Clear out the VersionTag to prevent tag duplication
+	revJob.VersionTag = nil
+
+	// Set the stable flag to false as this is functionally a new registration
+	// and should handle deployment updates
+	revJob.Stable = false
+
 	reg := &structs.JobRegisterRequest{
 		Job:          revJob,
 		WriteRequest: args.WriteRequest,
@@ -999,8 +1023,9 @@ func (j *Job) Scale(args *structs.JobScaleRequest, reply *structs.JobRegisterRes
 	if job == nil {
 		return structs.NewErrRPCCoded(404, fmt.Sprintf("job %q not found", args.JobID))
 	}
-	if job.Type == structs.JobTypeSystem {
-		return structs.NewErrRPCCoded(http.StatusBadRequest, `cannot scale jobs of type "system"`)
+
+	if job.Type == structs.JobTypeSystem && *args.Count > 1 {
+		return structs.NewErrRPCCoded(http.StatusBadRequest, `jobs of type "system" can only be scaled between 0 and 1`)
 	}
 
 	// Since job is going to be mutated we must copy it since state store methods
@@ -1273,12 +1298,65 @@ func (j *Job) GetJobVersions(args *structs.JobVersionsRequest,
 			// Setup the output
 			reply.Versions = out
 			if len(out) != 0 {
-				reply.Index = out[0].ModifyIndex
+
+				var compareVersionNumber uint64
+				var compareVersion *structs.Job
+				var compareSpecificVersion bool
+
+				if args.Diffs {
+					if args.DiffTagName != "" {
+						compareSpecificVersion = true
+						compareVersion, err = state.JobVersionByTagName(ws, args.RequestNamespace(), args.JobID, args.DiffTagName)
+						if err != nil {
+							return fmt.Errorf("error looking up job version by tag: %v", err)
+						}
+						if compareVersion == nil {
+							return fmt.Errorf("tag %q not found", args.DiffTagName)
+						}
+						compareVersionNumber = compareVersion.Version
+					} else if args.DiffVersion != nil {
+						compareSpecificVersion = true
+						compareVersionNumber = *args.DiffVersion
+					}
+				}
+
+				// Note: a previous assumption here was that the 0th job was the latest, and that we don't modify "old" versions.
+				// Adding version tags breaks this assumption (you can tag an old version, which should unblock /versions queries) so we now look for the highest ModifyIndex.
+				var maxModifyIndex uint64
+				for _, job := range out {
+					if job.ModifyIndex > maxModifyIndex {
+						maxModifyIndex = job.ModifyIndex
+					}
+					if compareSpecificVersion && job.Version == compareVersionNumber {
+						compareVersion = job
+					}
+				}
+				reply.Index = maxModifyIndex
+
+				if compareSpecificVersion && compareVersion == nil {
+					if args.DiffTagName != "" {
+						return fmt.Errorf("tag %q not found", args.DiffTagName)
+					}
+					return fmt.Errorf("version %d not found", *args.DiffVersion)
+				}
 
 				// Compute the diffs
+
 				if args.Diffs {
-					for i := 0; i < len(out)-1; i++ {
-						old, new := out[i+1], out[i]
+					for i := 0; i < len(out); i++ {
+						var old, new *structs.Job
+						new = out[i]
+
+						if compareSpecificVersion {
+							old = compareVersion
+						} else {
+							if i == len(out)-1 {
+								// Skip the last version if not comparing to a specific version
+								break
+							}
+							old = out[i+1]
+						}
+
 						d, err := old.Diff(new, true)
 						if err != nil {
 							return fmt.Errorf("failed to create job diff: %v", err)
@@ -2006,7 +2084,7 @@ func (j *Job) Dispatch(args *structs.JobDispatchRequest, reply *structs.JobDispa
 		// Fetch all jobs that match the parameterized job ID prefix
 		iter, err := snap.JobsByIDPrefix(ws, parameterizedJob.Namespace, parameterizedJob.ID, state.SortDefault)
 		if err != nil {
-			errMsg := "failed to retrieve jobs for idempotency check"
+			const errMsg = "failed to retrieve jobs for idempotency check"
 			j.logger.Error(errMsg, "error", err)
 			return fmt.Errorf(errMsg)
 		}
@@ -2365,4 +2443,43 @@ func (j *Job) GetServiceRegistrations(
 			return j.srv.setReplyQueryMeta(stateStore, state.TableServiceRegistrations, &reply.QueryMeta)
 		},
 	})
+}
+
+func (j *Job) TagVersion(args *structs.JobApplyTagRequest, reply *structs.JobTagResponse) error {
+	authErr := j.srv.Authenticate(j.ctx, args)
+	if done, err := j.srv.forward("Job.TagVersion", args, args, reply); done {
+		return err
+	}
+	j.srv.MeasureRPCRate("job", structs.RateMetricWrite, args)
+	if authErr != nil {
+		return structs.ErrPermissionDenied
+	}
+	defer metrics.MeasureSince([]string{"nomad", "job", "tag_version"}, time.Now())
+
+	aclObj, err := j.srv.ResolveACL(args)
+	if err != nil {
+		return err
+	}
+	if !aclObj.AllowNsOp(args.RequestNamespace(), acl.NamespaceCapabilitySubmitJob) {
+		return structs.ErrPermissionDenied
+	}
+
+	if args.Tag != nil {
+		args.Tag.TaggedTime = time.Now().UnixNano()
+	}
+
+	_, index, err := j.srv.raftApply(structs.JobVersionTagRequestType, args)
+	if err != nil {
+		j.logger.Error("tagging version failed", "error", err)
+		return err
+	}
+
+	reply.Index = index
+	if args.Tag != nil {
+		reply.Name = args.Tag.Name
+		reply.Description = args.Tag.Description
+		reply.TaggedTime = args.Tag.TaggedTime
+	}
+
+	return nil
 }

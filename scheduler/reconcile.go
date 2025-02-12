@@ -10,6 +10,7 @@ package scheduler
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -215,7 +216,7 @@ func NewAllocReconciler(logger log.Logger, allocUpdateFn allocUpdateType, batch 
 		evalID:                      evalID,
 		evalPriority:                evalPriority,
 		supportsDisconnectedClients: supportsDisconnectedClients,
-		now:                         time.Now(),
+		now:                         time.Now().UTC(),
 		result: &reconcileResults{
 			attributeUpdates:          make(map[string]*structs.Allocation),
 			disconnectUpdates:         make(map[string]*structs.Allocation),
@@ -994,7 +995,7 @@ func (a *allocReconciler) createDeployment(groupName string, strategy *structs.U
 
 	// A previous group may have made the deployment already. If not create one.
 	if a.deployment == nil {
-		a.deployment = structs.NewDeployment(a.job, a.evalPriority)
+		a.deployment = structs.NewDeployment(a.job, a.evalPriority, a.now.UnixNano())
 		a.result.deployment = a.deployment
 	}
 
@@ -1192,19 +1193,33 @@ func (a *allocReconciler) reconcileReconnecting(reconnecting allocSet, all alloc
 			continue
 		}
 
+		// A replacement allocation could fail and be replaced with another
+		// so follow the replacements in a linked list style
+		replacements := []string{}
+		nextAlloc := reconnectingAlloc.NextAllocation
+		for {
+			val, ok := all[nextAlloc]
+			if !ok {
+				break
+			}
+			replacements = append(replacements, val.ID)
+			nextAlloc = val.NextAllocation
+		}
+
 		// Find replacement allocations and decide which one to stop. A
 		// reconnecting allocation may have multiple replacements.
 		for _, replacementAlloc := range all {
 
-			// Skip allocations that are not a replacement of the one
-			// reconnecting.
-			isReplacement := replacementAlloc.ID == reconnectingAlloc.NextAllocation
+			// Skip the allocation if it is the reconnecting alloc
+			if replacementAlloc == reconnectingAlloc {
+				continue
+			}
 
-			// Skip allocations that are server terminal.
+			// Skip allocations that are server terminal or not replacements.
 			// We don't want to replace a reconnecting allocation with one that
 			// is or will terminate and we don't need to stop them since they
 			// are already marked as terminal by the servers.
-			if !isReplacement || replacementAlloc.ServerTerminalStatus() {
+			if !slices.Contains(replacements, replacementAlloc.ID) || replacementAlloc.ServerTerminalStatus() {
 				continue
 			}
 
@@ -1221,9 +1236,9 @@ func (a *allocReconciler) reconcileReconnecting(reconnecting allocSet, all alloc
 					})
 				}
 			} else {
-				// The reconnecting allocation is preferred, so stop this
-				// replacement, but avoid re-stopping stopped allocs
-				if replacementAlloc.ClientStatus != structs.AllocClientStatusFailed {
+				// The reconnecting allocation is preferred, so stop any replacements
+				// that are not in server terminal status or stopped already.
+				if _, ok := stop[replacementAlloc.ID]; !ok {
 					stop[replacementAlloc.ID] = replacementAlloc
 					a.result.stop = append(a.result.stop, allocStopResult{
 						alloc:             replacementAlloc,

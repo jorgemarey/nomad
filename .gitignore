@@ -135,5 +135,9 @@ e2e/remotetasks/input/ecs.vars
 # Tools files
 tools/missing/missing
 
+
 *.diff
 *.gz # globaldevtools
+
+# allow security scanner file
+!scan.hcl

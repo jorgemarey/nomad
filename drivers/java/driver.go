@@ -98,6 +98,7 @@ var (
 		"ipc_mode":    hclspec.NewAttr("ipc_mode", "string", false),
 		"cap_add":     hclspec.NewAttr("cap_add", "list(string)", false),
 		"cap_drop":    hclspec.NewAttr("cap_drop", "list(string)", false),
+		"work_dir":    hclspec.NewAttr("work_dir", "string", false),
 	})
 
 	// driverCapabilities is returned by the Capabilities RPC and indicates what
@@ -189,6 +190,9 @@ type TaskConfig struct {
 
 	// CapDrop is a set of linux capabilities to disable.
 	CapDrop []string `codec:"cap_drop"`
+
+	// WorkDir is the working directory for the task
+	WorkDir string `coded:"work_dir"`
 }
 
 func (tc *TaskConfig) validate() error {
@@ -215,6 +219,9 @@ func (tc *TaskConfig) validate() error {
 		return fmt.Errorf("cap_drop configured with capabilities not supported by system: %s", badDrops)
 	}
 
+	if tc.WorkDir != "" && !filepath.IsAbs(tc.WorkDir) {
+		return fmt.Errorf("work_dir must be an absolute path: %s", tc.WorkDir)
+	}
 	return nil
 }
 
@@ -422,7 +429,7 @@ func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 	return nil
 }
 
-func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drivers.DriverNetwork, error) {
+func (d *Driver) StartTask(cfg *drivers.TaskConfig) (handle *drivers.TaskHandle, network *drivers.DriverNetwork, err error) {
 	if _, ok := d.tasks.Get(cfg.ID); ok {
 		return nil, nil, fmt.Errorf("task with ID %q already started", cfg.ID)
 	}
@@ -449,7 +456,7 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 
 	d.logger.Info("starting java task", "driver_cfg", hclog.Fmt("%+v", driverConfig), "args", args)
 
-	handle := drivers.NewTaskHandle(taskHandleVersion)
+	handle = drivers.NewTaskHandle(taskHandleVersion)
 	handle.Config = cfg
 
 	pluginLogFile := filepath.Join(cfg.TaskDir().Dir, "executor.out")
@@ -458,13 +465,6 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 		LogLevel:    "debug",
 		FSIsolation: driverCapabilities.FSIsolation == fsisolation.Chroot,
 		Compute:     d.nomadConfig.Topology.Compute(),
-	}
-
-	exec, pluginClient, err := executor.CreateExecutor(
-		d.logger.With("task_name", handle.Config.Name, "alloc_id", handle.Config.AllocID),
-		d.nomadConfig, executorConfig)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create executor: %v", err)
 	}
 
 	user := cfg.User
@@ -488,6 +488,19 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 	}
 	d.logger.Debug("task capabilities", "capabilities", caps)
 
+	exec, pluginClient, err := executor.CreateExecutor(
+		d.logger.With("task_name", handle.Config.Name, "alloc_id", handle.Config.AllocID),
+		d.nomadConfig, executorConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create executor: %v", err)
+	}
+	// prevent leaking executor in error scenarios
+	defer func() {
+		if err != nil {
+			pluginClient.Kill()
+		}
+	}()
+
 	execCmd := &executor.ExecCommand{
 		Cmd:              absPath,
 		Args:             args,
@@ -496,6 +509,7 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 		ResourceLimits:   true,
 		Resources:        cfg.Resources,
 		TaskDir:          cfg.TaskDir().Dir,
+		WorkDir:          driverConfig.WorkDir,
 		StdoutPath:       cfg.StdoutPath,
 		StderrPath:       cfg.StderrPath,
 		Mounts:           cfg.Mounts,
@@ -508,7 +522,6 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 
 	ps, err := exec.Launch(execCmd)
 	if err != nil {
-		pluginClient.Kill()
 		return nil, nil, fmt.Errorf("failed to launch command with executor: %v", err)
 	}
 
@@ -532,7 +545,6 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 	if err := handle.SetDriverState(&driverState); err != nil {
 		d.logger.Error("failed to start task, error setting driver state", "error", err)
 		exec.Shutdown("", 0)
-		pluginClient.Kill()
 		return nil, nil, fmt.Errorf("failed to set driver state: %v", err)
 	}
 

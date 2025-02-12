@@ -700,6 +700,21 @@ module('Acceptance | jobs list', function (hooks) {
       activeDeployment: true,
     });
 
+    server.create('job', {
+      ...defaultJobParams,
+      id: 'scaled-down-job',
+      groupAllocCount: 0,
+      status: 'dead',
+    });
+
+    server.create('job', {
+      ...defaultJobParams,
+      id: 'ancient-system-job',
+      status: 'dead',
+      type: 'system',
+      groupAllocCount: 0,
+    });
+
     await JobsList.visit();
 
     assert
@@ -732,6 +747,12 @@ module('Acceptance | jobs list', function (hooks) {
     assert
       .dom('[data-test-job-row="deploying-job"] [data-test-job-status]')
       .hasText('Deploying', 'Deploying job is deploying');
+    assert
+      .dom('[data-test-job-row="scaled-down-job"] [data-test-job-status]')
+      .hasText('Scaled Down', 'Scaled down job is scaled down');
+    assert
+      .dom('[data-test-job-row="ancient-system-job"] [data-test-job-status]')
+      .hasText('Failed', 'System job with no allocs is failed');
 
     await percySnapshot(assert);
   });

@@ -32,7 +32,7 @@ import (
 	"github.com/hashicorp/cronexpr"
 	"github.com/hashicorp/go-msgpack/v2/codec"
 	"github.com/hashicorp/go-multierror"
-	"github.com/hashicorp/go-set/v2"
+	"github.com/hashicorp/go-set/v3"
 	"github.com/hashicorp/go-version"
 	"github.com/hashicorp/nomad/acl"
 	"github.com/hashicorp/nomad/client/lib/idset"
@@ -117,8 +117,8 @@ const (
 	ServiceRegistrationDeleteByIDRequestType     MessageType = 48
 	ServiceRegistrationDeleteByNodeIDRequestType MessageType = 49
 	VarApplyStateRequestType                     MessageType = 50
-	RootKeyMetaUpsertRequestType                 MessageType = 51
-	RootKeyMetaDeleteRequestType                 MessageType = 52
+	RootKeyMetaUpsertRequestType                 MessageType = 51 // DEPRECATED
+	WrappedRootKeysDeleteRequestType             MessageType = 52
 	ACLRolesUpsertRequestType                    MessageType = 53
 	ACLRolesDeleteByIDRequestType                MessageType = 54
 	ACLAuthMethodsUpsertRequestType              MessageType = 55
@@ -127,8 +127,8 @@ const (
 	ACLBindingRulesDeleteRequestType             MessageType = 58
 	NodePoolUpsertRequestType                    MessageType = 59
 	NodePoolDeleteRequestType                    MessageType = 60
-
-	// Namespace types were moved from enterprise and therefore start at 64
+	JobVersionTagRequestType                     MessageType = 61
+	WrappedRootKeysUpsertRequestType             MessageType = 62
 	// MEIGAS: When we made the initial code we set them at 24 and 25
 	NamespaceUpsertRequestType MessageType = 64
 	NamespaceDeleteRequestType MessageType = 65
@@ -1387,6 +1387,9 @@ type DeploymentPromoteRequest struct {
 	// Groups is used to set the promotion status per task group
 	Groups []string
 
+	// PromotedAt is the timestamp stored as Unix nano
+	PromotedAt int64
+
 	WriteRequest
 }
 
@@ -1657,8 +1660,10 @@ type JobListResponse struct {
 
 // JobVersionsRequest is used to get a jobs versions
 type JobVersionsRequest struct {
-	JobID string
-	Diffs bool
+	JobID       string
+	Diffs       bool
+	DiffVersion *uint64
+	DiffTagName string
 	QueryOptions
 }
 
@@ -2173,7 +2178,7 @@ type Node struct {
 	StatusDescription string
 
 	// StatusUpdatedAt is the time stamp at which the state of the node was
-	// updated
+	// updated, stored as Unix (no nano seconds!)
 	StatusUpdatedAt int64
 
 	// Events is the most recent set of events generated for the node,
@@ -2255,7 +2260,7 @@ func (n *Node) Canonicalize() {
 		n.SchedulingEligibility = NodeSchedulingEligible
 	}
 
-	// COMPAT remove in 1.9+
+	// COMPAT remove in 1.10+
 	// In v1.7 we introduce Topology into the NodeResources struct which the client
 	// will fingerprint. Since the upgrade path must cover servers that get upgraded
 	// before clients which will send the old struct, we synthesize a pseudo topology
@@ -2499,13 +2504,30 @@ func (r *Resources) Validate() error {
 		mErr.Errors = append(mErr.Errors, errors.New("Task can't ask for disk resources, they have to be specified at the task group level."))
 	}
 
+	// Ensure devices are valid
+	devices := set.New[string](len(r.Devices))
 	for i, d := range r.Devices {
 		if err := d.Validate(); err != nil {
 			mErr.Errors = append(mErr.Errors, fmt.Errorf("device %d failed validation: %v", i+1, err))
 		}
+		devices.Insert(d.Name)
 	}
 
-	// ensure memory_max is greater than memory, unless it is set to 0 or -1 which
+	// Ensure each numa bound device matches a device requested for task
+	if r.NUMA != nil {
+		for _, numaDevice := range r.NUMA.Devices {
+			if !devices.Contains(numaDevice) {
+				mErr.Errors = append(mErr.Errors, fmt.Errorf("numa device %q not requested as task resource", numaDevice))
+			}
+		}
+	}
+
+	// Ensure the numa block is valid
+	if err := r.NUMA.Validate(); err != nil {
+		mErr.Errors = append(mErr.Errors, err)
+	}
+
+	// Ensure memory_max is greater than memory, unless it is set to 0 or -1 which
 	// are both sentinel values
 	if (r.MemoryMaxMB != 0 && r.MemoryMaxMB != memoryNoLimit) && r.MemoryMaxMB < r.MemoryMB {
 		mErr.Errors = append(mErr.Errors, fmt.Errorf("MemoryMaxMB value (%d) should be larger than MemoryMB value (%d)", r.MemoryMaxMB, r.MemoryMB))
@@ -2632,6 +2654,8 @@ func (r *Resources) Canonicalize() {
 	for _, n := range r.Networks {
 		n.Canonicalize()
 	}
+
+	r.NUMA.Canonicalize()
 }
 
 // MeetsMinResources returns an error if the resources specified are less than
@@ -2702,6 +2726,21 @@ func (r *Resources) Add(delta *Resources) {
 		} else {
 			r.Networks[idx].Add(n)
 		}
+	}
+
+	if r.Devices == nil && delta.Devices != nil {
+		r.Devices = make(ResourceDevices, 0)
+	}
+	for _, dd := range delta.Devices {
+		idx := slices.IndexFunc(r.Devices, func(d *RequestedDevice) bool { return d.Name == dd.Name })
+
+		// means it's not found
+		if idx < 0 {
+			r.Devices = append(r.Devices, dd)
+			continue
+		}
+
+		r.Devices[idx].Count += dd.Count
 	}
 }
 
@@ -2777,18 +2816,23 @@ type NodeNetworkAddress struct {
 }
 
 type AllocatedPortMapping struct {
-	Label  string
-	Value  int
-	To     int
-	HostIP string
+	// msgpack omit empty fields during serialization
+	_struct bool `codec:",omitempty"` // nolint: structcheck
+
+	Label           string
+	Value           int
+	To              int
+	HostIP          string
+	IgnoreCollision bool
 }
 
 func (m *AllocatedPortMapping) Copy() *AllocatedPortMapping {
 	return &AllocatedPortMapping{
-		Label:  m.Label,
-		Value:  m.Value,
-		To:     m.To,
-		HostIP: m.HostIP,
+		Label:           m.Label,
+		Value:           m.Value,
+		To:              m.To,
+		HostIP:          m.HostIP,
+		IgnoreCollision: m.IgnoreCollision,
 	}
 }
 
@@ -2804,6 +2848,8 @@ func (m *AllocatedPortMapping) Equal(o *AllocatedPortMapping) bool {
 	case m.To != o.To:
 		return false
 	case m.HostIP != o.HostIP:
+		return false
+	case m.IgnoreCollision != o.IgnoreCollision:
 		return false
 	}
 	return true
@@ -2828,6 +2874,9 @@ func (p AllocatedPorts) Get(label string) (AllocatedPortMapping, bool) {
 }
 
 type Port struct {
+	// msgpack omit empty fields during serialization
+	_struct bool `codec:",omitempty"` // nolint: structcheck
+
 	// Label is the key for HCL port blocks: port "foo" {}
 	Label string
 
@@ -2844,6 +2893,11 @@ type Port struct {
 	// to. Jobs with a HostNetwork set can only be placed on nodes with
 	// that host network available.
 	HostNetwork string
+
+	// IgnoreCollision ignores port collisions, so the port can be used more
+	// than one time on a single network, for tasks that support SO_REUSEPORT
+	// Should be used only with static ports.
+	IgnoreCollision bool
 }
 
 type DNSConfig struct {
@@ -2992,6 +3046,11 @@ func (n *NetworkResource) PortLabels() map[string]int {
 	return labelValues
 }
 
+func (n *NetworkResource) IsIPv6() bool {
+	ip := net.ParseIP(n.IP)
+	return ip != nil && ip.To4() == nil
+}
+
 // Networks defined for a task on the Resources struct.
 type Networks []*NetworkResource
 
@@ -3013,10 +3072,11 @@ func (ns Networks) Port(label string) AllocatedPortMapping {
 		for _, p := range n.ReservedPorts {
 			if p.Label == label {
 				return AllocatedPortMapping{
-					Label:  label,
-					Value:  p.Value,
-					To:     p.To,
-					HostIP: n.IP,
+					Label:           label,
+					Value:           p.Value,
+					To:              p.To,
+					HostIP:          n.IP,
+					IgnoreCollision: p.IgnoreCollision,
 				}
 			}
 		}
@@ -3073,6 +3133,10 @@ type RequestedDevice struct {
 	// Affinities are a set of affinities to apply when selecting the device
 	// to use.
 	Affinities Affinities
+}
+
+func (r *RequestedDevice) String() string {
+	return r.Name
 }
 
 func (r *RequestedDevice) Equal(o *RequestedDevice) bool {
@@ -3212,9 +3276,9 @@ func (n *NodeResources) Copy() *NodeResources {
 		}
 	}
 
-	// COMPAT remove in 1.9+
+	// COMPAT remove in 1.10+
 	// apply compatibility fixups covering node topology
-	n.Compatibility()
+	newN.Compatibility()
 
 	return newN
 }
@@ -3276,7 +3340,7 @@ func (n *NodeResources) Merge(o *NodeResources) {
 		}
 	}
 
-	// COMPAT remove in 1.9+
+	// COMPAT remove in 1.10+
 	// apply compatibility fixups covering node topology
 	n.Compatibility()
 }
@@ -3798,31 +3862,45 @@ func (a *AllocatedResources) Comparable() *ComparableResources {
 		Shared: a.Shared,
 	}
 
-	prestartSidecarTasks := &AllocatedTaskResources{}
-	prestartEphemeralTasks := &AllocatedTaskResources{}
-	main := &AllocatedTaskResources{}
-	poststopTasks := &AllocatedTaskResources{}
+	// The lifecycle in which a task could run
+	prestartLifecycle := &AllocatedTaskResources{}
+	mainLifecycle := &AllocatedTaskResources{}
+	stopLifecycle := &AllocatedTaskResources{}
 
-	for taskName, r := range a.Tasks {
-		lc := a.TaskLifecycles[taskName]
-		if lc == nil {
-			main.Add(r)
-		} else if lc.Hook == TaskLifecycleHookPrestart {
-			if lc.Sidecar {
-				prestartSidecarTasks.Add(r)
+	for taskName, taskResources := range a.Tasks {
+		taskLifecycle := a.TaskLifecycles[taskName]
+		fungibleTaskResources := taskResources.Copy()
+
+		// Reserved cores (and their respective bandwidth) are not fungible,
+		// hence we should always include it as part of the Flattened resources.
+		if len(fungibleTaskResources.Cpu.ReservedCores) > 0 {
+			c.Flattened.Cpu.Add(&fungibleTaskResources.Cpu)
+			fungibleTaskResources.Cpu = AllocatedCpuResources{}
+		}
+
+		if taskLifecycle == nil {
+			mainLifecycle.Add(fungibleTaskResources)
+		} else if taskLifecycle.Hook == TaskLifecycleHookPrestart {
+			if taskLifecycle.Sidecar {
+				// These tasks span both the prestart and main lifecycle
+				prestartLifecycle.Add(fungibleTaskResources)
+				mainLifecycle.Add(fungibleTaskResources)
 			} else {
-				prestartEphemeralTasks.Add(r)
+				prestartLifecycle.Add(fungibleTaskResources)
 			}
-		} else if lc.Hook == TaskLifecycleHookPoststop {
-			poststopTasks.Add(r)
+		} else if taskLifecycle.Hook == TaskLifecycleHookPoststart {
+			mainLifecycle.Add(fungibleTaskResources)
+		} else if taskLifecycle.Hook == TaskLifecycleHookPoststop {
+			stopLifecycle.Add(fungibleTaskResources)
 		}
 	}
 
-	// update this loop to account for lifecycle hook
-	prestartEphemeralTasks.Max(main)
-	prestartEphemeralTasks.Max(poststopTasks)
-	prestartSidecarTasks.Add(prestartEphemeralTasks)
-	c.Flattened.Add(prestartSidecarTasks)
+	// Update the main lifecycle to reflect the largest fungible resource set
+	mainLifecycle.Max(prestartLifecycle)
+	mainLifecycle.Max(stopLifecycle)
+
+	// Add the fungible resources
+	c.Flattened.Add(mainLifecycle)
 
 	// Add network resources that are at the task group level
 	for _, network := range a.Shared.Networks {
@@ -4321,6 +4399,7 @@ type JobSubmission struct {
 	Source string
 
 	// Format indicates whether the original job was hcl1, hcl2, or json.
+	// hcl1 format has been removed and can no longer be parsed.
 	Format string
 
 	// VariableFlags contain the CLI "-var" flag arguments as submitted with the
@@ -4525,6 +4604,41 @@ type Job struct {
 
 	// Links and Description fields for the Web UI
 	UI *JobUIConfig
+
+	// Metadata related to a tagged Job Version (which itself is really a Job)
+	VersionTag *JobVersionTag
+}
+
+type JobVersionTag struct {
+	Name        string
+	Description string
+	TaggedTime  int64
+}
+
+type JobApplyTagRequest struct {
+	JobID   string
+	Name    string
+	Tag     *JobVersionTag
+	Version uint64
+	WriteRequest
+}
+
+type JobTagResponse struct {
+	Name        string
+	Description string
+	TaggedTime  int64
+	QueryMeta
+}
+
+func (tv *JobVersionTag) Copy() *JobVersionTag {
+	if tv == nil {
+		return nil
+	}
+	return &JobVersionTag{
+		Name:        tv.Name,
+		Description: tv.Description,
+		TaggedTime:  tv.TaggedTime,
+	}
 }
 
 type JobUIConfig struct {
@@ -4588,6 +4702,15 @@ func (j *Job) GetNamespace() string {
 		return ""
 	}
 	return j.Namespace
+}
+
+// GetIDforWorkloadIdentity is used when we want the job ID for identity; here we
+// always want the parent ID if there is one and then fallback to the ID
+func (j *Job) GetIDforWorkloadIdentity() string {
+	if j.ParentID != "" {
+		return j.ParentID
+	}
+	return j.ID
 }
 
 // GetCreateIndex implements the CreateIndexGetter interface, required for
@@ -4672,6 +4795,7 @@ func (j *Job) Copy() *Job {
 	nj.Affinities = CopySliceAffinities(j.Affinities)
 	nj.Multiregion = j.Multiregion.Copy()
 	nj.UI = j.UI.Copy()
+	nj.VersionTag = j.VersionTag.Copy()
 
 	if j.TaskGroups != nil {
 		tgs := make([]*TaskGroup, len(j.TaskGroups))
@@ -4766,6 +4890,12 @@ func (j *Job) Validate() error {
 	if j.UI != nil {
 		if len(j.UI.Description) > MaxDescriptionCharacters {
 			mErr.Errors = append(mErr.Errors, fmt.Errorf("UI description must be under 1000 characters, currently %d", len(j.UI.Description)))
+		}
+	}
+
+	if j.VersionTag != nil {
+		if len(j.VersionTag.Description) > MaxDescriptionCharacters {
+			mErr.Errors = append(mErr.Errors, fmt.Errorf("Tagged version description must be under 1000 characters, currently %d", len(j.VersionTag.Description)))
 		}
 	}
 
@@ -5510,8 +5640,10 @@ type Namespace struct {
 // NamespaceCapabilities represents a set of capabilities allowed for this
 // namespace, to be checked at job submission time.
 type NamespaceCapabilities struct {
-	EnabledTaskDrivers  []string
-	DisabledTaskDrivers []string
+	EnabledTaskDrivers   []string
+	DisabledTaskDrivers  []string
+	EnabledNetworkModes  []string
+	DisabledNetworkModes []string
 }
 
 // NamespaceNodePoolConfiguration stores configuration about node pools for a
@@ -5601,6 +5733,12 @@ func (n *Namespace) SetHash() []byte {
 		for _, driver := range n.Capabilities.DisabledTaskDrivers {
 			_, _ = hash.Write([]byte(driver))
 		}
+		for _, mode := range n.Capabilities.EnabledNetworkModes {
+			_, _ = hash.Write([]byte(mode))
+		}
+		for _, mode := range n.Capabilities.DisabledNetworkModes {
+			_, _ = hash.Write([]byte(mode))
+		}
 	}
 	if n.NodePoolConfiguration != nil {
 		_, _ = hash.Write([]byte(n.NodePoolConfiguration.Default))
@@ -5661,6 +5799,8 @@ func (n *Namespace) Copy() *Namespace {
 		*c = *n.Capabilities
 		c.EnabledTaskDrivers = slices.Clone(n.Capabilities.EnabledTaskDrivers)
 		c.DisabledTaskDrivers = slices.Clone(n.Capabilities.DisabledTaskDrivers)
+		c.EnabledNetworkModes = slices.Clone(n.Capabilities.EnabledNetworkModes)
+		c.DisabledNetworkModes = slices.Clone(n.Capabilities.DisabledNetworkModes)
 		nc.Capabilities = c
 	}
 	if n.NodePoolConfiguration != nil {
@@ -6264,9 +6404,24 @@ const (
 	ScalingPolicyTypeHorizontal = "horizontal"
 )
 
-func (p *ScalingPolicy) Canonicalize() {
+func (p *ScalingPolicy) Canonicalize(job *Job, tg *TaskGroup, task *Task) {
 	if p.Type == "" {
 		p.Type = ScalingPolicyTypeHorizontal
+	}
+
+	// during restore we canonicalize to update, but these values will already
+	// have been populated during submit and we don't have references to the
+	// job, group, and task
+	if job != nil && tg != nil {
+		p.Target = map[string]string{
+			ScalingTargetNamespace: job.Namespace,
+			ScalingTargetJob:       job.ID,
+			ScalingTargetGroup:     tg.Name,
+		}
+
+		if task != nil {
+			p.Target[ScalingTargetTask] = task.Name
+		}
 	}
 }
 
@@ -6354,23 +6509,6 @@ func (p *ScalingPolicy) Diff(p2 *ScalingPolicy) bool {
 	copy.CreateIndex = p.CreateIndex
 	copy.ModifyIndex = p.ModifyIndex
 	return !reflect.DeepEqual(*p, copy)
-}
-
-// TargetTaskGroup updates a ScalingPolicy target to specify a given task group
-func (p *ScalingPolicy) TargetTaskGroup(job *Job, tg *TaskGroup) *ScalingPolicy {
-	p.Target = map[string]string{
-		ScalingTargetNamespace: job.Namespace,
-		ScalingTargetJob:       job.ID,
-		ScalingTargetGroup:     tg.Name,
-	}
-	return p
-}
-
-// TargetTask updates a ScalingPolicy target to specify a given task
-func (p *ScalingPolicy) TargetTask(job *Job, tg *TaskGroup, task *Task) *ScalingPolicy {
-	p.TargetTaskGroup(job, tg)
-	p.Target[ScalingTargetTask] = task.Name
-	return p
 }
 
 func (p *ScalingPolicy) Stub() *ScalingPolicyListStub {
@@ -6962,12 +7100,8 @@ func (tg *TaskGroup) Canonicalize(job *Job) {
 		tg.EphemeralDisk = DefaultEphemeralDisk()
 	}
 
-	if job.Type == JobTypeSystem && tg.Count == 0 {
-		tg.Count = 1
-	}
-
 	if tg.Scaling != nil {
-		tg.Scaling.Canonicalize()
+		tg.Scaling.Canonicalize(job, tg, nil)
 	}
 
 	for _, service := range tg.Services {
@@ -7241,8 +7375,10 @@ func (tg *TaskGroup) validateNetworks() error {
 				}
 				// static port
 				if other, ok := staticPorts[port.Value]; ok {
-					err := fmt.Errorf("Static port %d already reserved by %s", port.Value, other)
-					mErr.Errors = append(mErr.Errors, err)
+					if !port.IgnoreCollision {
+						err := fmt.Errorf("Static port %d already reserved by %s", port.Value, other)
+						mErr.Errors = append(mErr.Errors, err)
+					}
 				} else if port.Value > math.MaxUint16 {
 					err := fmt.Errorf("Port %s (%d) cannot be greater than %d", port.Label, port.Value, math.MaxUint16)
 					mErr.Errors = append(mErr.Errors, err)
@@ -7258,6 +7394,36 @@ func (tg *TaskGroup) validateNetworks() error {
 			} else if port.To > math.MaxUint16 {
 				err := fmt.Errorf("Port %q cannot be mapped to a port (%d) greater than %d", port.Label, port.To, math.MaxUint16)
 				mErr.Errors = append(mErr.Errors, err)
+			}
+
+			if port.IgnoreCollision && !(net.Mode == "" || net.Mode == "host") {
+				err := fmt.Errorf("Port %q collision may not be ignored on non-host network mode %q", port.Label, net.Mode)
+				mErr.Errors = append(mErr.Errors, err)
+			}
+		}
+		// Validate the cniArgs in each network resource. Make sure there are no duplicate Args in
+		// different network resources or invalid characters (;) in key or value ;)
+		if net.CNI != nil {
+			for k, v := range net.CNI.Args {
+				if cniArgKeys.Contains(k) {
+					err := fmt.Errorf("duplicate CNI arg %q", k)
+					mErr.Errors = append(mErr.Errors, err)
+				} else {
+					cniArgKeys.Insert(k)
+				}
+				// CNI_ARGS is a ";"-separated string of "key=val", so a ";"
+				// in either key or val would confuse plugins (or libraries)
+				// that parse that string.
+				// Pre-validating this here protects job authors from submitting
+				// a job that will most likely error later on the client anyway.
+				if strings.Contains(k, ";") {
+					err := fmt.Errorf("invalid ';' character in CNI arg key %q", k)
+					mErr.Errors = append(mErr.Errors, err)
+				}
+				if strings.Contains(v, ";") {
+					err := fmt.Errorf("invalid ';' character in CNI arg value %q", v)
+					mErr.Errors = append(mErr.Errors, err)
+				}
 			}
 		}
 		// Validate the cniArgs in each network resource. Make sure there are no duplicate Args in
@@ -8065,6 +8231,10 @@ func (t *Task) Canonicalize(job *Job, tg *TaskGroup) {
 		t.KillTimeout = DefaultKillTimeout
 	}
 
+	for _, policy := range t.ScalingPolicies {
+		policy.Canonicalize(job, tg, t)
+	}
+
 	if t.Vault != nil {
 		t.Vault.Canonicalize()
 	}
@@ -8294,7 +8464,14 @@ func (t *Task) Validate(jobType string, tg *TaskGroup) error {
 		// TODO: Investigate validation of the PluginMountDir. Not much we can do apart from check IsAbs until after we understand its execution environment though :(
 	}
 
-	// Validate Identity/Identities
+	// Validate default Identity
+	if t.Identity != nil {
+		if err := t.Identity.Validate(); err != nil {
+			mErr.Errors = append(mErr.Errors, fmt.Errorf("Identity %q is invalid: %w", t.Identity.Name, err))
+		}
+	}
+
+	// Validate Identities
 	for _, wid := range t.Identities {
 		// Task.Canonicalize should move the default identity out of the Identities
 		// slice, so if one is found that means it is a duplicate.
@@ -9708,6 +9885,11 @@ type TaskArtifact struct {
 	// RelativeDest is the download destination given relative to the task's
 	// directory.
 	RelativeDest string
+
+	// Chown the resulting files and directories to the user of the task.
+	//
+	// Defaults to false.
+	Chown bool
 }
 
 func (ta *TaskArtifact) Equal(o *TaskArtifact) bool {
@@ -9727,6 +9909,8 @@ func (ta *TaskArtifact) Equal(o *TaskArtifact) bool {
 		return false
 	case ta.RelativeDest != o.RelativeDest:
 		return false
+	case ta.Chown != o.Chown:
+		return false
 	}
 	return true
 }
@@ -9742,6 +9926,7 @@ func (ta *TaskArtifact) Copy() *TaskArtifact {
 		GetterMode:     ta.GetterMode,
 		GetterInsecure: ta.GetterInsecure,
 		RelativeDest:   ta.RelativeDest,
+		Chown:          ta.Chown,
 	}
 }
 
@@ -9783,6 +9968,7 @@ func (ta *TaskArtifact) Hash() string {
 	_, _ = h.Write([]byte(ta.GetterMode))
 	_, _ = h.Write([]byte(strconv.FormatBool(ta.GetterInsecure)))
 	_, _ = h.Write([]byte(ta.RelativeDest))
+	_, _ = h.Write([]byte(strconv.FormatBool(ta.Chown)))
 	return base64.RawStdEncoding.EncodeToString(h.Sum(nil))
 }
 
@@ -10525,10 +10711,14 @@ type Deployment struct {
 
 	CreateIndex uint64
 	ModifyIndex uint64
+
+	// Creation and modification times, stored as UnixNano
+	CreateTime int64
+	ModifyTime int64
 }
 
 // NewDeployment creates a new deployment given the job.
-func NewDeployment(job *Job, evalPriority int) *Deployment {
+func NewDeployment(job *Job, evalPriority int, now int64) *Deployment {
 	return &Deployment{
 		ID:                 uuid.Generate(),
 		Namespace:          job.Namespace,
@@ -10542,6 +10732,7 @@ func NewDeployment(job *Job, evalPriority int) *Deployment {
 		StatusDescription:  DeploymentStatusDescriptionRunning,
 		TaskGroups:         make(map[string]*DeploymentState, len(job.TaskGroups)),
 		EvalPriority:       evalPriority,
+		CreateTime:         now,
 	}
 }
 
@@ -10721,6 +10912,9 @@ type DeploymentStatusUpdate struct {
 
 	// StatusDescription is the new status description of the deployment.
 	StatusDescription string
+
+	// UpdatedAt is the time of the update, stored as UnixNano
+	UpdatedAt int64
 }
 
 // RescheduleTracker encapsulates previous reschedule events
@@ -11050,10 +11244,10 @@ type Allocation struct {
 	AllocModifyIndex uint64
 
 	// CreateTime is the time the allocation has finished scheduling and been
-	// verified by the plan applier.
+	// verified by the plan applier, stored as UnixNano.
 	CreateTime int64
 
-	// ModifyTime is the time the allocation was last updated.
+	// ModifyTime is the time the allocation was last updated stored as UnixNano.
 	ModifyTime int64
 }
 
@@ -11063,6 +11257,23 @@ func (a *Allocation) GetID() string {
 		return ""
 	}
 	return a.ID
+}
+
+// Sanitize returns a copy of the allocation with the SignedIdentities field
+// removed. This is useful for returning allocations to clients where the
+// SignedIdentities field is not needed.
+func (a *Allocation) Sanitize() *Allocation {
+	if a == nil {
+		return nil
+	}
+
+	if a.SignedIdentities == nil {
+		return a
+	}
+
+	clean := a.Copy()
+	clean.SignedIdentities = nil
+	return clean
 }
 
 // GetNamespace implements the NamespaceGetter interface, required for
@@ -12081,6 +12292,7 @@ func (s *NodeScoreMeta) Data() interface{} {
 type AllocNetworkStatus struct {
 	InterfaceName string
 	Address       string
+	AddressIPv6   string
 	DNS           *DNSConfig
 }
 
@@ -12091,6 +12303,7 @@ func (a *AllocNetworkStatus) Copy() *AllocNetworkStatus {
 	return &AllocNetworkStatus{
 		InterfaceName: a.InterfaceName,
 		Address:       a.Address,
+		AddressIPv6:   a.AddressIPv6,
 		DNS:           a.DNS.Copy(),
 	}
 }
@@ -12110,6 +12323,8 @@ func (a *AllocNetworkStatus) Equal(o *AllocNetworkStatus) bool {
 	case a.InterfaceName != o.InterfaceName:
 		return false
 	case a.Address != o.Address:
+		return false
+	case a.AddressIPv6 != o.AddressIPv6:
 		return false
 	case !a.DNS.Equal(o.DNS):
 		return false
@@ -12435,6 +12650,7 @@ type Evaluation struct {
 	CreateIndex uint64
 	ModifyIndex uint64
 
+	// Creation and modification times stored as UnixNano
 	CreateTime int64
 	ModifyTime int64
 }

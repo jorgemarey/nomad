@@ -53,23 +53,27 @@
   {
     "title": "Release Notes",
     "routes": [
-       {
-         "title": "Overview",
-         "path": "release-notes"
-       },
-       {
-         "title": "Nomad",
-         "routes": [
-           {
-             "title": "Upcoming",
-             "path": "release-notes/nomad/upcoming"
-           },
-           {
-             "title": "v1.8.x",
-             "path": "release-notes/nomad/v1_8_x"
-           }
-         ]
-       }
+      {
+        "title": "Overview",
+        "path": "release-notes"
+      },
+      {
+        "title": "Nomad",
+        "routes": [
+          {
+            "title": "Upcoming",
+            "path": "release-notes/nomad/upcoming"
+          },
+          {
+            "title": "v1.8.x",
+            "path": "release-notes/nomad/v1_8_x"
+          },
+          {
+            "title": "v1.9.x",
+            "path": "release-notes/nomad/v1_9_x"
+          }
+        ]
+      }
     ]
   },
   {
@@ -127,7 +131,16 @@
       },
       {
         "title": "Architecture",
-        "path": "concepts/architecture"
+        "routes": [
+          {
+            "title": "Overview",
+            "path": "concepts/architecture"
+          },
+          {
+            "title": "Federation",
+            "path": "concepts/architecture/federation"
+          }
+        ]
       },
       {
         "title": "CPU",
@@ -204,6 +217,10 @@
         "path": "concepts/security"
       },
       {
+        "title": "Job",
+        "path": "concepts/job"
+      },
+      {
         "title": "Workload Identity",
         "path": "concepts/workload-identity"
       },
@@ -274,12 +291,12 @@
         "path": "configuration/reporting"
       },
       {
-        "title": "sentinel",
-        "path": "configuration/sentinel"
-      },
-      {
         "title": "search",
         "path": "configuration/search"
+      },
+      {
+        "title": "sentinel",
+        "path": "configuration/sentinel"
       },
       {
         "title": "server",
@@ -660,6 +677,10 @@
             "path": "commands/job/stop"
           },
           {
+            "title": "tag",
+            "path": "commands/job/tag"
+          },
+          {
             "title": "validate",
             "path": "commands/job/validate"
           }
@@ -932,6 +953,10 @@
               {
                 "title": "inspect",
                 "path": "commands/operator/snapshot/inspect"
+              },
+              {
+                "title": "redact",
+                "path": "commands/operator/snapshot/redact"
               },
               {
                 "title": "restore",
@@ -1739,6 +1764,10 @@
         "path": "job-specification/device"
       },
       {
+        "title": "disconnect",
+        "path": "job-specification/disconnect"
+      },
+      {
         "title": "dispatch_payload",
         "path": "job-specification/dispatch_payload"
       },
@@ -1753,10 +1782,6 @@
       {
         "title": "expose",
         "path": "job-specification/expose"
-      },
-      {
-        "title": "disconnect",
-        "path": "job-specification/disconnect"
       },
       {
         "title": "gateway",
@@ -1908,6 +1933,10 @@
         "path": "other-specifications/node-pool"
       },
       {
+        "title": "Resource Quota",
+        "path": "other-specifications/quota"
+      },
+      {
         "title": "Variables",
         "path": "other-specifications/variables"
       },
@@ -1946,20 +1975,12 @@
         "path": "drivers/docker"
       },
       {
-        "title": "Exec2",
-        "href": "/plugins/drivers/exec2"
-      },
-      {
         "title": "Isolated Fork/Exec",
         "path": "drivers/exec"
       },
       {
         "title": "Java",
         "path": "drivers/java"
-      },
-      {
-        "title": "Podman",
-        "href": "/plugins/drivers/podman"
       },
       {
         "title": "QEMU",
@@ -1970,81 +1991,23 @@
         "path": "drivers/raw_exec"
       },
       {
-        "title": "Community",
+        "title": "Plugins",
         "routes": [
           {
-            "title": "Overview",
+            "title": "Exec2",
+            "href": "/plugins/drivers/exec2"
+          },
+          {
+            "title": "Podman",
+            "href": "/plugins/drivers/podman"
+          },
+          {
+            "title": "Virt <sup>Beta</sup>",
+            "href": "/plugins/drivers/virt"
+          },
+          {
+            "title": "Community",
             "href": "/plugins/drivers/community"
-          },
-          {
-            "title": "containerd",
-            "href": "/plugins/drivers/community/containerd"
-          },
-          {
-            "title": "Pledge",
-            "href": "/plugins/drivers/community/pledge"
-          },
-          {
-            "title": "Firecracker driver",
-            "href": "/plugins/drivers/community/firecracker-task-driver"
-          },
-          {
-            "title": "Jailtask driver",
-            "href": "/plugins/drivers/community/jail-task-driver"
-          },
-          {
-            "title": "Lightrun",
-            "href": "/plugins/drivers/community/lightrun"
-          },
-          {
-            "title": "LXC",
-            "href": "/plugins/drivers/community/lxc"
-          },
-          {
-            "title": "Pot",
-            "href": "/plugins/drivers/community/pot"
-          },
-          {
-            "title": "Rkt",
-            "badge": {
-              "text": "Deprecated",
-              "type": "outlined",
-              "color": "neutral"
-            },
-            "href": "/plugins/drivers/community/rkt"
-          },
-          {
-            "title": "Rookout",
-            "href": "/plugins/drivers/community/rookout"
-          },
-          {
-            "title": "Singularity",
-            "href": "/plugins/drivers/community/singularity"
-          },
-          {
-            "title": "systemd-nspawn",
-            "href": "/plugins/drivers/community/nspawn"
-          },
-          {
-            "title": "Windows IIS",
-            "href": "/plugins/drivers/community/iis"
-          },
-          {
-            "title": "Windows IIS",
-            "href": "/plugins/drivers/community/nomad-iis"
-          }
-        ]
-      },
-      {
-        "title": "Remote",
-        "routes": [
-          {
-            "title": "Overview",
-            "href": "/plugins/drivers/remote"
-          },
-          {
-            "title": "ECS",
-            "href": "/plugins/drivers/remote/ecs"
           }
         ]
       }
@@ -2052,34 +2015,7 @@
   },
   {
     "title": "Device Plugins",
-    "routes": [
-      {
-        "title": "Overview",
-        "path": "devices"
-      },
-      {
-        "title": "External",
-        "routes": [
-          {
-            "title": "Overview",
-            "href": "/plugins/devices"
-          },
-          {
-            "title": "Nvidia",
-            "href": "/plugins/devices/nvidia"
-          },
-          {
-            "title": "USB",
-            "badge": {
-              "text": "Beta",
-              "type": "outlined",
-              "color": "neutral"
-            },
-            "href": "/plugins/devices/community/usb"
-          }
-        ]
-      }
-    ]
+    "href": "/plugins/devices"
   },
   {
     "title": "Schedulers",
@@ -2371,12 +2307,33 @@
         "path": "operations/key-management"
       },
       {
+        "title": "Federation",
+        "routes": [
+          {
+            "title": "Overview",
+            "path": "operations/federation"
+          },
+          {
+            "title": "Failure",
+            "path": "operations/federation/failure"
+          }
+        ]
+      },
+      {
         "title": "Considerations for Stateful Workloads",
         "path": "operations/stateful-workloads"
       },
       {
         "title": "Benchmarking Nomad",
         "path": "operations/benchmarking"
+      },
+      {
+        "title": "Federate AWS Access with Workload Identity",
+        "path": "operations/aws-oidc-provider"
+      },
+      {
+        "title": "IPv6 Support",
+        "path": "operations/ipv6-support"
       }
     ]
   },

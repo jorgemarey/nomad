@@ -27,7 +27,7 @@ import (
 	cstructs "github.com/hashicorp/nomad/client/structs"
 	"github.com/hashicorp/nomad/drivers/shared/executor/procstats"
 	"github.com/hashicorp/nomad/plugins/drivers"
-	"github.com/syndtr/gocapability/capability"
+	"github.com/moby/sys/capability"
 )
 
 const (
@@ -124,6 +124,10 @@ type ExecCommand struct {
 
 	// TaskDir is the directory path on the host where for the task
 	TaskDir string
+
+	// WorkDir is the working directory of the task inside of a chroot
+	// which defaults to the chroot directory (TaskDir) itself
+	WorkDir string
 
 	// ResourceLimits determines whether resource limits are enforced by the
 	// executor.
@@ -363,7 +367,11 @@ func (e *UniversalExecutor) Launch(command *ExecCommand) (*ProcessState, error) 
 	}
 
 	// set the task dir as the working directory for the command
-	e.childCmd.Dir = e.command.TaskDir
+	if e.command.WorkDir != "" {
+		e.childCmd.Dir = e.command.WorkDir
+	} else {
+		e.childCmd.Dir = e.command.TaskDir
+	}
 
 	// start command in separate process group
 	if err := e.setNewProcessGroup(); err != nil {
@@ -371,7 +379,8 @@ func (e *UniversalExecutor) Launch(command *ExecCommand) (*ProcessState, error) 
 	}
 
 	// setup containment (i.e. cgroups on linux)
-	if cleanup, err := e.configureResourceContainer(command, os.Getpid()); err != nil {
+	running, cleanup, err := e.configureResourceContainer(command, os.Getpid())
+	if err != nil {
 		e.logger.Error("failed to configure container, process isolation will not work", "error", err)
 		if os.Geteuid() == 0 || e.usesCustomCgroup() {
 			return nil, fmt.Errorf("unable to configure cgroups: %w", err)
@@ -416,6 +425,12 @@ func (e *UniversalExecutor) Launch(command *ExecCommand) (*ProcessState, error) 
 		return nil, fmt.Errorf("failed to start command path=%q --- args=%q: %v", path, e.childCmd.Args, err)
 	}
 
+	// Run the runningFunc hook after the process starts
+	if err := running(); err != nil {
+		return nil, err
+	}
+
+	// Wait on the task process
 	go e.wait()
 	return &ProcessState{Pid: e.childCmd.Process.Pid, ExitCode: -1, Time: time.Now()}, nil
 }
@@ -482,7 +497,7 @@ func (e *UniversalExecutor) ExecStreaming(ctx context.Context, command []string,
 
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 
-	cmd.Dir = "/"
+	cmd.Dir = e.childCmd.Dir
 	cmd.Env = e.childCmd.Env
 
 	execHelper := &execHelper{
@@ -778,15 +793,8 @@ func makeExecutable(binPath string) error {
 // SupportedCaps returns a list of all supported capabilities in kernel.
 func SupportedCaps(allowNetRaw bool) []string {
 	var allCaps []string
-	last := capability.CAP_LAST_CAP
-	// workaround for RHEL6 which has no /proc/sys/kernel/cap_last_cap
-	if last == capability.Cap(63) {
-		last = capability.CAP_BLOCK_SUSPEND
-	}
-	for _, cap := range capability.List() {
-		if cap > last {
-			continue
-		}
+	list, _ := capability.ListSupported()
+	for _, cap := range list {
 		if !allowNetRaw && cap == capability.CAP_NET_RAW {
 			continue
 		}

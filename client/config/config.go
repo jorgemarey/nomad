@@ -73,7 +73,7 @@ var (
 
 	DefaultTemplateMaxStale = 87600 * time.Hour
 
-	DefaultTemplateFunctionDenylist = []string{"plugin", "writeToFile"}
+	DefaultTemplateFunctionDenylist = []string{"executeTemplate", "plugin", "writeToFile"}
 )
 
 // RPCHandler can be provided to the Client if there is a local server
@@ -206,6 +206,18 @@ type Config struct {
 	// allocation metrics to remote Telemetry sinks
 	PublishAllocationMetrics bool
 
+	// IncludeAllocMetadataInMetrics determines whether nomad should include the
+	// allocation metadata as labels in the metrics to remote Telemetry sinks
+	IncludeAllocMetadataInMetrics bool
+
+	// DisableAllocationHookMetrics allows operators to disable emitting hook
+	// metrics.
+	DisableAllocationHookMetrics bool
+
+	// AllowedMetadataKeysInMetrics when provided nomad will only include the
+	// configured metadata keys as part of the metrics to remote Telemetry sinks
+	AllowedMetadataKeysInMetrics []string
+
 	// TLSConfig holds various TLS related configurations
 	TLSConfig *structsc.TLSConfig
 
@@ -294,8 +306,13 @@ type Config struct {
 
 	// BridgeNetworkAllocSubnet is the IP subnet to use for address allocation
 	// for allocations in bridge networking mode. Subnet must be in CIDR
-	// notation
+	// notation and must be an IPv4 address.
 	BridgeNetworkAllocSubnet string
+
+	// BridgeNetworkAllocSubnetIPv6 is the IP subnet to use for address allocation
+	// for allocations in bridge networking mode. Subnet must be in CIDR
+	// notation and must be an IPv6 address.
+	BridgeNetworkAllocSubnetIPv6 string
 
 	// HostVolumes is a map of the configured host volumes by name.
 	HostVolumes map[string]*structs.ClientHostVolumeConfig
@@ -399,14 +416,14 @@ type ClientTemplateConfig struct {
 	// time to wait for the Consul cluster to reach a consistent state before rendering a
 	// template. This is useful to enable in systems where Consul is experiencing
 	// a lot of flapping because it will reduce the number of times a template is rendered.
-	Wait *WaitConfig `hcl:"wait,optional" json:"-"`
+	Wait *WaitConfig `hcl:"wait,optional"`
 
 	// WaitBounds allows operators to define boundaries on individual template wait
 	// configuration overrides. If set, this ensures that if a job author specifies
 	// a wait configuration with values the cluster operator does not allow, the
 	// cluster operator's boundary will be applied rather than the job author's
 	// out of bounds configuration.
-	WaitBounds *WaitConfig `hcl:"wait_bounds,optional" json:"-"`
+	WaitBounds *WaitConfig `hcl:"wait_bounds,optional"`
 
 	// This controls the retry behavior when an error is returned from Consul.
 	// Consul Template is highly fault tolerant, meaning it does not exit in the
@@ -564,9 +581,9 @@ func (c *ClientTemplateConfig) Merge(o *ClientTemplateConfig) *ClientTemplateCon
 // to maintain parity with the external subsystem, not to establish a new standard.
 type WaitConfig struct {
 	Min    *time.Duration `hcl:"-"`
-	MinHCL string         `hcl:"min,optional" json:"-"`
+	MinHCL string         `hcl:"min,optional"`
 	Max    *time.Duration `hcl:"-"`
-	MaxHCL string         `hcl:"max,optional" json:"-"`
+	MaxHCL string         `hcl:"max,optional"`
 }
 
 // Copy returns a deep copy of the receiver.
@@ -694,11 +711,11 @@ type RetryConfig struct {
 	// Backoff is the base of the exponential backoff. This number will be
 	// multiplied by the next power of 2 on each iteration.
 	Backoff    *time.Duration `hcl:"-"`
-	BackoffHCL string         `hcl:"backoff,optional" json:"-"`
+	BackoffHCL string         `hcl:"backoff,optional"`
 	// MaxBackoff is an upper limit to the sleep time between retries
 	// A MaxBackoff of 0 means there is no limit to the exponential growth of the backoff.
 	MaxBackoff    *time.Duration `hcl:"-"`
-	MaxBackoffHCL string         `hcl:"max_backoff,optional" json:"-"`
+	MaxBackoffHCL string         `hcl:"max_backoff,optional"`
 }
 
 func (rc *RetryConfig) Copy() *RetryConfig {

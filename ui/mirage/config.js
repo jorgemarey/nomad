@@ -13,8 +13,14 @@ import { copy } from 'ember-copy';
 import formatHost from 'nomad-ui/utils/format-host';
 import faker from 'nomad-ui/mirage/faker';
 
-export function findLeader(schema) {
-  const agent = schema.agents.first();
+export function findLeader(schema, region = null) {
+  let agent;
+  let agents = schema.agents.all().models;
+  if (region) {
+    agent = agents.find((agent) => agent.member?.Tags?.region === region);
+  } else {
+    agent = agents[0];
+  }
   return formatHost(agent.member.Address, agent.member.Tags.port);
 }
 
@@ -457,6 +463,31 @@ export default function () {
     return this.serialize(jobVersions.where({ jobId: params.id }));
   });
 
+  this.post(
+    '/job/:id/versions/:version/tag',
+    function ({ jobVersions }, { params }) {
+      // Create a new version tag
+      const tag = server.create('version-tag', {
+        jobVersion: jobVersions.findBy({
+          jobId: params.id,
+          version: params.version,
+        }),
+        name: params.name,
+        description: params.description,
+      });
+      return this.serialize(tag);
+    }
+  );
+
+  this.delete(
+    '/job/:id/versions/:version/tag',
+    function ({ jobVersions }, { params }) {
+      return this.serialize(
+        jobVersions.findBy({ jobId: params.id, version: params.version })
+      );
+    }
+  );
+
   this.get('/job/:id/deployments', function ({ deployments }, { params }) {
     return this.serialize(deployments.where({ jobId: params.id }));
   });
@@ -642,13 +673,9 @@ export default function () {
   );
 
   this.get(
-    '/volume/:id',
+    '/volume/csi/:id',
     withBlockingSupport(function ({ csiVolumes }, { params, queryParams }) {
-      if (!params.id.startsWith('csi/')) {
-        return new Response(404, {}, null);
-      }
-
-      const id = params.id.replace(/^csi\//, '');
+      const { id } = params;
       const volume = csiVolumes.all().models.find((volume) => {
         const volumeIsDefault =
           !volume.namespaceId || volume.namespaceId === 'default';
@@ -683,7 +710,12 @@ export default function () {
     return this.serialize(volume);
   });
 
-  this.get('/agent/members', function ({ agents, regions }) {
+  this.get('/agent/members', function ({ agents, regions }, req) {
+    const tokenPresent = req.requestHeaders['X-Nomad-Token'];
+    if (!tokenPresent) {
+      return new Response(403, {}, 'Forbidden');
+    }
+
     const firstRegion = regions.first();
     return {
       ServerRegion: firstRegion ? firstRegion.id : null,
@@ -715,8 +747,9 @@ export default function () {
     return logEncode(logFrames, logFrames.length - 1);
   });
 
-  this.get('/status/leader', function (schema) {
-    return JSON.stringify(findLeader(schema));
+  this.get('/status/leader', function (schema, { queryParams: { region } }) {
+    let leader = JSON.stringify(findLeader(schema, region));
+    return leader;
   });
 
   this.get('/acl/tokens', function ({ tokens }, req) {
@@ -936,16 +969,30 @@ export default function () {
   });
 
   this.post('/sentinel/policy/:id', function (schema, req) {
-    const { Name, Description, Rules } = JSON.parse(req.requestBody);
+    const { Name, Description, EnforcementLevel, Policy, Scope } = JSON.parse(
+      req.requestBody
+    );
     return server.create('sentinelPolicy', {
       name: Name,
       description: Description,
-      rules: Rules,
+      enforcementLevel: EnforcementLevel,
+      policy: Policy,
+      scope: Scope,
     });
   });
 
   this.get('/sentinel/policy/:id', function ({ sentinelPolicies }, req) {
     return this.serialize(sentinelPolicies.findBy({ name: req.params.id }));
+  });
+
+  this.delete('/sentinel/policy/:id', function (schema, req) {
+    const { id } = req.params;
+    server.db.sentinelPolicies.remove(id);
+    return '';
+  });
+
+  this.put('/sentinel/policy/:id', function (schema, req) {
+    return new Response(200, {}, {});
   });
 
   this.delete('/acl/policy/:id', function (schema, request) {

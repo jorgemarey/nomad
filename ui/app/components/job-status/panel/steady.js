@@ -205,7 +205,7 @@ export default class JobStatusPanelSteadyComponent extends Component {
 
   /**
    * @typedef {Object} CurrentStatus
-   * @property {"Healthy"|"Failed"|"Degraded"|"Recovering"|"Complete"|"Running"|"Stopped"} label - The current status of the job
+   * @property {"Healthy"|"Failed"|"Degraded"|"Recovering"|"Complete"|"Running"|"Stopped"|"Scaled Down"} label - The current status of the job
    * @property {"highlight"|"success"|"warning"|"critical"|"neutral"} state -
    */
 
@@ -220,6 +220,13 @@ export default class JobStatusPanelSteadyComponent extends Component {
     if (this.job.status === 'dead' && this.job.stopped) {
       return {
         label: 'Stopped',
+        state: 'neutral',
+      };
+    }
+
+    if (this.totalAllocs === 0 && !this.job.hasClientStatus) {
+      return {
+        label: 'Scaled Down',
         state: 'neutral',
       };
     }
@@ -239,7 +246,7 @@ export default class JobStatusPanelSteadyComponent extends Component {
     }
 
     const healthyAllocs = this.allocBlocks.running?.healthy?.nonCanary;
-    if (healthyAllocs?.length === totalAllocs) {
+    if (healthyAllocs?.length && healthyAllocs?.length === totalAllocs) {
       return { label: 'Healthy', state: 'success' };
     }
 
