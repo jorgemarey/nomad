@@ -3369,6 +3369,15 @@ func (s SnapshotType) String() string {
 	return fmt.Sprintf("Unknown(%d)", s)
 }
 
+// restoreNamespace is used to restore a namespace snapshot
+func restoreNamespace(restore *state.StateRestore, dec *codec.Decoder) error {
+	namespace := new(structs.Namespace)
+	if err := dec.Decode(namespace); err != nil {
+		return err
+	}
+	return restore.NamespaceRestore(namespace)
+}
+
 // TimeTableEntry was used to track a time and index, but has been removed. We
 // still need to deserialize existing entries
 type TimeTableEntry struct {
