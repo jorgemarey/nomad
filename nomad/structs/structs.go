@@ -129,9 +129,12 @@ const (
 	NodePoolDeleteRequestType                    MessageType = 60
 	JobVersionTagRequestType                     MessageType = 61
 	WrappedRootKeysUpsertRequestType             MessageType = 62
-	// MEIGAS: When we made the initial code we set them at 24 and 25
-	NamespaceUpsertRequestType MessageType = 64
-	NamespaceDeleteRequestType MessageType = 65
+	NamespaceUpsertRequestType                   MessageType = 64
+	NamespaceDeleteRequestType                   MessageType = 65
+
+	// NOTE: MessageTypes are shared between CE and ENT. If you need to add a
+	// new type, check that ENT is not already using that value.
+	// MEIGAS: When we made the initial code we set them (namespace request types) at 24 and 25
 )
 
 const (
@@ -7399,31 +7402,6 @@ func (tg *TaskGroup) validateNetworks() error {
 			if port.IgnoreCollision && !(net.Mode == "" || net.Mode == "host") {
 				err := fmt.Errorf("Port %q collision may not be ignored on non-host network mode %q", port.Label, net.Mode)
 				mErr.Errors = append(mErr.Errors, err)
-			}
-		}
-		// Validate the cniArgs in each network resource. Make sure there are no duplicate Args in
-		// different network resources or invalid characters (;) in key or value ;)
-		if net.CNI != nil {
-			for k, v := range net.CNI.Args {
-				if cniArgKeys.Contains(k) {
-					err := fmt.Errorf("duplicate CNI arg %q", k)
-					mErr.Errors = append(mErr.Errors, err)
-				} else {
-					cniArgKeys.Insert(k)
-				}
-				// CNI_ARGS is a ";"-separated string of "key=val", so a ";"
-				// in either key or val would confuse plugins (or libraries)
-				// that parse that string.
-				// Pre-validating this here protects job authors from submitting
-				// a job that will most likely error later on the client anyway.
-				if strings.Contains(k, ";") {
-					err := fmt.Errorf("invalid ';' character in CNI arg key %q", k)
-					mErr.Errors = append(mErr.Errors, err)
-				}
-				if strings.Contains(v, ";") {
-					err := fmt.Errorf("invalid ';' character in CNI arg value %q", v)
-					mErr.Errors = append(mErr.Errors, err)
-				}
 			}
 		}
 		// Validate the cniArgs in each network resource. Make sure there are no duplicate Args in

@@ -258,23 +258,6 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 		reply.Warnings = helper.MergeMultierrorWarnings(warnings...)
 	}
 
-	// Enforce Sentinel policies. Pass a copy of the job to prevent
-	// sentinel from altering it.
-	ns, err := snap.NamespaceByName(nil, args.RequestNamespace())
-	if err != nil {
-		return err
-	}
-
-	policyWarnings, err := j.enforceSubmitJob(args.PolicyOverride, args.Job.Copy(),
-		existingJob, args.GetIdentity().GetACLToken(), ns)
-	if err != nil {
-		return err
-	}
-	if policyWarnings != nil {
-		warnings = append(warnings, policyWarnings)
-		reply.Warnings = helper.MergeMultierrorWarnings(warnings...)
-	}
-
 	// Create or Update Consul Configuration Entries defined in the job. For now
 	// Nomad only supports Configuration Entries types
 	// - "ingress-gateway" for managing Ingress Gateways

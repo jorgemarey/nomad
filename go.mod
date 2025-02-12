@@ -13,8 +13,6 @@ replace (
 replace github.com/hashicorp/nomad/api => ./api
 
 require (
-	github.com/jorgemarey/autopilot v0.4.5
-	github.com/jorgemarey/sentinel v0.1.3
 	github.com/LK4D4/joincontext v0.0.0-20171026170139-1724345da6d5
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/Microsoft/go-winio v0.6.1
@@ -38,6 +36,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/elazarl/go-bindata-assetfs v1.0.1
 	github.com/fatih/color v1.18.0
+	github.com/felixge/httpsnoop v1.0.4
 	github.com/go-jose/go-jose/v3 v3.0.3
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/golang/protobuf v1.5.4
@@ -95,6 +94,8 @@ require (
 	github.com/hashicorp/vault/api v1.15.0
 	github.com/hashicorp/yamux v0.1.2
 	github.com/hpcloud/tail v1.0.1-0.20170814160653-37f427138745
+	github.com/jorgemarey/autopilot v0.4.5
+	github.com/jorgemarey/sentinel v0.1.3
 	github.com/klauspost/cpuid/v2 v2.2.9
 	github.com/kr/pretty v0.3.1
 	github.com/kr/text v0.2.0
@@ -225,7 +226,6 @@ require (
 	github.com/docker/libtrust v0.0.0-20160708172513-aabc10ec26b7 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.32.3 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.1.0 // indirect
-	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.0.4 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect

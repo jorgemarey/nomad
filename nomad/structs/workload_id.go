@@ -231,6 +231,7 @@ func (b *IdentityClaimsBuilder) interpolate() {
 	if len(b.extras) == 0 {
 		return
 	}
+
 	r := strings.NewReplacer(
 		// attributes that always exist
 		"${job.region}", b.job.Region,

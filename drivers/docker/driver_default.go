@@ -16,7 +16,3 @@ func getPortBinding(ip string, port string) nat.PortBinding {
 func validateImageUser(imageUser, taskUser string, taskDriverConfig *TaskConfig, driverConfig *DriverConfig) error {
 	return nil
 }
-
-func validateImageUser(imageUser, taskUser string, taskDriverConfig *TaskConfig, driverConfig *DriverConfig) error {
-	return nil
-}

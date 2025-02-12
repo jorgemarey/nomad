@@ -755,7 +755,6 @@ func (e *Encrypter) writeKeyToDisk(
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 
