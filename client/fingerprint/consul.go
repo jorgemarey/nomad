@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	consulapi "github.com/hashicorp/consul/api"
@@ -26,10 +27,6 @@ var (
 	// perform different fingerprinting depending on which version of Consul it
 	// is communicating with.
 	consulGRPCPortChangeVersion = version.Must(version.NewVersion("1.14.0"))
-
-	// consulBaseFingerprintInterval is the initial interval for periodic
-	// fingerprinting
-	consulBaseFingerprintInterval = 15 * time.Second
 )
 
 // ConsulFingerprint is used to fingerprint for Consul
@@ -40,7 +37,12 @@ type ConsulFingerprint struct {
 	// defined in nomad consul client configuration(s).
 	clusters map[string]*consulState
 
-	initialized bool
+	// Once initial fingerprints are complete, we no-op all periodic
+	// fingerprints to prevent Consul availability issues causing a thundering
+	// herd of node updates. This behavior resets if we reload the
+	// configuration.
+	initialResponse     *FingerprintResponse
+	initialResponseLock sync.RWMutex
 }
 
 type consulState struct {
@@ -50,7 +52,9 @@ type consulState struct {
 	// with the given key from a consul api response
 	readers map[string]valueReader
 
-	isAvailable bool
+	// tracks that we've successfully fingerprinted this cluster at least once
+	// since the last Fingerprint call
+	fingerprintedOnce bool
 }
 
 // valueReader is used to parse out one attribute from consulInfo. Returns
@@ -66,6 +70,10 @@ func NewConsulFingerprint(logger hclog.Logger) Fingerprint {
 }
 
 func (f *ConsulFingerprint) Fingerprint(req *FingerprintRequest, resp *FingerprintResponse) error {
+	if f.readInitialResponse(resp) {
+		return nil
+	}
+
 	var mErr *multierror.Error
 	consulConfigs := req.Config.GetConsulConfigs(f.logger)
 	for _, cfg := range consulConfigs {
@@ -75,7 +83,41 @@ func (f *ConsulFingerprint) Fingerprint(req *FingerprintRequest, resp *Fingerpri
 		}
 	}
 
+	fingerprintCount := 0
+	for _, state := range f.clusters {
+		if state.fingerprintedOnce {
+			fingerprintCount++
+		}
+	}
+	if fingerprintCount == len(consulConfigs) {
+		f.setInitialResponse(resp)
+	}
+
 	return mErr.ErrorOrNil()
+}
+
+// readInitialResponse checks for a previously seen response. It returns true
+// and shallow-copies the response into the argument if one is available. We
+// only want to hold the lock open during the read and not the Fingerprint so
+// that we don't block a Reload call while waiting for Consul requests to
+// complete. If the Reload clears the initialResponse after we take the lock
+// again in setInitialResponse (ex. 2 reloads quickly in a row), the worst that
+// happens is we do an extra fingerprint when the Reload caller calls
+// Fingerprint
+func (f *ConsulFingerprint) readInitialResponse(resp *FingerprintResponse) bool {
+	f.initialResponseLock.RLock()
+	defer f.initialResponseLock.RUnlock()
+	if f.initialResponse != nil {
+		*resp = *f.initialResponse
+		return true
+	}
+	return false
+}
+
+func (f *ConsulFingerprint) setInitialResponse(resp *FingerprintResponse) {
+	f.initialResponseLock.Lock()
+	defer f.initialResponseLock.Unlock()
+	f.initialResponse = resp
 }
 
 func (f *ConsulFingerprint) fingerprintImpl(cfg *config.ConsulConfig, resp *FingerprintResponse) error {
@@ -92,9 +134,10 @@ func (f *ConsulFingerprint) fingerprintImpl(cfg *config.ConsulConfig, resp *Fing
 	}
 
 	// query consul for agent self api
-	info := state.query(logger, f.initialized)
+	info := state.query(logger)
 	if len(info) == 0 {
-		// unable to reach consul, nothing to do this time
+		// unable to reach consul, clear out existing attributes
+		resp.Detected = true
 		return nil
 	}
 
@@ -110,35 +153,23 @@ func (f *ConsulFingerprint) fingerprintImpl(cfg *config.ConsulConfig, resp *Fing
 	// create link for consul
 	f.link(resp)
 
-	// indicate Consul is now available
-	if !state.isAvailable {
-		logger.Info("consul agent is available")
-	}
-
-	state.isAvailable = true
+	state.fingerprintedOnce = true
 	resp.Detected = true
 	return nil
 }
 
 func (f *ConsulFingerprint) Periodic() (bool, time.Duration) {
-	if len(f.clusters) == 0 {
-		return true, consulBaseFingerprintInterval
-	}
-	for _, state := range f.clusters {
-		if !state.isAvailable {
-			return true, consulBaseFingerprintInterval
-		}
-	}
-
-	f.initialized = true
-	// Once all Consuls are initially discovered and healthy we stop the fingerprint
-	return false, 0
+	return true, 15 * time.Second
 }
 
-// Reload satisfies ReloadableFingerprint.
-func (f *ConsulFingerprint) Reload() {}
+// Reload satisfies ReloadableFingerprint and resets the gate on periodic
+// fingerprinting.
+func (f *ConsulFingerprint) Reload() {
+	f.setInitialResponse(nil)
+}
 
 func (cfs *consulState) initialize(cfg *config.ConsulConfig, logger hclog.Logger) error {
+	cfs.fingerprintedOnce = false
 	if cfs.client != nil {
 		return nil // already initialized!
 	}
@@ -189,15 +220,12 @@ func (cfs *consulState) initialize(cfg *config.ConsulConfig, logger hclog.Logger
 	return nil
 }
 
-func (cfs *consulState) query(logger hclog.Logger, initialized bool) agentconsul.Self {
+func (cfs *consulState) query(logger hclog.Logger) agentconsul.Self {
 	// We'll try to detect consul by making a query to to the agent's self API.
 	// If we can't hit this URL consul is probably not running on this machine.
 	info, err := cfs.client.Agent().Self()
 	if err != nil {
-		if initialized {
-			logger.Warn("failed to acquire consul self endpoint", "error", err)
-		}
-		cfs.isAvailable = false
+		logger.Warn("failed to acquire consul self endpoint", "error", err)
 		return nil
 	}
 	return info
