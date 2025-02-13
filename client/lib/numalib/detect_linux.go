@@ -19,9 +19,9 @@ import (
 )
 
 // PlatformScanners returns the set of SystemScanner for Linux.
-func PlatformScanners(disableDmidecode bool) []SystemScanner {
+func PlatformScanners(cpuDisableDmidecode bool) []SystemScanner {
 	scanners := []SystemScanner{new(Sysfs)}
-	if !disableDmidecode {
+	if !cpuDisableDmidecode {
 		scanners = append(scanners, new(Smbios))
 	}
 	scanners = append(scanners, new(Cgroups1))
