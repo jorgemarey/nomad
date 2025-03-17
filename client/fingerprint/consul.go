@@ -55,6 +55,10 @@ type consulState struct {
 	// tracks that we've successfully fingerprinted this cluster at least once
 	// since the last Fingerprint call
 	fingerprintedOnce bool
+
+	// we currently can't disable Consul fingerprinting, so for users who aren't
+	// using it we want to make sure we report the periodic failure only once
+	reportedOnce bool
 }
 
 // valueReader is used to parse out one attribute from consulInfo. Returns
