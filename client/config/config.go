@@ -458,13 +458,19 @@ func DefaultTemplateConfig() *ClientTemplateConfig {
 			Max: pointer.Of(4 * time.Minute),
 		},
 		ConsulRetry: &RetryConfig{
-			Attempts: pointer.Of(0), // unlimited
+			Attempts:   pointer.Of(12),
+			Backoff:    pointer.Of(time.Millisecond * 250),
+			MaxBackoff: pointer.Of(time.Minute),
 		},
 		VaultRetry: &RetryConfig{
-			Attempts: pointer.Of(0), // unlimited
+			Attempts:   pointer.Of(12),
+			Backoff:    pointer.Of(time.Millisecond * 250),
+			MaxBackoff: pointer.Of(time.Minute),
 		},
 		NomadRetry: &RetryConfig{
-			Attempts: pointer.Of(0), // unlimited
+			Attempts:   pointer.Of(12),
+			Backoff:    pointer.Of(time.Millisecond * 250),
+			MaxBackoff: pointer.Of(time.Minute),
 		},
 	}
 }
@@ -682,7 +688,8 @@ func (wc *WaitConfig) ToConsulTemplate() (*config.WaitConfig, error) {
 		return nil, err
 	}
 
-	result := &config.WaitConfig{Enabled: pointer.Of(true)}
+	enabled := wc.Min == nil || *wc.Min != 0 || wc.Max == nil || *wc.Max != 0
+	result := &config.WaitConfig{Enabled: pointer.Of(enabled)}
 
 	if wc.Min != nil {
 		result.Min = wc.Min
