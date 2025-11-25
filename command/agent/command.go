@@ -156,6 +156,7 @@ func (c *Command) readConfig() *Config {
 	flags.StringVar(&defaultConsul.ServerRPCCheckName, "consul-server-rpc-check-name", "", "")
 	flags.IntVar(&defaultConsul.ServerFailuresBeforeCritical, "consul-server-failures-before-critical", 0, "")
 	flags.IntVar(&defaultConsul.ServerFailuresBeforeWarning, "consul-server-failures-before-warning", 0, "")
+	flags.StringVar(&defaultConsul.ServerPeerName, "consul-server-peer-name", "", "")
 	flags.Var((flaghelper.FuncBoolVar)(func(b bool) error {
 		defaultConsul.ServerAutoJoin = &b
 		return nil
