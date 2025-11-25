@@ -286,9 +286,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 				Priority:          pointerOf(JobDefaultPriority),
 				NodePool:          pointerOf(""),
 				AllAtOnce:         pointerOf(false),
-				ConsulToken:       pointerOf(""),
 				ConsulNamespace:   pointerOf(""),
-				VaultToken:        pointerOf(""),
 				VaultNamespace:    pointerOf(""),
 				NomadTokenID:      pointerOf(""),
 				Status:            pointerOf(""),
@@ -312,9 +310,8 @@ func TestJobs_Canonicalize(t *testing.T) {
 				},
 				TaskGroups: []*TaskGroup{
 					{
-						Name:                    pointerOf(""),
-						Count:                   pointerOf(1),
-						PreventRescheduleOnLost: pointerOf(false),
+						Name:  pointerOf(""),
+						Count: pointerOf(1),
 						EphemeralDisk: &EphemeralDisk{
 							Sticky:  pointerOf(false),
 							Migrate: pointerOf(false),
@@ -334,10 +331,6 @@ func TestJobs_Canonicalize(t *testing.T) {
 							Delay:         pointerOf(30 * time.Second),
 							MaxDelay:      pointerOf(1 * time.Hour),
 							Unlimited:     pointerOf(true),
-						},
-						Consul: &Consul{
-							Namespace: "",
-							Cluster:   "default",
 						},
 						Update: &UpdateStrategy{
 							Stagger:          pointerOf(30 * time.Second),
@@ -385,9 +378,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 				Priority:          pointerOf(JobDefaultPriority),
 				NodePool:          pointerOf(""),
 				AllAtOnce:         pointerOf(false),
-				ConsulToken:       pointerOf(""),
 				ConsulNamespace:   pointerOf(""),
-				VaultToken:        pointerOf(""),
 				VaultNamespace:    pointerOf(""),
 				NomadTokenID:      pointerOf(""),
 				Status:            pointerOf(""),
@@ -400,9 +391,8 @@ func TestJobs_Canonicalize(t *testing.T) {
 				JobModifyIndex:    pointerOf(uint64(0)),
 				TaskGroups: []*TaskGroup{
 					{
-						Name:                    pointerOf(""),
-						Count:                   pointerOf(1),
-						PreventRescheduleOnLost: pointerOf(false),
+						Name:  pointerOf(""),
+						Count: pointerOf(1),
 						EphemeralDisk: &EphemeralDisk{
 							Sticky:  pointerOf(false),
 							Migrate: pointerOf(false),
@@ -422,10 +412,6 @@ func TestJobs_Canonicalize(t *testing.T) {
 							Delay:         pointerOf(5 * time.Second),
 							MaxDelay:      pointerOf(time.Duration(0)),
 							Unlimited:     pointerOf(false),
-						},
-						Consul: &Consul{
-							Namespace: "",
-							Cluster:   "default",
 						},
 						Tasks: []*Task{
 							{
@@ -467,9 +453,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 				Priority:          pointerOf(JobDefaultPriority),
 				NodePool:          pointerOf(""),
 				AllAtOnce:         pointerOf(false),
-				ConsulToken:       pointerOf(""),
 				ConsulNamespace:   pointerOf(""),
-				VaultToken:        pointerOf(""),
 				VaultNamespace:    pointerOf(""),
 				NomadTokenID:      pointerOf(""),
 				Stop:              pointerOf(false),
@@ -493,9 +477,8 @@ func TestJobs_Canonicalize(t *testing.T) {
 				},
 				TaskGroups: []*TaskGroup{
 					{
-						Name:                    pointerOf("bar"),
-						PreventRescheduleOnLost: pointerOf(false),
-						Count:                   pointerOf(1),
+						Name:  pointerOf("bar"),
+						Count: pointerOf(1),
 						EphemeralDisk: &EphemeralDisk{
 							Sticky:  pointerOf(false),
 							Migrate: pointerOf(false),
@@ -515,10 +498,6 @@ func TestJobs_Canonicalize(t *testing.T) {
 							Delay:         pointerOf(30 * time.Second),
 							MaxDelay:      pointerOf(1 * time.Hour),
 							Unlimited:     pointerOf(true),
-						},
-						Consul: &Consul{
-							Namespace: "",
-							Cluster:   "default",
 						},
 						Update: &UpdateStrategy{
 							Stagger:          pointerOf(30 * time.Second),
@@ -558,9 +537,8 @@ func TestJobs_Canonicalize(t *testing.T) {
 				},
 				TaskGroups: []*TaskGroup{
 					{
-						Name:                    pointerOf("cache"),
-						Count:                   pointerOf(1),
-						PreventRescheduleOnLost: pointerOf(true),
+						Name:  pointerOf("cache"),
+						Count: pointerOf(1),
 						RestartPolicy: &RestartPolicy{
 							Interval: pointerOf(5 * time.Minute),
 							Attempts: pointerOf(10),
@@ -643,9 +621,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 				Region:            pointerOf("global"),
 				Type:              pointerOf("service"),
 				AllAtOnce:         pointerOf(false),
-				ConsulToken:       pointerOf(""),
 				ConsulNamespace:   pointerOf(""),
-				VaultToken:        pointerOf(""),
 				VaultNamespace:    pointerOf(""),
 				NomadTokenID:      pointerOf(""),
 				Stop:              pointerOf(false),
@@ -670,9 +646,8 @@ func TestJobs_Canonicalize(t *testing.T) {
 				},
 				TaskGroups: []*TaskGroup{
 					{
-						Name:                    pointerOf("cache"),
-						Count:                   pointerOf(1),
-						PreventRescheduleOnLost: pointerOf(true),
+						Name:  pointerOf("cache"),
+						Count: pointerOf(1),
 						RestartPolicy: &RestartPolicy{
 							Interval:        pointerOf(5 * time.Minute),
 							Attempts:        pointerOf(10),
@@ -692,10 +667,6 @@ func TestJobs_Canonicalize(t *testing.T) {
 							Sticky:  pointerOf(false),
 							Migrate: pointerOf(false),
 							SizeMB:  pointerOf(300),
-						},
-						Consul: &Consul{
-							Namespace: "",
-							Cluster:   "default",
 						},
 						Update: &UpdateStrategy{
 							Stagger:          pointerOf(30 * time.Second),
@@ -778,6 +749,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 										Envvars:       pointerOf(false),
 										VaultGrace:    pointerOf(time.Duration(0)),
 										ErrMissingKey: pointerOf(false),
+										Once:          pointerOf(false),
 									},
 									{
 										SourcePath:    pointerOf(""),
@@ -792,6 +764,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 										Envvars:       pointerOf(true),
 										VaultGrace:    pointerOf(time.Duration(0)),
 										ErrMissingKey: pointerOf(false),
+										Once:          pointerOf(false),
 									},
 								},
 							},
@@ -816,9 +789,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 				Priority:          pointerOf(JobDefaultPriority),
 				NodePool:          pointerOf(""),
 				AllAtOnce:         pointerOf(false),
-				ConsulToken:       pointerOf(""),
 				ConsulNamespace:   pointerOf(""),
-				VaultToken:        pointerOf(""),
 				VaultNamespace:    pointerOf(""),
 				NomadTokenID:      pointerOf(""),
 				Stop:              pointerOf(false),
@@ -869,8 +840,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 				},
 				TaskGroups: []*TaskGroup{
 					{
-						Name:                    pointerOf("bar"),
-						PreventRescheduleOnLost: pointerOf(true),
+						Name: pointerOf("bar"),
 						Consul: &Consul{
 							Namespace: "",
 						},
@@ -890,8 +860,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 						},
 					},
 					{
-						Name:                    pointerOf("baz"),
-						PreventRescheduleOnLost: pointerOf(false),
+						Name: pointerOf("baz"),
 						Tasks: []*Task{
 							{
 								Name: "task1",
@@ -910,9 +879,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 				Priority:          pointerOf(JobDefaultPriority),
 				NodePool:          pointerOf(""),
 				AllAtOnce:         pointerOf(false),
-				ConsulToken:       pointerOf(""),
 				ConsulNamespace:   pointerOf(""),
-				VaultToken:        pointerOf(""),
 				VaultNamespace:    pointerOf(""),
 				NomadTokenID:      pointerOf(""),
 				Stop:              pointerOf(false),
@@ -936,9 +903,8 @@ func TestJobs_Canonicalize(t *testing.T) {
 				},
 				TaskGroups: []*TaskGroup{
 					{
-						Name:                    pointerOf("bar"),
-						Count:                   pointerOf(1),
-						PreventRescheduleOnLost: pointerOf(true),
+						Name:  pointerOf("bar"),
+						Count: pointerOf(1),
 						EphemeralDisk: &EphemeralDisk{
 							Sticky:  pointerOf(false),
 							Migrate: pointerOf(false),
@@ -986,9 +952,8 @@ func TestJobs_Canonicalize(t *testing.T) {
 						},
 					},
 					{
-						Name:                    pointerOf("baz"),
-						PreventRescheduleOnLost: pointerOf(false),
-						Count:                   pointerOf(1),
+						Name:  pointerOf("baz"),
+						Count: pointerOf(1),
 						EphemeralDisk: &EphemeralDisk{
 							Sticky:  pointerOf(false),
 							Migrate: pointerOf(false),
@@ -1008,10 +973,6 @@ func TestJobs_Canonicalize(t *testing.T) {
 							Delay:         pointerOf(30 * time.Second),
 							MaxDelay:      pointerOf(1 * time.Hour),
 							Unlimited:     pointerOf(true),
-						},
-						Consul: &Consul{
-							Namespace: "",
-							Cluster:   "default",
 						},
 						Update: &UpdateStrategy{
 							Stagger:          pointerOf(1 * time.Second),
@@ -1046,8 +1007,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 				ParentID: pointerOf("lol"),
 				TaskGroups: []*TaskGroup{
 					{
-						Name:                    pointerOf("bar"),
-						PreventRescheduleOnLost: pointerOf(true),
+						Name: pointerOf("bar"),
 						RestartPolicy: &RestartPolicy{
 							Delay:    pointerOf(15 * time.Second),
 							Attempts: pointerOf(2),
@@ -1094,9 +1054,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 				NodePool:          pointerOf(""),
 				Priority:          pointerOf(JobDefaultPriority),
 				AllAtOnce:         pointerOf(false),
-				ConsulToken:       pointerOf(""),
 				ConsulNamespace:   pointerOf(""),
-				VaultToken:        pointerOf(""),
 				VaultNamespace:    pointerOf(""),
 				NomadTokenID:      pointerOf(""),
 				Stop:              pointerOf(false),
@@ -1120,9 +1078,8 @@ func TestJobs_Canonicalize(t *testing.T) {
 				},
 				TaskGroups: []*TaskGroup{
 					{
-						Name:                    pointerOf("bar"),
-						PreventRescheduleOnLost: pointerOf(true),
-						Count:                   pointerOf(1),
+						Name:  pointerOf("bar"),
+						Count: pointerOf(1),
 						EphemeralDisk: &EphemeralDisk{
 							Sticky:  pointerOf(false),
 							Migrate: pointerOf(false),
@@ -1142,10 +1099,6 @@ func TestJobs_Canonicalize(t *testing.T) {
 							Delay:         pointerOf(30 * time.Second),
 							MaxDelay:      pointerOf(1 * time.Hour),
 							Unlimited:     pointerOf(true),
-						},
-						Consul: &Consul{
-							Namespace: "",
-							Cluster:   "default",
 						},
 						Update: &UpdateStrategy{
 							Stagger:          pointerOf(30 * time.Second),
@@ -1176,9 +1129,8 @@ func TestJobs_Canonicalize(t *testing.T) {
 						},
 					},
 					{
-						Name:                    pointerOf("baz"),
-						PreventRescheduleOnLost: pointerOf(false),
-						Count:                   pointerOf(1),
+						Name:  pointerOf("baz"),
+						Count: pointerOf(1),
 						EphemeralDisk: &EphemeralDisk{
 							Sticky:  pointerOf(false),
 							Migrate: pointerOf(false),
@@ -1273,9 +1225,7 @@ func TestJobs_Canonicalize(t *testing.T) {
 				Priority:          pointerOf(JobDefaultPriority),
 				NodePool:          pointerOf(""),
 				AllAtOnce:         pointerOf(false),
-				ConsulToken:       pointerOf(""),
 				ConsulNamespace:   pointerOf(""),
-				VaultToken:        pointerOf(""),
 				VaultNamespace:    pointerOf(""),
 				NomadTokenID:      pointerOf(""),
 				Stop:              pointerOf(false),

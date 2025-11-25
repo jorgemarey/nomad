@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	metrics "github.com/armon/go-metrics"
 	log "github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/go-version"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/uuid"
@@ -181,7 +181,7 @@ func (w *Worker) Resume() {
 	}
 }
 
-// Resume transitions a worker to the stopping state. Check
+// Stop transitions a worker to the stopping state. Check
 // to see if the worker stopped by calling IsStopped()
 func (w *Worker) Stop() {
 	w.setStatus(WorkerStopping)
@@ -249,7 +249,7 @@ func (w *Worker) setWorkerStatusLocked(newStatus WorkerStatus) {
 	w.status = newStatus
 }
 
-// GetStatus returns the status of the Worker's Workload.
+// GetWorkloadStatus returns the status of the Worker's Workload.
 func (w *Worker) GetWorkloadStatus() SchedulerWorkerStatus {
 	w.statusLock.RLock()
 	defer w.statusLock.RUnlock()
@@ -577,7 +577,7 @@ type ErrMinIndexDeadlineExceeded struct {
 	timeout   time.Duration
 }
 
-// Unwrapping an ErrMinIndexDeadlineExceeded always return
+// Unwrap an ErrMinIndexDeadlineExceeded that always returns
 // context.DeadlineExceeded
 func (ErrMinIndexDeadlineExceeded) Unwrap() error {
 	return context.DeadlineExceeded

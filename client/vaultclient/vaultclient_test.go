@@ -9,9 +9,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"text/template"
 	"time"
@@ -211,7 +211,7 @@ func TestVaultClient_DeriveTokenWithJWT(t *testing.T) {
 	v.Config.ConnectionRetryIntv = 100 * time.Millisecond
 	v.Config.JWTAuthBackendPath = jwtAuthMountPathTest
 
-	c, err := NewVaultClient(v.Config, logger, nil)
+	c, err := NewVaultClient(v.Config, logger)
 	must.NoError(t, err)
 
 	c.Start()
@@ -219,13 +219,14 @@ func TestVaultClient_DeriveTokenWithJWT(t *testing.T) {
 
 	// Derive Vault token using signed JWT.
 	jwtStr := signedWIDs[0].JWT
-	token, renewable, err := c.DeriveTokenWithJWT(context.Background(), JWTLoginRequest{
+	token, renewable, leaseDuration, err := c.DeriveTokenWithJWT(context.Background(), JWTLoginRequest{
 		JWT:       jwtStr,
 		Namespace: "default",
 	})
 	must.NoError(t, err)
 	must.NotEq(t, "", token)
 	must.True(t, renewable)
+	must.Eq(t, 72*60*60, leaseDuration) // token_period from role
 
 	// Verify token has expected properties.
 	v.Client.SetToken(token)
@@ -260,7 +261,7 @@ func TestVaultClient_DeriveTokenWithJWT(t *testing.T) {
 	must.Eq(t, []any{"deny"}, (s.Data[pathDenied]).([]any))
 
 	// Derive Vault token with non-existing role.
-	token, _, err = c.DeriveTokenWithJWT(context.Background(), JWTLoginRequest{
+	token, _, _, err = c.DeriveTokenWithJWT(context.Background(), JWTLoginRequest{
 		JWT:       jwtStr,
 		Role:      "test",
 		Namespace: "default",
@@ -268,94 +269,9 @@ func TestVaultClient_DeriveTokenWithJWT(t *testing.T) {
 	must.ErrorContains(t, err, `role "test" could not be found`)
 }
 
-func TestVaultClient_TokenRenewals(t *testing.T) {
-	ci.Parallel(t)
-
-	v := testutil.NewTestVault(t)
-	defer v.Stop()
-
-	logger := testlog.HCLogger(t)
-	v.Config.ConnectionRetryIntv = 100 * time.Millisecond
-	v.Config.TaskTokenTTL = "4s"
-	c, err := NewVaultClient(v.Config, logger, nil)
-	if err != nil {
-		t.Fatalf("failed to build vault Vault: %v", err)
-	}
-
-	c.Start()
-	defer c.Stop()
-
-	// Sleep a little while to ensure that the renewal loop is active
-	time.Sleep(time.Duration(testutil.TestMultiplier()) * time.Second)
-
-	tcr := &vaultapi.TokenCreateRequest{
-		Policies:    []string{"foo", "bar"},
-		TTL:         "2s",
-		DisplayName: "derived-for-task",
-		Renewable:   new(bool),
-	}
-	*tcr.Renewable = true
-
-	num := 5
-	tokens := make([]string, num)
-	for i := 0; i < num; i++ {
-		c.client.SetToken(v.Config.Token)
-
-		if err := c.client.SetAddress(v.Config.Addr); err != nil {
-			t.Fatal(err)
-		}
-
-		secret, err := c.client.Auth().Token().Create(tcr)
-		if err != nil {
-			t.Fatalf("failed to create vault token: %v", err)
-		}
-
-		if secret == nil || secret.Auth == nil || secret.Auth.ClientToken == "" {
-			t.Fatal("failed to derive a wrapped vault token")
-		}
-
-		tokens[i] = secret.Auth.ClientToken
-
-		errCh, err := c.RenewToken(tokens[i], secret.Auth.LeaseDuration)
-		if err != nil {
-			t.Fatalf("Unexpected error: %v", err)
-		}
-
-		go func(errCh <-chan error) {
-			for {
-				select {
-				case err := <-errCh:
-					must.NoError(t, err, must.Sprintf("unexpected error while renewing vault token"))
-				}
-			}
-		}(errCh)
-	}
-
-	c.lock.Lock()
-	length := c.heap.Length()
-	c.lock.Unlock()
-	if length != num {
-		t.Fatalf("bad: Heap length: expected: %d, actual: %d", num, length)
-	}
-
-	time.Sleep(time.Duration(testutil.TestMultiplier()) * time.Second)
-
-	for i := 0; i < num; i++ {
-		if err := c.StopRenewToken(tokens[i]); err != nil {
-			must.NoError(t, err)
-		}
-	}
-
-	c.lock.Lock()
-	length = c.heap.Length()
-	c.lock.Unlock()
-	if length != 0 {
-		t.Fatalf("bad: Heap length: expected: 0, actual: %d", length)
-	}
-}
-
-// TestVaultClient_NamespaceSupport tests that the Vault namespace Config, if present, will result in the
-// namespace header being set on the created Vault Vault.
+// TestVaultClient_NamespaceSupport tests that the Vault namespace Config, if
+// present, will result in the namespace header being set on the created Vault
+// client.
 func TestVaultClient_NamespaceSupport(t *testing.T) {
 	ci.Parallel(t)
 
@@ -366,9 +282,8 @@ func TestVaultClient_NamespaceSupport(t *testing.T) {
 
 	conf := structsc.DefaultVaultConfig()
 	conf.Enabled = &tr
-	conf.Token = "testvaulttoken"
 	conf.Namespace = testNs
-	c, err := NewVaultClient(conf, logger, nil)
+	c, err := NewVaultClient(conf, logger)
 	must.NoError(t, err)
 	must.Eq(t, testNs, c.client.Headers().Get(structs.VaultNamespaceHeaderName))
 }
@@ -379,11 +294,9 @@ func TestVaultClient_Heap(t *testing.T) {
 	tr := true
 	conf := structsc.DefaultVaultConfig()
 	conf.Enabled = &tr
-	conf.Token = "testvaulttoken"
-	conf.TaskTokenTTL = "10s"
 
 	logger := testlog.HCLogger(t)
-	c, err := NewVaultClient(conf, logger, nil)
+	c, err := NewVaultClient(conf, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,91 +393,6 @@ func TestVaultClient_Heap(t *testing.T) {
 
 }
 
-func TestVaultClient_RenewNonRenewableLease(t *testing.T) {
-	ci.Parallel(t)
-
-	v := testutil.NewTestVault(t)
-	defer v.Stop()
-
-	logger := testlog.HCLogger(t)
-	v.Config.ConnectionRetryIntv = 100 * time.Millisecond
-	v.Config.TaskTokenTTL = "4s"
-	c, err := NewVaultClient(v.Config, logger, nil)
-	if err != nil {
-		t.Fatalf("failed to build vault Vault: %v", err)
-	}
-
-	c.Start()
-	defer c.Stop()
-
-	// Sleep a little while to ensure that the renewal loop is active
-	time.Sleep(time.Duration(testutil.TestMultiplier()) * time.Second)
-
-	tcr := &vaultapi.TokenCreateRequest{
-		Policies:    []string{"foo", "bar"},
-		TTL:         "2s",
-		DisplayName: "derived-for-task",
-		Renewable:   new(bool),
-	}
-
-	c.client.SetToken(v.Config.Token)
-
-	if err := c.client.SetAddress(v.Config.Addr); err != nil {
-		t.Fatal(err)
-	}
-
-	secret, err := c.client.Auth().Token().Create(tcr)
-	if err != nil {
-		t.Fatalf("failed to create vault token: %v", err)
-	}
-
-	if secret == nil || secret.Auth == nil || secret.Auth.ClientToken == "" {
-		t.Fatal("failed to derive a wrapped vault token")
-	}
-
-	_, err = c.RenewToken(secret.Auth.ClientToken, secret.Auth.LeaseDuration)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	} else if !strings.Contains(err.Error(), "lease is not renewable") {
-		t.Fatalf("expected \"%s\" in error message, got \"%v\"", "lease is not renewable", err)
-	}
-}
-
-func TestVaultClient_RenewNonexistentLease(t *testing.T) {
-	ci.Parallel(t)
-
-	v := testutil.NewTestVault(t)
-	defer v.Stop()
-
-	logger := testlog.HCLogger(t)
-	v.Config.ConnectionRetryIntv = 100 * time.Millisecond
-	v.Config.TaskTokenTTL = "4s"
-	c, err := NewVaultClient(v.Config, logger, nil)
-	if err != nil {
-		t.Fatalf("failed to build vault Vault: %v", err)
-	}
-
-	c.Start()
-	defer c.Stop()
-
-	// Sleep a little while to ensure that the renewal loop is active
-	time.Sleep(time.Duration(testutil.TestMultiplier()) * time.Second)
-
-	c.client.SetToken(v.Config.Token)
-
-	if err := c.client.SetAddress(v.Config.Addr); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = c.RenewToken(c.client.Token(), 10)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-		// The Vault error message changed between 0.10.2 and 1.0.1
-	} else if !strings.Contains(err.Error(), "lease not found") && !strings.Contains(err.Error(), "lease is not renewable") {
-		t.Fatalf("expected \"%s\" or \"%s\" in error message, got \"%v\"", "lease not found", "lease is not renewable", err.Error())
-	}
-}
-
 // TestVaultClient_RenewalTime_Long asserts that for leases over 1m the renewal
 // time is jittered.
 func TestVaultClient_RenewalTime_Long(t *testing.T) {
@@ -612,7 +440,7 @@ func TestVaultClient_SetUserAgent(t *testing.T) {
 	conf := structsc.DefaultVaultConfig()
 	conf.Enabled = pointer.Of(true)
 	logger := testlog.HCLogger(t)
-	c, err := NewVaultClient(conf, logger, nil)
+	c, err := NewVaultClient(conf, logger)
 	must.NoError(t, err)
 
 	ua := c.client.Headers().Get("User-Agent")
@@ -622,8 +450,14 @@ func TestVaultClient_SetUserAgent(t *testing.T) {
 func TestVaultClient_RenewalConcurrent(t *testing.T) {
 	ci.Parallel(t)
 
+	// collects renewal requests that the mock Vault API gets
+	requestCh := make(chan string, 10)
+
 	// Create test server to mock the Vault API.
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		requestCh <- string(b)
+
 		resp := vaultapi.Secret{
 			RequestID: uuid.Generate(),
 			LeaseID:   uuid.Generate(),
@@ -632,7 +466,7 @@ func TestVaultClient_RenewalConcurrent(t *testing.T) {
 			Auth: &vaultapi.SecretAuth{
 				ClientToken:   uuid.Generate(),
 				Accessor:      uuid.Generate(),
-				LeaseDuration: 300,
+				LeaseDuration: 1, // force a fast renewal
 			},
 		}
 
@@ -651,14 +485,14 @@ func TestVaultClient_RenewalConcurrent(t *testing.T) {
 	conf.Addr = ts.URL
 	conf.Enabled = pointer.Of(true)
 
-	vc, err := NewVaultClient(conf, testlog.HCLogger(t), nil)
+	vc, err := NewVaultClient(conf, testlog.HCLogger(t))
 	must.NoError(t, err)
 	vc.Start()
 
 	// Renew token multiple times in parallel.
-	requests := 100
+	expectedRenewals := 100
 	resultCh := make(chan any)
-	for i := 0; i < requests; i++ {
+	for range expectedRenewals {
 		go func() {
 			_, err := vc.RenewToken("token", 30)
 			resultCh <- err
@@ -668,12 +502,28 @@ func TestVaultClient_RenewalConcurrent(t *testing.T) {
 	// Collect results with timeout.
 	timer, stop := helper.NewSafeTimer(3 * time.Second)
 	defer stop()
-	for i := 0; i < requests; i++ {
+
+	sawInitial := 0
+	sawRenew := 0
+	for {
 		select {
+		case got := <-requestCh:
+			switch got {
+			case `{"increment":1}`:
+				sawRenew++
+			case `{"increment":30}`:
+				sawInitial++
+			default:
+				t.Fatalf("unexpected request body: %q", got)
+			}
+			if sawInitial == expectedRenewals && sawRenew >= expectedRenewals {
+				return
+			}
 		case got := <-resultCh:
 			must.Nil(t, got, must.Sprintf("token renewal error: %v", got))
 		case <-timer.C:
-			t.Fatal("timeout waiting for token renewal")
+			t.Fatalf("timeout waiting for expected token renewals (initial: %d renewed: %d)",
+				sawInitial, sawRenew)
 		}
 	}
 }
@@ -694,11 +544,11 @@ func TestVaultClient_NamespaceReset(t *testing.T) {
 	for _, ns := range []string{"", "foo"} {
 		conf.Namespace = ns
 
-		vc, err := NewVaultClient(conf, testlog.HCLogger(t), nil)
+		vc, err := NewVaultClient(conf, testlog.HCLogger(t))
 		must.NoError(t, err)
 		vc.Start()
 
-		_, _, err = vc.DeriveTokenWithJWT(context.Background(), JWTLoginRequest{
+		_, _, _, err = vc.DeriveTokenWithJWT(context.Background(), JWTLoginRequest{
 			JWT:       "bogus",
 			Namespace: "bar",
 		})

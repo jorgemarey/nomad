@@ -262,34 +262,6 @@ func (tg *TaskGroup) Diff(other *TaskGroup, contextual bool) (*TaskGroupDiff, er
 		}
 	}
 
-	// StopAfterClientDisconnect diff
-	if oldPrimitiveFlat != nil && newPrimitiveFlat != nil {
-		if tg.StopAfterClientDisconnect == nil {
-			oldPrimitiveFlat["StopAfterClientDisconnect"] = ""
-		} else {
-			oldPrimitiveFlat["StopAfterClientDisconnect"] = fmt.Sprintf("%d", *tg.StopAfterClientDisconnect)
-		}
-		if other.StopAfterClientDisconnect == nil {
-			newPrimitiveFlat["StopAfterClientDisconnect"] = ""
-		} else {
-			newPrimitiveFlat["StopAfterClientDisconnect"] = fmt.Sprintf("%d", *other.StopAfterClientDisconnect)
-		}
-	}
-
-	// MaxClientDisconnect diff
-	if oldPrimitiveFlat != nil && newPrimitiveFlat != nil {
-		if tg.MaxClientDisconnect == nil {
-			oldPrimitiveFlat["MaxClientDisconnect"] = ""
-		} else {
-			oldPrimitiveFlat["MaxClientDisconnect"] = fmt.Sprintf("%d", *tg.MaxClientDisconnect)
-		}
-		if other.MaxClientDisconnect == nil {
-			newPrimitiveFlat["MaxClientDisconnect"] = ""
-		} else {
-			newPrimitiveFlat["MaxClientDisconnect"] = fmt.Sprintf("%d", *other.MaxClientDisconnect)
-		}
-	}
-
 	// Diff the primitive fields.
 	diff.Fields = fieldDiffs(oldPrimitiveFlat, newPrimitiveFlat, false)
 
@@ -319,6 +291,12 @@ func (tg *TaskGroup) Diff(other *TaskGroup, contextual bool) (*TaskGroupDiff, er
 	rDiff := primitiveObjectDiff(tg.RestartPolicy, other.RestartPolicy, nil, "RestartPolicy", contextual)
 	if rDiff != nil {
 		diff.Objects = append(diff.Objects, rDiff)
+	}
+
+	// Migrate block diff.
+	migrateDiff := primitiveObjectDiff(tg.Migrate, other.Migrate, nil, "Migrate", contextual)
+	if migrateDiff != nil {
+		diff.Objects = append(diff.Objects, migrateDiff)
 	}
 
 	// Reschedule policy diff
@@ -1731,6 +1709,11 @@ func sidecarTaskDiff(old, new *SidecarTask, contextual bool) *ObjectDiff {
 		diff.Objects = append(diff.Objects, lDiff)
 	}
 
+	// volume_mount diff
+	if vDiffs := volumeMountsDiffs(old.VolumeMounts, new.VolumeMounts, contextual); vDiffs != nil {
+		diff.Objects = append(diff.Objects, vDiffs...)
+	}
+
 	return diff
 }
 
@@ -1976,11 +1959,9 @@ func vaultDiff(old, new *Vault, contextual bool) *ObjectDiff {
 	if reflect.DeepEqual(old, new) {
 		return nil
 	} else if old == nil {
-		old = &Vault{}
 		diff.Type = DiffTypeAdded
 		newPrimitiveFlat = flatmap.Flatten(new, nil, true)
 	} else if new == nil {
-		new = &Vault{}
 		diff.Type = DiffTypeDeleted
 		oldPrimitiveFlat = flatmap.Flatten(old, nil, true)
 	} else {
@@ -1991,11 +1972,6 @@ func vaultDiff(old, new *Vault, contextual bool) *ObjectDiff {
 
 	// Diff the primitive fields.
 	diff.Fields = fieldDiffs(oldPrimitiveFlat, newPrimitiveFlat, contextual)
-
-	// Policies diffs
-	if setDiff := stringSetDiff(old.Policies, new.Policies, "Policies", contextual); setDiff != nil {
-		diff.Objects = append(diff.Objects, setDiff)
-	}
 
 	return diff
 }
@@ -2851,23 +2827,23 @@ func portDiffs(old, new []Port, dynamic bool, contextual bool) []*ObjectDiff {
 
 }
 
-func (r *NUMA) Diff(other *NUMA, contextual bool) *ObjectDiff {
-	if r.Equal(other) {
+func (n *NUMA) Diff(other *NUMA, contextual bool) *ObjectDiff {
+	if n.Equal(other) {
 		return nil
 	}
 
 	diff := &ObjectDiff{Type: DiffTypeNone, Name: "NUMA"}
 	var oldPrimitiveFlat, newPrimitiveFlat map[string]string
 
-	if r == nil {
+	if n == nil {
 		diff.Type = DiffTypeAdded
 		newPrimitiveFlat = flatmap.Flatten(other, nil, true)
 	} else if other == nil {
 		diff.Type = DiffTypeDeleted
-		oldPrimitiveFlat = flatmap.Flatten(r, nil, true)
+		oldPrimitiveFlat = flatmap.Flatten(n, nil, true)
 	} else {
 		diff.Type = DiffTypeEdited
-		oldPrimitiveFlat = flatmap.Flatten(r, nil, true)
+		oldPrimitiveFlat = flatmap.Flatten(n, nil, true)
 		newPrimitiveFlat = flatmap.Flatten(other, nil, true)
 	}
 	diff.Fields = fieldDiffs(oldPrimitiveFlat, newPrimitiveFlat, contextual)

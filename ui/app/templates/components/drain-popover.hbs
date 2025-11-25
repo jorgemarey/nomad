@@ -37,7 +37,7 @@
           class="tooltip multiline"
           aria-label="The amount of time a drain must complete within."
         >
-          {{x-icon "info-circle-outline" class="is-faded"}}
+          <Hds::Icon @name="info" @color="faint" @isInline={{true}} />
         </span>
       </label>
     </div>
@@ -48,6 +48,8 @@
       >
         <PowerSelect
           data-test-drain-deadline-option-select
+          @ariaLabel="label-drain-deadline-option-select"
+          @ariaLabelledBy="label-drain-deadline-option-select"
           @tagName="div"
           @options={{this.durationQuickOptions}}
           @selected={{this.selectedDurationQuickOption}}
@@ -92,7 +94,7 @@
           class="tooltip multiline"
           aria-label="Immediately remove allocations from the client."
         >
-          {{x-icon "info-circle-outline" class="is-faded"}}
+          <Hds::Icon @name="info" @color="faint" @isInline={{true}} />
         </span>
       </label>
     </div>
@@ -109,7 +111,7 @@
           class="tooltip multiline"
           aria-label="Stop allocations for system jobs."
         >
-          {{x-icon "info-circle-outline" class="is-faded"}}
+          <Hds::Icon @name="info" @color="faint" @isInline={{true}} />
         </span>
       </label>
     </div>

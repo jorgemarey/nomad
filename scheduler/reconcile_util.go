@@ -37,6 +37,9 @@ type placementResult interface {
 	// PreviousAllocation returns the previous allocation
 	PreviousAllocation() *structs.Allocation
 
+	// SetPreviousAllocation updates the reference to the previous allocation
+	SetPreviousAllocation(*structs.Allocation)
+
 	// IsRescheduling returns whether the placement was rescheduling a failed allocation
 	IsRescheduling() bool
 
@@ -80,11 +83,14 @@ func (a allocPlaceResult) TaskGroup() *structs.TaskGroup           { return a.ta
 func (a allocPlaceResult) Name() string                            { return a.name }
 func (a allocPlaceResult) Canary() bool                            { return a.canary }
 func (a allocPlaceResult) PreviousAllocation() *structs.Allocation { return a.previousAlloc }
-func (a allocPlaceResult) IsRescheduling() bool                    { return a.reschedule }
-func (a allocPlaceResult) StopPreviousAlloc() (bool, string)       { return false, "" }
-func (a allocPlaceResult) DowngradeNonCanary() bool                { return a.downgradeNonCanary }
-func (a allocPlaceResult) MinJobVersion() uint64                   { return a.minJobVersion }
-func (a allocPlaceResult) PreviousLost() bool                      { return a.lost }
+func (a allocPlaceResult) SetPreviousAllocation(alloc *structs.Allocation) {
+	a.previousAlloc = alloc
+}
+func (a allocPlaceResult) IsRescheduling() bool              { return a.reschedule }
+func (a allocPlaceResult) StopPreviousAlloc() (bool, string) { return false, "" }
+func (a allocPlaceResult) DowngradeNonCanary() bool          { return a.downgradeNonCanary }
+func (a allocPlaceResult) MinJobVersion() uint64             { return a.minJobVersion }
+func (a allocPlaceResult) PreviousLost() bool                { return a.lost }
 
 // allocDestructiveResult contains the information required to do a destructive
 // update. Destructive changes should be applied atomically, as in the old alloc
@@ -96,11 +102,12 @@ type allocDestructiveResult struct {
 	stopStatusDescription string
 }
 
-func (a allocDestructiveResult) TaskGroup() *structs.TaskGroup           { return a.placeTaskGroup }
-func (a allocDestructiveResult) Name() string                            { return a.placeName }
-func (a allocDestructiveResult) Canary() bool                            { return false }
-func (a allocDestructiveResult) PreviousAllocation() *structs.Allocation { return a.stopAlloc }
-func (a allocDestructiveResult) IsRescheduling() bool                    { return false }
+func (a allocDestructiveResult) TaskGroup() *structs.TaskGroup                   { return a.placeTaskGroup }
+func (a allocDestructiveResult) Name() string                                    { return a.placeName }
+func (a allocDestructiveResult) Canary() bool                                    { return false }
+func (a allocDestructiveResult) PreviousAllocation() *structs.Allocation         { return a.stopAlloc }
+func (a allocDestructiveResult) SetPreviousAllocation(alloc *structs.Allocation) {} // NOOP
+func (a allocDestructiveResult) IsRescheduling() bool                            { return false }
 func (a allocDestructiveResult) StopPreviousAlloc() (bool, string) {
 	return true, a.stopStatusDescription
 }
@@ -277,7 +284,7 @@ func (a allocSet) filterByTainted(taintedNodes map[string]*structs.Node, serverS
 				}
 
 			} else {
-				if alloc.PreventRescheduleOnDisconnect() {
+				if alloc.PreventReplaceOnDisconnect() {
 					if alloc.ClientStatus == structs.AllocClientStatusRunning {
 						disconnecting[alloc.ID] = alloc
 						continue
@@ -297,6 +304,14 @@ func (a allocSet) filterByTainted(taintedNodes map[string]*structs.Node, serverS
 			// are probably stopped replacements and should be ignored
 			if supportsDisconnectedClients && alloc.ServerTerminalStatus() {
 				ignore[alloc.ID] = alloc
+				continue
+			}
+
+			// Terminal canaries that have been marked for migration need to be
+			// migrated, otherwise we block deployments from progressing by
+			// counting them as running canaries.
+			if alloc.DeploymentStatus.IsCanary() && alloc.DesiredTransition.ShouldMigrate() {
+				migrate[alloc.ID] = alloc
 				continue
 			}
 
@@ -364,7 +379,7 @@ func (a allocSet) filterByTainted(taintedNodes map[string]*structs.Node, serverS
 		// Allocs on terminal nodes that can't be rescheduled need to be treated
 		// differently than those that can.
 		if taintedNode.TerminalStatus() {
-			if alloc.PreventRescheduleOnDisconnect() {
+			if alloc.PreventReplaceOnDisconnect() {
 				if alloc.ClientStatus == structs.AllocClientStatusUnknown {
 					untainted[alloc.ID] = alloc
 					continue
@@ -562,9 +577,9 @@ func (a allocSet) filterByDeployment(id string) (match, nonmatch allocSet) {
 	return
 }
 
-// delayByStopAfterClientDisconnect returns a delay for any lost allocation that's got a
+// delayByStopAfter returns a delay for any lost allocation that's got a
 // disconnect.stop_on_client_after configured
-func (a allocSet) delayByStopAfterClientDisconnect() (later []*delayedRescheduleInfo) {
+func (a allocSet) delayByStopAfter() (later []*delayedRescheduleInfo) {
 	now := time.Now().UTC()
 	for _, a := range a {
 		if !a.ShouldClientStop() {
@@ -584,9 +599,9 @@ func (a allocSet) delayByStopAfterClientDisconnect() (later []*delayedReschedule
 	return later
 }
 
-// delayByMaxClientDisconnect returns a delay for any unknown allocation
-// that's got a max_client_reconnect configured
-func (a allocSet) delayByMaxClientDisconnect(now time.Time) ([]*delayedRescheduleInfo, error) {
+// delayByLostAfter returns a delay for any unknown allocation
+// that has disconnect.lost_after configured
+func (a allocSet) delayByLostAfter(now time.Time) ([]*delayedRescheduleInfo, error) {
 	var later []*delayedRescheduleInfo
 
 	for _, alloc := range a {

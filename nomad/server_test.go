@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,6 @@ import (
 	msgpackrpc "github.com/hashicorp/net-rpc-msgpackrpc/v2"
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper/testlog"
-	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
@@ -202,36 +202,6 @@ func TestServer_Regions(t *testing.T) {
 	})
 }
 
-func TestServer_Reload_Vault(t *testing.T) {
-	ci.Parallel(t)
-
-	token := uuid.Generate()
-	s1, cleanupS1 := TestServer(t, func(c *Config) {
-		c.Region = "global"
-		c.GetDefaultVault().Token = token
-	})
-	defer cleanupS1()
-
-	must.False(t, s1.vault.Running())
-
-	tr := true
-	config := DefaultConfig()
-	config.GetDefaultVault().Enabled = &tr
-	config.GetDefaultVault().Token = token
-	config.GetDefaultVault().Namespace = "nondefault"
-
-	err := s1.Reload(config)
-	must.NoError(t, err)
-
-	must.True(t, s1.vault.Running())
-	must.Eq(t, "nondefault", s1.vault.GetConfig().Namespace)
-
-	// Removing the token requires agent restart.
-	config.GetDefaultVault().Token = ""
-	err = s1.Reload(config)
-	must.ErrorContains(t, err, "requires restarting the Nomad agent")
-}
-
 func connectionReset(msg string) bool {
 	return strings.Contains(msg, "EOF") || strings.Contains(msg, "connection reset by peer")
 }
@@ -240,7 +210,6 @@ func connectionReset(msg string) bool {
 // upgrading from plaintext to TLS if the server's TLS configuration changes.
 func TestServer_Reload_TLSConnections_PlaintextToTLS(t *testing.T) {
 	ci.Parallel(t)
-	assert := assert.New(t)
 
 	const (
 		cafile  = "../helper/tlsutil/testdata/nomad-agent-ca.pem"
@@ -250,12 +219,20 @@ func TestServer_Reload_TLSConnections_PlaintextToTLS(t *testing.T) {
 	dir := t.TempDir()
 
 	s1, cleanupS1 := TestServer(t, func(c *Config) {
+		c.Region = "regionFoo"
 		c.DataDir = path.Join(dir, "nodeA")
 	})
 	defer cleanupS1()
 
+	originalRPCCodec := rpcClient(t, s1)
+
+	// Upsert a node into state, so we can use the Node.GetClientAllocs RPC
+	// to test the TLS connection.
+	mockNode := mock.Node()
+	must.NoError(t, s1.State().UpsertNode(structs.MsgTypeTestSetup, 10, mockNode))
+
 	// assert that the server started in plaintext mode
-	assert.Equal(s1.config.TLSConfig.CertFile, "")
+	must.Eq(t, s1.config.TLSConfig.CertFile, "")
 
 	newTLSConfig := &config.TLSConfig{
 		EnableHTTP:           true,
@@ -266,29 +243,48 @@ func TestServer_Reload_TLSConnections_PlaintextToTLS(t *testing.T) {
 		KeyFile:              fookey,
 	}
 
-	err := s1.reloadTLSConnections(newTLSConfig)
-	assert.Nil(err)
-	assert.True(s1.config.TLSConfig.CertificateInfoIsEqual(newTLSConfig))
+	must.NoError(t, s1.reloadTLSConnections(newTLSConfig))
+
+	certEq, err := s1.config.TLSConfig.CertificateInfoIsEqual(newTLSConfig)
+	must.NoError(t, err)
+	must.True(t, certEq)
 
 	codec := rpcClient(t, s1)
+	tlsCodec := rpcClientWithTLS(t, s1, newTLSConfig)
 
-	node := mock.Node()
-	req := &structs.NodeRegisterRequest{
-		Node:         node,
-		WriteRequest: structs.WriteRequest{Region: "global"},
+	req := &structs.NodeSpecificRequest{
+		NodeID:   mockNode.ID,
+		SecretID: mockNode.SecretID,
+		QueryOptions: structs.QueryOptions{
+			Region:    "regionFoo",
+			AuthToken: mockNode.SecretID,
+		},
 	}
 
-	var resp structs.GenericResponse
-	err = msgpackrpc.CallWithCodec(codec, "Node.Register", req, &resp)
-	assert.NotNil(err)
-	assert.True(connectionReset(err.Error()))
+	var resp structs.NodeClientAllocsResponse
+
+	// Perform a request using the original codec. This should fail with a
+	// permission denied error, as the server has now switched to TLS and is
+	// performing TLS verification.
+	err = msgpackrpc.CallWithCodec(originalRPCCodec, "Node.GetClientAllocs", req, &resp)
+	must.ErrorContains(t, err, "Permission denied")
+
+	// Perform a request using a non-TLS codec. This should fail with a
+	// connection reset error, as the server has now switched to TLS.
+	err = msgpackrpc.CallWithCodec(codec, "Node.GetClientAllocs", req, &resp)
+	must.Error(t, err)
+	must.True(t, connectionReset(err.Error()))
+
+	// Perform a request using the new TLS codec. This should succeed, as the
+	// server is now configured to accept and verify TLS connections.
+	err = msgpackrpc.CallWithCodec(tlsCodec, "Node.GetClientAllocs", req, &resp)
+	must.NoError(t, err)
 }
 
 // Tests that the server will successfully reload its network connections,
 // downgrading from TLS to plaintext if the server's TLS configuration changes.
 func TestServer_Reload_TLSConnections_TLSToPlaintext_RPC(t *testing.T) {
 	ci.Parallel(t)
-	assert := assert.New(t)
 
 	const (
 		cafile  = "../helper/tlsutil/testdata/nomad-agent-ca.pem"
@@ -298,36 +294,59 @@ func TestServer_Reload_TLSConnections_TLSToPlaintext_RPC(t *testing.T) {
 
 	dir := t.TempDir()
 
+	tlsConfig := config.TLSConfig{
+		EnableHTTP:           true,
+		EnableRPC:            true,
+		VerifyServerHostname: true,
+		CAFile:               cafile,
+		CertFile:             foocert,
+		KeyFile:              fookey,
+	}
+
 	s1, cleanupS1 := TestServer(t, func(c *Config) {
 		c.DataDir = path.Join(dir, "nodeB")
-		c.TLSConfig = &config.TLSConfig{
-			EnableHTTP:           true,
-			EnableRPC:            true,
-			VerifyServerHostname: true,
-			CAFile:               cafile,
-			CertFile:             foocert,
-			KeyFile:              fookey,
-		}
+		c.TLSConfig = &tlsConfig
 	})
 	defer cleanupS1()
 
+	originalRPCTLSCodec := rpcClientWithTLS(t, s1, &tlsConfig)
+
+	// Upsert a node into state, so we can use the Node.GetClientAllocs RPC
+	// to test the TLS connection.
+	mockNode := mock.Node()
+	must.NoError(t, s1.State().UpsertNode(structs.MsgTypeTestSetup, 10, mockNode))
+
 	newTLSConfig := &config.TLSConfig{}
 
-	err := s1.reloadTLSConnections(newTLSConfig)
-	assert.Nil(err)
-	assert.True(s1.config.TLSConfig.CertificateInfoIsEqual(newTLSConfig))
+	must.NoError(t, s1.reloadTLSConnections(newTLSConfig))
+
+	certEq, err := s1.config.TLSConfig.CertificateInfoIsEqual(newTLSConfig)
+	must.NoError(t, err)
+	must.True(t, certEq)
 
 	codec := rpcClient(t, s1)
 
-	node := mock.Node()
-	req := &structs.NodeRegisterRequest{
-		Node:         node,
-		WriteRequest: structs.WriteRequest{Region: "global"},
+	req := &structs.NodeSpecificRequest{
+		NodeID:   mockNode.ID,
+		SecretID: mockNode.SecretID,
+		QueryOptions: structs.QueryOptions{
+			Region:    "global",
+			AuthToken: mockNode.SecretID,
+		},
 	}
 
-	var resp structs.GenericResponse
-	err = msgpackrpc.CallWithCodec(codec, "Node.Register", req, &resp)
-	assert.Nil(err)
+	var resp structs.NodeClientAllocsResponse
+
+	// Perform a request using the original TLS codec. This should fail as the
+	// server has now switched to plaintext but the exact error is racey.
+	err = msgpackrpc.CallWithCodec(originalRPCTLSCodec, "Node.GetClientAllocs", req, &resp)
+	must.Error(t, err)
+	must.True(t, connectionReset(err.Error()) || strings.Contains(err.Error(), "bad certificate"))
+
+	// Perform a request using a non-TLS codec. This should succeed, as the
+	// server is now configured to accept plaintext connections.
+	err = msgpackrpc.CallWithCodec(codec, "Node.GetClientAllocs", req, &resp)
+	must.NoError(t, err)
 }
 
 // Tests that the server will successfully reload its network connections,
@@ -597,14 +616,14 @@ func TestServer_ReloadSchedulers_NumSchedulers(t *testing.T) {
 	ci.Parallel(t)
 
 	s1, cleanupS1 := TestServer(t, func(c *Config) {
-		c.NumSchedulers = 8
+		c.NumSchedulers = runtime.NumCPU()
 	})
 	defer cleanupS1()
 
 	require.Equal(t, s1.config.NumSchedulers, len(s1.workers))
 
 	config := DefaultConfig()
-	config.NumSchedulers = 4
+	config.NumSchedulers = runtime.NumCPU() / 2
 	require.NoError(t, s1.Reload(config))
 
 	time.Sleep(1 * time.Second)

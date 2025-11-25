@@ -28,7 +28,6 @@ import (
 	"github.com/hashicorp/nomad/plugins/drivers"
 	dtestutil "github.com/hashicorp/nomad/plugins/drivers/testutils"
 	ntestutil "github.com/hashicorp/nomad/testutil"
-	tu "github.com/hashicorp/nomad/testutil"
 	"github.com/shoenig/test/must"
 )
 
@@ -37,7 +36,6 @@ func TestDockerDriver_User(t *testing.T) {
 	testutil.DockerCompatible(t)
 
 	task, cfg, _ := dockerTask(t)
-
 	task.User = "alice"
 	cfg.Command = "/bin/sleep"
 	cfg.Args = []string{"10000"}
@@ -46,7 +44,7 @@ func TestDockerDriver_User(t *testing.T) {
 	d := dockerDriverHarness(t, nil)
 	cleanup := d.MkAllocDir(task, true)
 	defer cleanup()
-	copyImage(t, task.TaskDir(), "busybox.tar")
+	copyImage(t, task.TaskDir(), fmt.Sprintf("busybox_linux_%s.tar", runtime.GOARCH))
 
 	_, _, err := d.StartTask(task)
 	if err == nil {
@@ -78,7 +76,7 @@ func TestDockerDriver_NetworkAliases_Bridge(t *testing.T) {
 	must.NoError(t, err)
 
 	expected := []string{"foobar"}
-	taskCfg := newTaskConfig("", busyboxLongRunningCmd)
+	taskCfg := newTaskConfig(busyboxLongRunningCmd)
 	taskCfg.NetworkMode = network.Name
 	taskCfg.NetworkAliases = expected
 	task := &drivers.TaskConfig{
@@ -91,7 +89,7 @@ func TestDockerDriver_NetworkAliases_Bridge(t *testing.T) {
 	d := dockerDriverHarness(t, nil)
 	cleanup := d.MkAllocDir(task, true)
 	defer cleanup()
-	copyImage(t, task.TaskDir(), "busybox.tar")
+	copyImage(t, task.TaskDir(), fmt.Sprintf("busybox_linux_%s.tar", runtime.GOARCH))
 
 	_, _, err = d.StartTask(task)
 	must.NoError(t, err)
@@ -114,7 +112,7 @@ func TestDockerDriver_NetworkMode_Host(t *testing.T) {
 	testutil.DockerCompatible(t)
 	expected := "host"
 
-	taskCfg := newTaskConfig("", busyboxLongRunningCmd)
+	taskCfg := newTaskConfig(busyboxLongRunningCmd)
 	taskCfg.NetworkMode = expected
 
 	task := &drivers.TaskConfig{
@@ -127,7 +125,7 @@ func TestDockerDriver_NetworkMode_Host(t *testing.T) {
 	d := dockerDriverHarness(t, nil)
 	cleanup := d.MkAllocDir(task, true)
 	defer cleanup()
-	copyImage(t, task.TaskDir(), "busybox.tar")
+	copyImage(t, task.TaskDir(), fmt.Sprintf("busybox_linux_%s.tar", runtime.GOARCH))
 
 	_, _, err := d.StartTask(task)
 	must.NoError(t, err)
@@ -258,7 +256,7 @@ func TestDockerDriver_Sysctl_Ulimit_Errors(t *testing.T) {
 		d := dockerDriverHarness(t, nil)
 		cleanup := d.MkAllocDir(task, true)
 		t.Cleanup(cleanup)
-		copyImage(t, task.TaskDir(), "busybox.tar")
+		copyImage(t, task.TaskDir(), fmt.Sprintf("busybox_linux_%s.tar", runtime.GOARCH))
 
 		_, _, err := d.StartTask(task)
 		must.ErrorContains(t, err, tc.err.Error())
@@ -673,8 +671,8 @@ func TestDockerDriver_Cleanup(t *testing.T) {
 	testutil.DockerCompatible(t)
 
 	// using a small image and an specific point release to avoid accidental conflicts with other tasks
-	cfg := newTaskConfig("", []string{"sleep", "100"})
-	cfg.Image = ntestutil.TestDockerImage("busybox", "1.29.2")
+	cfg := newTaskConfig([]string{"sleep", "100"})
+	cfg.Image = testRemoteDockerImage("busybox", "1.29.2")
 	cfg.LoadImage = ""
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
@@ -697,7 +695,7 @@ func TestDockerDriver_Cleanup(t *testing.T) {
 	must.NoError(t, driver.DestroyTask(task.ID, true))
 
 	// Ensure image was removed
-	tu.WaitForResult(func() (bool, error) {
+	ntestutil.WaitForResult(func() (bool, error) {
 		if _, _, err := client.ImageInspectWithRaw(context.Background(), cfg.Image); err == nil {
 			return false, fmt.Errorf("image exists but should have been removed. Does another %v container exist?", cfg.Image)
 		}
@@ -742,19 +740,24 @@ func TestDockerDriver_Start_Image_HTTPS(t *testing.T) {
 	harness.DestroyTask(task.ID, true)
 }
 
-func newTaskConfig(variant string, command []string) TaskConfig {
-	// busyboxImageID is the ID stored in busybox.tar
-	busyboxImageID := "busybox:1.29.3"
+// newTaskConfig returns a busybox task config that loads the image from
+// test-resources. You'll need to call copyImage to copy this image into the
+// TaskDir after the task has been defined.
+func newTaskConfig(command []string) TaskConfig {
 
-	image := busyboxImageID
-	loadImage := "busybox.tar"
-	if variant != "" {
-		image = fmt.Sprintf("%s-%s", busyboxImageID, variant)
-		loadImage = fmt.Sprintf("busybox_%s.tar", variant)
+	var busyboxImageID, loadImage string
+
+	switch runtime.GOARCH {
+	case "arm64":
+		busyboxImageID = "busybox:1.37.0"
+		loadImage = "busybox_linux_arm64.tar"
+	default:
+		busyboxImageID = "busybox:1.29.3"
+		loadImage = "busybox_linux_amd64.tar"
 	}
 
 	return TaskConfig{
-		Image:            image,
+		Image:            busyboxImageID,
 		ImagePullTimeout: "5m",
 		LoadImage:        loadImage,
 		Command:          command[0],
@@ -762,6 +765,14 @@ func newTaskConfig(variant string, command []string) TaskConfig {
 	}
 }
 
+// copyImage copies the Docker image in test-resources into the task directory
+// for use with a task configuration with LoadImage (used by most of our tests).
+//
+// Note that if a test loads this image during task start, the local Docker
+// daemon will now have it available for all other tests. Tests don't know if
+// the image already existed before the test run, so we can't delete it from the
+// local Docker daemon without causing side-effects on the host or making this
+// all a lot more complicated.
 func copyImage(t *testing.T, taskDir *allocdir.TaskDir, image string) {
 	dst := filepath.Join(taskDir.LocalDir, image)
 	copyFile(filepath.Join("./test-resources/docker", image), dst, t)
@@ -795,7 +806,7 @@ func TestDocker_ExecTaskStreaming(t *testing.T) {
 	ci.Parallel(t)
 	testutil.DockerCompatible(t)
 
-	taskCfg := newTaskConfig("", []string{"/bin/sleep", "1000"})
+	taskCfg := newTaskConfig([]string{"/bin/sleep", "1000"})
 	task := &drivers.TaskConfig{
 		ID:        uuid.Generate(),
 		Name:      "nc-demo",
@@ -807,7 +818,7 @@ func TestDocker_ExecTaskStreaming(t *testing.T) {
 	harness := dockerDriverHarness(t, nil)
 	cleanup := harness.MkAllocDir(task, true)
 	defer cleanup()
-	copyImage(t, task.TaskDir(), "busybox.tar")
+	copyImage(t, task.TaskDir(), fmt.Sprintf("busybox_linux_%s.tar", runtime.GOARCH))
 
 	_, _, err := harness.StartTask(task)
 	must.NoError(t, err)
@@ -853,7 +864,7 @@ func Test_dnsConfig(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			harness := dockerDriverHarness(t, nil)
 
-			taskCfg := newTaskConfig("", []string{"/bin/sleep", "1000"})
+			taskCfg := newTaskConfig([]string{"/bin/sleep", "1000"})
 			task := &drivers.TaskConfig{
 				ID:        uuid.Generate(),
 				Name:      "nc-demo",

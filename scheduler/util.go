@@ -150,7 +150,7 @@ func taintedNodes(state State, allocs []*structs.Allocation) (map[string]*struct
 		}
 
 		// Disconnected nodes are included in the tainted set so that their
-		// MaxClientDisconnect configuration can be included in the
+		// disconnect.lost_after configuration can be included in the
 		// timeout calculation.
 		if node.Status == structs.NodeStatusDisconnected {
 			out[alloc.NodeID] = node
@@ -230,16 +230,6 @@ func tasksUpdated(jobA, jobB *structs.Job, taskGroup string) comparison {
 
 	// Check that the network resources haven't changed
 	if c := networkUpdated(a.Networks, b.Networks); c.modified {
-		return c
-	}
-
-	// Check Affinities
-	if c := affinitiesUpdated(jobA, jobB, taskGroup); c.modified {
-		return c
-	}
-
-	// Check Spreads
-	if c := spreadsUpdated(jobA, jobB, taskGroup); c.modified {
 		return c
 	}
 
@@ -578,67 +568,6 @@ func networkPortMap(n *structs.NetworkResource) structs.AllocatedPorts {
 		})
 	}
 	return m
-}
-
-func affinitiesUpdated(jobA, jobB *structs.Job, taskGroup string) comparison {
-	var affinitiesA structs.Affinities
-	var affinitiesB structs.Affinities
-
-	// accumulate job affinities
-
-	affinitiesA = append(affinitiesA, jobA.Affinities...)
-	affinitiesB = append(affinitiesB, jobB.Affinities...)
-
-	tgA := jobA.LookupTaskGroup(taskGroup)
-	tgB := jobB.LookupTaskGroup(taskGroup)
-
-	// append group level affinities
-
-	affinitiesA = append(affinitiesA, tgA.Affinities...)
-	affinitiesB = append(affinitiesB, tgB.Affinities...)
-
-	// append task level affinities for A
-
-	for _, task := range tgA.Tasks {
-		affinitiesA = append(affinitiesA, task.Affinities...)
-	}
-
-	// append task level affinities for B
-	for _, task := range tgB.Tasks {
-		affinitiesB = append(affinitiesB, task.Affinities...)
-	}
-
-	// finally check if all the affinities from both jobs match
-	if !affinitiesA.Equal(&affinitiesB) {
-		return difference("affinities", affinitiesA, affinitiesB)
-	}
-
-	return same
-}
-
-func spreadsUpdated(jobA, jobB *structs.Job, taskGroup string) comparison {
-	var spreadsA []*structs.Spread
-	var spreadsB []*structs.Spread
-
-	// accumulate job spreads
-
-	spreadsA = append(spreadsA, jobA.Spreads...)
-	spreadsB = append(spreadsB, jobB.Spreads...)
-
-	tgA := jobA.LookupTaskGroup(taskGroup)
-	tgB := jobB.LookupTaskGroup(taskGroup)
-
-	// append group spreads
-	spreadsA = append(spreadsA, tgA.Spreads...)
-	spreadsB = append(spreadsB, tgB.Spreads...)
-
-	if !slices.EqualFunc(spreadsA, spreadsB, func(a, b *structs.Spread) bool {
-		return a.Equal(b)
-	}) {
-		return difference("spreads", spreadsA, spreadsB)
-	}
-
-	return same
 }
 
 // renderTemplatesUpdated returns the difference in the RestartPolicy's
@@ -1006,17 +935,19 @@ func genericAllocUpdateFn(ctx Context, stack Stack, evalID string) allocUpdateTy
 			return false, true, nil
 		}
 
-		// Restore the network and device offers from the existing allocation.
-		// We do not allow network resources (reserved/dynamic ports)
-		// to be updated. This is guarded in taskUpdated, so we can
+		// Restore the network, device offers, and any reserved cores from the existing allocation.
+		// We do not allow network resources (reserved/dynamic ports) or reserved cores
+		// to be updated, and reserved cores should not be recomputed for alloc updates. This is guarded in taskUpdated, so we can
 		// safely restore those here.
 		for task, resources := range option.TaskResources {
 			var networks structs.Networks
 			var devices []*structs.AllocatedDeviceResource
+			var cores []uint16
 			if existing.AllocatedResources != nil {
 				if tr, ok := existing.AllocatedResources.Tasks[task]; ok {
 					networks = tr.Networks
 					devices = tr.Devices
+					cores = tr.Cpu.ReservedCores
 				}
 			} else if tr, ok := existing.TaskResources[task]; ok {
 				networks = tr.Networks
@@ -1025,6 +956,7 @@ func genericAllocUpdateFn(ctx Context, stack Stack, evalID string) allocUpdateTy
 			// Add the networks back
 			resources.Networks = networks
 			resources.Devices = devices
+			resources.Cpu.ReservedCores = cores
 		}
 
 		// Create a shallow copy

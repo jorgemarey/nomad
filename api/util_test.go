@@ -14,7 +14,7 @@ import (
 func assertQueryMeta(t *testing.T, qm *QueryMeta) {
 	t.Helper()
 
-	must.NotEq(t, 0, qm.LastIndex, must.Sprint("bad index"))
+	must.NotEq(t, 0, qm.LastIndex, must.Sprint("expected QueryMeta.LastIndex to be != 0"))
 	must.True(t, qm.KnownLeader, must.Sprint("expected a known leader but gone none"))
 }
 
@@ -116,7 +116,7 @@ func testQuotaSpec() *QuotaSpec {
 		Limits: []*QuotaLimit{
 			{
 				Region: "global",
-				RegionLimit: &Resources{
+				RegionLimit: &QuotaResources{
 					CPU:      pointerOf(2000),
 					MemoryMB: pointerOf(2000),
 					Devices: []*RequestedDevice{{

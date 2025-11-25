@@ -74,9 +74,6 @@ Usage: nomad setup vault [options]
   migrate to use Workload Identities with Vault. This option requires
   operator:read permission for Nomad.
 
-  WARNING: This command is an experimental feature and may change its behavior
-  in future versions of Nomad.
-
 Setup Vault options:
 
   -jwks-url <url>
@@ -162,7 +159,7 @@ func (s *SetupVaultCommand) Run(args []string) int {
 
 	// Check that we got no arguments.
 	if len(flags.Args()) != 0 {
-		s.Ui.Error("This command takes no arguments")
+		s.Ui.Error(uiMessageNoArguments)
 		s.Ui.Error(commandErrorText(s))
 		return 1
 	}
@@ -565,30 +562,6 @@ func (s *SetupVaultCommand) createNamespace(ns string) error {
 	}
 	s.Ui.Info(fmt.Sprintf("[✔] Created namespace %q.", ns))
 	return nil
-}
-
-// askQuestion asks question to user until they provide a valid response.
-func (s *SetupVaultCommand) askQuestion(question string) bool {
-	for {
-		answer, err := s.Ui.Ask(s.Colorize().Color(fmt.Sprintf("[?] %s", question)))
-		if err != nil {
-			if err.Error() != "interrupted" {
-				s.Ui.Output(err.Error())
-				os.Exit(1)
-			}
-			os.Exit(0)
-		}
-
-		switch strings.TrimSpace(strings.ToLower(answer)) {
-		case "", "y", "yes":
-			return true
-		case "n", "no":
-			return false
-		default:
-			s.Ui.Output(fmt.Sprintf(`%q is not a valid response, please answer "yes" or "no".`, answer))
-			continue
-		}
-	}
 }
 
 func (s *SetupVaultCommand) handleNo() {

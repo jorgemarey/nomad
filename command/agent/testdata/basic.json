@@ -94,6 +94,7 @@
       "gc_interval": "6s",
       "gc_max_allocs": 50,
       "gc_parallel_destroys": 6,
+      "gc_volumes_on_node_gc": true,
       "host_volume": [
         {
           "tmp": [
@@ -363,7 +364,8 @@
       "upgrade_version": "0.8.0",
       "license_path": "/tmp/nomad.hclic",
       "job_default_priority": 100,
-      "job_max_priority": 200
+      "job_max_priority": 200,
+      "start_timeout": "1m"
     }
   ],
   "syslog_facility": "LOCAL1",
@@ -424,6 +426,7 @@
   "reporting": {
     "address": "http://localhost:8080",
     "export_interval": "15m",
+	"snapshot_retention_time": "24h",
     "license": {
       "enabled": "true"
     }

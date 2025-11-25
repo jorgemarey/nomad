@@ -11,7 +11,6 @@ import (
 
 	consulapi "github.com/hashicorp/consul/api"
 	"github.com/hashicorp/nomad/ci"
-	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
 	"github.com/hashicorp/nomad/client/consul"
 	cstate "github.com/hashicorp/nomad/client/state"
 	cstructs "github.com/hashicorp/nomad/client/structs"
@@ -23,9 +22,6 @@ import (
 	structsc "github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/shoenig/test/must"
 )
-
-// statically assert consul hook implements the expected interfaces
-var _ interfaces.RunnerPrerunHook = (*consulHook)(nil)
 
 func consulHookTestHarness(t *testing.T) *consulHook {
 	logger := testlog.HCLogger(t)
@@ -62,9 +58,9 @@ func consulHookTestHarness(t *testing.T) *consulHook {
 	db := cstate.NewMemDB(logger)
 
 	// the WIDMgr env builder never has the task available
-	envBuilder := taskenv.NewBuilder(mock.Node(), alloc, nil, "global")
+	env := taskenv.NewBuilder(mock.Node(), alloc, nil, "global").Build()
 
-	mockWIDMgr := widmgr.NewWIDMgr(mockSigner, alloc, db, logger, envBuilder)
+	mockWIDMgr := widmgr.NewWIDMgr(mockSigner, alloc, db, logger, env)
 	mockWIDMgr.SignForTesting()
 
 	consulConfigs := map[string]*structsc.ConsulConfig{
@@ -72,9 +68,6 @@ func consulHookTestHarness(t *testing.T) *consulHook {
 	}
 
 	hookResources := cstructs.NewAllocHookResources()
-	envBuilderFn := func() *taskenv.Builder {
-		return taskenv.NewBuilder(mock.Node(), alloc, nil, "global")
-	}
 
 	consulHookCfg := consulHookConfig{
 		alloc:                   alloc,
@@ -83,7 +76,7 @@ func consulHookTestHarness(t *testing.T) *consulHook {
 		consulConfigs:           consulConfigs,
 		consulClientConstructor: consul.NewMockConsulClient,
 		hookResources:           hookResources,
-		envBuilder:              envBuilderFn,
+		db:                      db,
 		logger:                  logger,
 	}
 	return newConsulHook(consulHookCfg)
@@ -188,8 +181,8 @@ func Test_consulHook_prepareConsulTokensForServices(t *testing.T) {
 	hook := consulHookTestHarness(t)
 	task := hook.alloc.LookupTask("web")
 	services := task.Services
-	hook.envBuilder.UpdateTask(hook.alloc, task)
-	env := hook.envBuilder.Build()
+	env := taskenv.NewBuilder(mock.Node(), hook.alloc, task, "global").
+		Build().WithTask(hook.alloc, task)
 	hashedJWT := make(map[string]string)
 
 	for _, s := range services {
@@ -271,7 +264,7 @@ func Test_consulHook_Postrun(t *testing.T) {
 	task := hook.alloc.LookupTask("web")
 	tokens := map[string]map[string]*consulapi.ACLToken{}
 	must.NoError(t, hook.prepareConsulTokensForTask(task, nil, tokens))
-	hook.hookResources.SetConsulTokens(tokens)
+	hook.resourcesBackend.setConsulTokens(tokens)
 	must.MapLen(t, 1, tokens)
 
 	// gracefully handle wrong tokens
@@ -281,6 +274,6 @@ func Test_consulHook_Postrun(t *testing.T) {
 
 	// hook resources should be cleared
 	must.NoError(t, hook.Postrun())
-	tokens = hook.hookResources.GetConsulTokens()
+	tokens = hook.resourcesBackend.getConsulTokens()
 	must.MapEmpty(t, tokens["default"])
 }

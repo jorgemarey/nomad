@@ -14,8 +14,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/armon/go-metrics"
 	log "github.com/hashicorp/go-hclog"
+	metrics "github.com/hashicorp/go-metrics/compat"
 
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/uuid"
@@ -495,7 +495,7 @@ func (a *allocReconciler) computeGroup(groupName string, all allocSet) bool {
 	}
 
 	if len(expiring) > 0 {
-		if tg.PreventRescheduleOnLost {
+		if !tg.Replace() {
 			untainted = untainted.union(expiring)
 		} else {
 			lost = lost.union(expiring)
@@ -505,9 +505,6 @@ func (a *allocReconciler) computeGroup(groupName string, all allocSet) bool {
 	// which ones later and which ones can't be rescheduled at all.
 	timeoutLaterEvals := map[string]string{}
 	if len(disconnecting) > 0 {
-		// If MaxClientDisconnect is enabled as well as tg.PreventRescheduleOnLost,
-		// the reschedule policy won't be enabled and the lost allocations
-		// wont be rescheduled, and PreventRescheduleOnLost is ignored.
 		if tg.GetDisconnectLostTimeout() != 0 {
 			untaintedDisconnecting, rescheduleDisconnecting, laterDisconnecting := disconnecting.filterByRescheduleable(a.batch, true, a.now, a.evalID, a.deployment)
 
@@ -518,12 +515,9 @@ func (a *allocReconciler) computeGroup(groupName string, all allocSet) bool {
 			// Find delays for any disconnecting allocs that have max_client_disconnect,
 			// create followup evals, and update the ClientStatus to unknown.
 			timeoutLaterEvals = a.createTimeoutLaterEvals(disconnecting, tg.Name)
-
-		} else if tg.PreventRescheduleOnLost {
-			untainted = untainted.union(disconnecting)
 		}
 
-		a.appendUnknownDisconnectingUpdates(disconnecting, timeoutLaterEvals)
+		a.appendUnknownDisconnectingUpdates(disconnecting, timeoutLaterEvals, rescheduleNow)
 	}
 
 	// Find delays for any lost allocs that have stop_after_client_disconnect
@@ -531,7 +525,7 @@ func (a *allocReconciler) computeGroup(groupName string, all allocSet) bool {
 	lostLater := []*delayedRescheduleInfo{}
 
 	if len(lost) > 0 {
-		lostLater = lost.delayByStopAfterClientDisconnect()
+		lostLater = lost.delayByStopAfter()
 		lostLaterEvals = a.createLostLaterEvals(lostLater, tg.Name)
 	}
 
@@ -1415,7 +1409,7 @@ func (a *allocReconciler) createTimeoutLaterEvals(disconnecting allocSet, tgName
 		return map[string]string{}
 	}
 
-	timeoutDelays, err := disconnecting.delayByMaxClientDisconnect(a.now)
+	timeoutDelays, err := disconnecting.delayByLostAfter(a.now)
 	if err != nil {
 		a.logger.Error("error for task_group",
 			"task_group", tgName, "error", err)
@@ -1482,7 +1476,7 @@ func (a *allocReconciler) createTimeoutLaterEvals(disconnecting allocSet, tgName
 
 // Create updates that will be applied to the allocs to mark the FollowupEvalID
 // and the unknown ClientStatus and AllocState.
-func (a *allocReconciler) appendUnknownDisconnectingUpdates(disconnecting allocSet, allocIDToFollowupEvalID map[string]string) {
+func (a *allocReconciler) appendUnknownDisconnectingUpdates(disconnecting allocSet, allocIDToFollowupEvalID map[string]string, rescheduleNow allocSet) {
 	for id, alloc := range disconnecting {
 		updatedAlloc := alloc.Copy()
 		updatedAlloc.ClientStatus = structs.AllocClientStatusUnknown
@@ -1490,6 +1484,14 @@ func (a *allocReconciler) appendUnknownDisconnectingUpdates(disconnecting allocS
 		updatedAlloc.ClientDescription = allocUnknown
 		updatedAlloc.FollowupEvalID = allocIDToFollowupEvalID[id]
 		a.result.disconnectUpdates[updatedAlloc.ID] = updatedAlloc
+
+		// update the reschedule set so that any placements holding onto this
+		// pointer are using the right pointer for PreviousAllocation()
+		for i, alloc := range rescheduleNow {
+			if alloc.ID == updatedAlloc.ID {
+				rescheduleNow[i] = updatedAlloc
+			}
+		}
 	}
 }
 

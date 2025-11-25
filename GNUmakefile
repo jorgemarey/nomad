@@ -23,7 +23,7 @@ ifndef BIN
 BIN := $(GOPATH)/bin
 endif
 
-GO_TAGS := $(GO_TAGS)
+GO_TAGS := hashicorpmetrics $(GO_TAGS)
 
 ifeq ($(CI),true)
 GO_TAGS := codegen_generated $(GO_TAGS)
@@ -33,6 +33,14 @@ endif
 ifndef NOMAD_NO_UI
 GO_TAGS := ui $(GO_TAGS)
 endif
+
+# Some Go tools require the tags to be a comma-separated list. Perform a
+# substitution from the space to a comma and create a new variable, so we can
+# use both
+null  :=
+space := $(null) #
+comma := ,
+GO_TAGS_COMMA := $(subst $(space),$(comma),$(strip $(GO_TAGS)))
 
 #GOTEST_GROUP is set in CI pipelines. We have to set it for local run.
 ifndef GOTEST_GROUP
@@ -46,7 +54,7 @@ PROTO_COMPARE_TAG ?= v1.0.3$(if $(findstring ent,$(GO_TAGS)),+ent,)
 # or backport version, without the leading "v". main should have the latest
 # published release here, and release branches should point to the latest
 # published release in their X.Y release line.
-LAST_RELEASE ?= 1.9.6
+LAST_RELEASE ?= 1.10.4
 
 default: help
 
@@ -146,9 +154,9 @@ deps:  ## Install build and development dependencies
 .PHONY: lint-deps
 lint-deps: ## Install linter dependencies
 	@echo "==> Updating linter dependencies..."
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.5
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.3.0
 	go install github.com/client9/misspell/cmd/misspell@v0.3.4
-	go install github.com/hashicorp/go-hclog/hclogvet@feaf6d2ec20fd895e711195c99e3fde93a68afc5
+	go install github.com/hashicorp/go-hclog/hclogvet@bd6194f1f5b126dbad2a3fdf3b9b6556cc3496c3
 
 .PHONY: git-hooks
 git-dir = $(shell git rev-parse --git-dir)
@@ -166,7 +174,7 @@ check: ## Lint the source code
 	@cd ./api && golangci-lint run --config ../.golangci.yml --build-tags "$(GO_TAGS)"
 
 	@echo "==> Linting hclog statements..."
-	@hclogvet .
+	@GOFLAGS="-tags=$(GO_TAGS_COMMA)" hclogvet ./...
 
 	@echo "==> Spell checking website..."
 	@misspell -error -source=text website/content/
@@ -299,7 +307,7 @@ test-nomad: # dev ## Run Nomad unit tests
 	@echo "==> with packages $(GOTEST_PKGS)"
 	gotestsum --format=testname --rerun-fails=3 --packages="$(GOTEST_PKGS)" -- \
 		-cover \
-		-timeout=20m \
+		-timeout=25m \
 		-count=1 \
 		-tags "$(GO_TAGS)" \
 		$(GOTEST_PKGS)
@@ -309,7 +317,7 @@ test-nomad-module: dev ## Run Nomad unit tests on sub-module
 	@echo "==> Running Nomad unit tests on sub-module $(GOTEST_MOD)"
 	cd $(GOTEST_MOD); gotestsum --format=testname --rerun-fails=3 --packages=./... -- \
 		-cover \
-		-timeout=20m \
+		-timeout=25m \
 		-count=1 \
 		-race \
 		-tags "$(GO_TAGS)" \
@@ -374,18 +382,18 @@ static-assets: ## Compile the static routes to serve alongside the API
 .PHONY: test-ui
 test-ui: ## Run Nomad UI test suite
 	@echo "==> Installing JavaScript assets"
-	@cd ui && npm rebuild node-sass
-	@cd ui && yarn install
+	@pnpm rebuild node-sass
+	@pnpm install --silent --fetch-timeout 300000
 	@echo "==> Running ember tests"
-	@cd ui && npm test
+	@pnpm -F nomad-ui test
 
 .PHONY: ember-dist
 ember-dist: ## Build the static UI assets from source
 	@echo "==> Installing JavaScript assets"
-	@cd ui && yarn install --silent --network-timeout 300000
-	@cd ui && npm rebuild node-sass
+	@pnpm install --silent --fetch-timeout 300000
+	@pnpm rebuild node-sass
 	@echo "==> Building Ember application"
-	@cd ui && npm run build
+	@pnpm -F nomad-ui build
 
 .PHONY: dev-ui
 dev-ui: ember-dist static-assets ## Build a dev UI binary
@@ -444,7 +452,7 @@ test: ## Use this target as a smoke test
 	@echo "==> with packages: $(GOTEST_PKGS)"
 	gotestsum --format=testname --packages="$(GOTEST_PKGS)" -- \
 		-cover \
-		-timeout=20m \
+		-timeout=25m \
 		-count=1 \
 		-tags "$(GO_TAGS)" \
 		$(GOTEST_PKGS)

@@ -167,7 +167,11 @@ moduleForJobWithClientStatus(
 moduleForJob(
   'Acceptance | job detail (periodic)',
   'children',
-  () => server.create('job', 'periodic', { shallow: true }),
+  () =>
+    server.create('job', 'periodic', {
+      shallow: true,
+      withPreviousStableVersion: true,
+    }),
   {
     'the default sort is submitTime descending': async function (job, assert) {
       const mostRecentLaunch = server.db.jobs
@@ -274,6 +278,7 @@ moduleForJob('Acceptance | job detail (periodic child)', 'allocations', () => {
       running: 1,
     },
     noActiveDeployment: true,
+    withPreviousStableVersion: true,
   });
   return server.db.jobs.where({ parentId: parent.id })[0];
 });
@@ -292,6 +297,7 @@ moduleForJob(
       },
       // Child's gotta be non-queued to be able to run
       status: 'running', //  TODO: TEMP
+      withPreviousStableVersion: true,
     });
     return server.db.jobs.where({ parentId: parent.id })[0];
   }

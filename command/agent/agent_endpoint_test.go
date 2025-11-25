@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ import (
 	"github.com/hashicorp/nomad/acl"
 	"github.com/hashicorp/nomad/api"
 	"github.com/hashicorp/nomad/ci"
+	sframer "github.com/hashicorp/nomad/client/lib/streamframer"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/pool"
 	"github.com/hashicorp/nomad/nomad/mock"
@@ -55,17 +57,6 @@ func TestHTTP_AgentSelf(t *testing.T) {
 		require.NotNil(self.Config)
 		require.NotNil(self.Config.ACL)
 		require.NotEmpty(self.Stats)
-
-		// Check the Vault config
-		require.Empty(self.Config.defaultVault().Token)
-
-		// Assign a Vault token and require it is redacted.
-		s.Config.defaultVault().Token = "badc0deb-adc0-deba-dc0d-ebadc0debadc"
-		respW = httptest.NewRecorder()
-		obj, err = s.Server.AgentSelfRequest(respW, req)
-		require.NoError(err)
-		self = obj.(agentSelf)
-		require.Equal("<redacted>", self.Config.defaultVault().Token)
 
 		// Assign a ReplicationToken token and require it is redacted.
 		s.Config.ACL.ReplicationToken = "badc0deb-adc0-deba-dc0d-ebadc0debadc"
@@ -454,6 +445,204 @@ func TestHTTP_AgentMonitor(t *testing.T) {
 			})
 		})
 	})
+}
+
+func TestHTTP_AgentMonitorExport(t *testing.T) {
+	ci.Parallel(t)
+	const expectedText = "log log log log log"
+	dir := t.TempDir()
+	testFile, err := os.CreateTemp(dir, "nomadtests")
+	must.NoError(t, err)
+
+	_, err = testFile.Write([]byte(expectedText))
+	must.NoError(t, err)
+	inlineFilePath := testFile.Name()
+
+	config := func(c *Config) {
+		c.LogFile = inlineFilePath
+	}
+
+	baseURL := "/v1/agent/monitor/export?"
+	cases := []struct {
+		name        string
+		follow      string
+		logsSince   string
+		nodeID      string
+		onDisk      string
+		serviceName string
+		serverID    string
+
+		config    func(c *Config)
+		errCode   int
+		errString string
+		expectErr bool
+		want      string
+	}{
+		{
+			name:      "happy_path",
+			follow:    "false",
+			onDisk:    "true",
+			logsSince: "9s",
+
+			config:    config,
+			expectErr: false,
+			want:      expectedText,
+		},
+		{
+			name:   "invalid_onDisk",
+			follow: "false",
+			onDisk: "green",
+
+			config:    config,
+			errCode:   400,
+			expectErr: true,
+			errString: "Unknown value for on-disk",
+		},
+		{
+			name:   "invalid_follow",
+			follow: "green",
+			onDisk: "false",
+
+			config:    config,
+			errCode:   400,
+			expectErr: true,
+			errString: "Unknown value for follow",
+		},
+		{
+			name:        "invalid_service_name",
+			follow:      "true",
+			onDisk:      "false",
+			serviceName: "nomad%",
+
+			config:    config,
+			errCode:   422,
+			expectErr: true,
+			errString: "does not meet systemd conventions",
+		},
+		{
+			name:        "invalid_logsSince_duration",
+			follow:      "false",
+			onDisk:      "true",
+			serviceName: "nomad",
+			logsSince:   "98seconds",
+
+			config:    config,
+			errCode:   400,
+			expectErr: true,
+			errString: `unknown unit "seconds" in duration`,
+			want:      expectedText,
+		},
+		{
+			name:     "server_and_node",
+			follow:   "false",
+			onDisk:   "true",
+			nodeID:   "doesn'tneedtobeuuid",
+			serverID: "doesntneedtobeuuid",
+
+			config:    config,
+			errCode:   400,
+			errString: "Cannot target node and server simultaneously",
+			expectErr: true,
+			want:      expectedText,
+		},
+		{
+			name:        "onDisk_and_serviceName",
+			follow:      "false",
+			onDisk:      "true",
+			serviceName: "nomad",
+			nodeID:      "doesn'tneedtobeuuid",
+
+			config:    config,
+			errCode:   400,
+			errString: "Cannot target journald and nomad log file simultaneously",
+			expectErr: true,
+			want:      expectedText,
+		},
+		{
+			name:   "neither_onDisk_nor_serviceName",
+			follow: "false",
+			nodeID: "doesn'tneedtobeuuid",
+
+			config:    config,
+			errCode:   400,
+			errString: "Either -service-name or -on-disk must be set",
+			expectErr: true,
+			want:      expectedText,
+		},
+		{
+			name:   "onDisk_and_follow",
+			follow: "true",
+			onDisk: "true",
+			nodeID: "doesn'tneedtobeuuid",
+
+			config:    config,
+			errCode:   400,
+			errString: "Cannot follow log file",
+			expectErr: true,
+			want:      expectedText,
+		},
+		{
+			name:   "onDisk_and_no_log_file",
+			onDisk: "true",
+
+			config:    nil,
+			errCode:   400,
+			errString: "No nomad log file defined",
+			expectErr: true,
+			want:      expectedText,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			httpTest(t, tc.config, func(s *TestAgent) {
+				// Prepare urlstring
+				urlVal := url.Values{}
+				urlParamPrep := func(k string, v string, failCase string, values *url.Values) {
+					if v != failCase {
+						values.Add(k, v)
+					}
+				}
+
+				urlParamPrep("follow", tc.follow, "false", &urlVal)
+				urlParamPrep("logs_since", tc.logsSince, "", &urlVal)
+				urlParamPrep("on_disk", tc.onDisk, "", &urlVal)
+				urlParamPrep("node_id", tc.nodeID, "", &urlVal)
+				urlParamPrep("server_id", tc.serverID, "", &urlVal)
+				urlParamPrep("service_name", tc.serviceName, "", &urlVal)
+				urlString := baseURL + urlVal.Encode()
+
+				req, err := http.NewRequest(http.MethodGet, urlString, nil)
+				must.NoError(t, err)
+
+				resp := newClosableRecorder()
+				defer resp.Close()
+				var (
+					builder strings.Builder
+					frame   sframer.StreamFrame
+				)
+
+				_, err = s.Server.AgentMonitorExport(resp, req)
+				if tc.expectErr {
+					t.Log(err.Error())
+					must.Eq(t, tc.errCode, err.(HTTPCodedError).Code())
+					must.StrContains(t, err.Error(), tc.errString)
+					return
+				}
+
+				must.NoError(t, err)
+				output, err := io.ReadAll(resp.Body)
+				must.NoError(t, err)
+
+				err = json.Unmarshal(output, &frame)
+				if err != nil && err != io.EOF {
+					must.NoError(t, err)
+				}
+
+				builder.WriteString(string(frame.Data))
+				must.Eq(t, tc.want, builder.String())
+			})
+		})
+	}
 }
 
 // Scenarios when Pprof requests should be available
@@ -1526,39 +1715,23 @@ func schedulerWorkerInfoTest_testCases() []schedulerWorkerAPITest_testCase {
 		response:   ErrInvalidMethod,
 		isError:    true,
 	}
+
+	successSchedulers := make([]api.AgentSchedulerWorkerInfo, runtime.NumCPU())
+
+	for i := 0; i < runtime.NumCPU(); i++ {
+		successSchedulers[i] = api.AgentSchedulerWorkerInfo{
+			ID:                fmt.Sprintf("9b3713e0-6f74-0e1b-3b3e-d94f0c22dbf9-%d", i),
+			EnabledSchedulers: []string{"_core", "batch"},
+			Started:           "2021-12-10 22:13:12.595366 -0500 EST m=+0.039016232",
+			Status:            "Pausing",
+			WorkloadStatus:    "WaitingToDequeue",
+		}
+	}
+
 	success := schedulerWorkerAPITest_testExpect{
 		statusCode: http.StatusOK,
 		response: &api.AgentSchedulerWorkersInfo{
-			Schedulers: []api.AgentSchedulerWorkerInfo{
-				{
-					ID:                "9b3713e0-6f74-0e1b-3b3e-d94f0c22dbf9",
-					EnabledSchedulers: []string{"_core", "batch"},
-					Started:           "2021-12-10 22:13:12.595366 -0500 EST m=+0.039016232",
-					Status:            "Pausing",
-					WorkloadStatus:    "WaitingToDequeue",
-				},
-				{
-					ID:                "ebda23e2-7f68-0c82-f0b2-f91d4581094d",
-					EnabledSchedulers: []string{"_core", "batch"},
-					Started:           "2021-12-10 22:13:12.595478 -0500 EST m=+0.039127886",
-					Status:            "Pausing",
-					WorkloadStatus:    "WaitingToDequeue",
-				},
-				{
-					ID:                "b3869c9b-64ff-686c-a003-e7d059d3a573",
-					EnabledSchedulers: []string{"_core", "batch"},
-					Started:           "2021-12-10 22:13:12.595501 -0500 EST m=+0.039151276",
-					Status:            "Pausing",
-					WorkloadStatus:    "WaitingToDequeue",
-				},
-				{
-					ID:                "cc5907c0-552e-bf36-0ca1-f150af7273c2",
-					EnabledSchedulers: []string{"_core", "batch"},
-					Started:           "2021-12-10 22:13:12.595691 -0500 EST m=+0.039341541",
-					Status:            "Starting",
-					WorkloadStatus:    "WaitingToDequeue",
-				},
-			},
+			Schedulers: successSchedulers,
 		},
 	}
 	return []schedulerWorkerAPITest_testCase{
@@ -1619,8 +1792,7 @@ func TestHTTP_AgentSchedulerWorkerInfoRequest(t *testing.T) {
 	ci.Parallel(t)
 
 	configFn := func(c *Config) {
-		var numSchedulers = 4
-		c.Server.NumSchedulers = &numSchedulers
+		c.Server.NumSchedulers = pointer.Of(runtime.NumCPU())
 		c.Server.EnabledSchedulers = []string{"_core", "batch"}
 		c.Client.Enabled = false
 	}
@@ -1713,6 +1885,14 @@ type schedulerWorkerConfigTest_testExpect struct {
 // These test cases are run for both the ACL and Non-ACL enabled servers. When
 // ACLS are not enabled, the request.aclTokens are ignored.
 func schedulerWorkerConfigTest_testCases() []scheduleWorkerConfigTest_workerRequestTest {
+
+	numCPU := runtime.NumCPU()
+
+	halfCPU := numCPU / 2
+	if halfCPU == 0 {
+		halfCPU = 1
+	}
+
 	forbidden := schedulerWorkerConfigTest_testExpect{
 		expectedResponseCode: http.StatusForbidden,
 		expectedResponse:     structs.ErrPermissionDenied.Error(),
@@ -1727,12 +1907,11 @@ func schedulerWorkerConfigTest_testCases() []scheduleWorkerConfigTest_workerRequ
 	}
 	success1 := schedulerWorkerConfigTest_testExpect{
 		expectedResponseCode: http.StatusOK,
-		expectedResponse:     &api.AgentSchedulerWorkerConfigResponse{EnabledSchedulers: []string{"_core", "batch"}, NumSchedulers: 8},
+		expectedResponse:     &api.AgentSchedulerWorkerConfigResponse{EnabledSchedulers: []string{"_core", "batch"}, NumSchedulers: numCPU},
 	}
-
 	success2 := schedulerWorkerConfigTest_testExpect{
 		expectedResponseCode: http.StatusOK,
-		expectedResponse:     &api.AgentSchedulerWorkerConfigResponse{EnabledSchedulers: []string{"_core", "batch"}, NumSchedulers: 9},
+		expectedResponse:     &api.AgentSchedulerWorkerConfigResponse{EnabledSchedulers: []string{"_core", "batch"}, NumSchedulers: halfCPU},
 	}
 
 	return []scheduleWorkerConfigTest_workerRequestTest{
@@ -1791,7 +1970,7 @@ func schedulerWorkerConfigTest_testCases() []scheduleWorkerConfigTest_workerRequ
 			request: schedulerWorkerConfigTest_testRequest{
 				verb:        http.MethodPost,
 				aclToken:    "",
-				requestBody: `{"num_schedulers":9,"enabled_schedulers":["_core", "batch"]}`,
+				requestBody: fmt.Sprintf(`{"num_schedulers":%d,"enabled_schedulers":["_core", "batch"]}`, halfCPU),
 			},
 			whenACLNotEnabled: success2,
 			whenACLEnabled:    forbidden,
@@ -1801,7 +1980,7 @@ func schedulerWorkerConfigTest_testCases() []scheduleWorkerConfigTest_workerRequ
 			request: schedulerWorkerConfigTest_testRequest{
 				verb:        http.MethodPut,
 				aclToken:    "",
-				requestBody: `{"num_schedulers":8,"enabled_schedulers":["_core", "batch"]}`,
+				requestBody: fmt.Sprintf(`{"num_schedulers":%d,"enabled_schedulers":["_core", "batch"]}`, numCPU),
 			},
 			whenACLNotEnabled: success1,
 			whenACLEnabled:    forbidden,
@@ -1811,7 +1990,7 @@ func schedulerWorkerConfigTest_testCases() []scheduleWorkerConfigTest_workerRequ
 			request: schedulerWorkerConfigTest_testRequest{
 				verb:        http.MethodPost,
 				aclToken:    "node_write",
-				requestBody: `{"num_schedulers":9,"enabled_schedulers":["_core", "batch"]}`,
+				requestBody: fmt.Sprintf(`{"num_schedulers":%d,"enabled_schedulers":["_core", "batch"]}`, halfCPU),
 			},
 			whenACLNotEnabled: success2,
 			whenACLEnabled:    forbidden,
@@ -1821,7 +2000,7 @@ func schedulerWorkerConfigTest_testCases() []scheduleWorkerConfigTest_workerRequ
 			request: schedulerWorkerConfigTest_testRequest{
 				verb:        http.MethodPut,
 				aclToken:    "node_write",
-				requestBody: `{"num_schedulers":8,"enabled_schedulers":["_core", "batch"]}`,
+				requestBody: fmt.Sprintf(`{"num_schedulers":%d,"enabled_schedulers":["_core", "batch"]}`, numCPU),
 			},
 			whenACLNotEnabled: success1,
 			whenACLEnabled:    forbidden,
@@ -1831,7 +2010,7 @@ func schedulerWorkerConfigTest_testCases() []scheduleWorkerConfigTest_workerRequ
 			request: schedulerWorkerConfigTest_testRequest{
 				verb:        http.MethodPost,
 				aclToken:    "agent_write",
-				requestBody: `{"num_schedulers":9,"enabled_schedulers":["_core", "batch"]}`,
+				requestBody: fmt.Sprintf(`{"num_schedulers":%d,"enabled_schedulers":["_core", "batch"]}`, halfCPU),
 			},
 			whenACLNotEnabled: success2,
 			whenACLEnabled:    success2,
@@ -1841,7 +2020,7 @@ func schedulerWorkerConfigTest_testCases() []scheduleWorkerConfigTest_workerRequ
 			request: schedulerWorkerConfigTest_testRequest{
 				verb:        http.MethodPut,
 				aclToken:    "agent_write",
-				requestBody: `{"num_schedulers":8,"enabled_schedulers":["_core", "batch"]}`,
+				requestBody: fmt.Sprintf(`{"num_schedulers":%d,"enabled_schedulers":["_core", "batch"]}`, numCPU),
 			},
 			whenACLNotEnabled: success1,
 			whenACLEnabled:    success1,
@@ -1906,6 +2085,26 @@ func schedulerWorkerConfigTest_testCases() []scheduleWorkerConfigTest_workerRequ
 			whenACLNotEnabled: invalidRequest,
 			whenACLEnabled:    invalidRequest,
 		},
+		{
+			name: "post with too many schedulers",
+			request: schedulerWorkerConfigTest_testRequest{
+				verb:        http.MethodPost,
+				aclToken:    "agent_write",
+				requestBody: `{"num_schedulers":9223372036854775807,"enabled_schedulers":["_core", "batch"]}`,
+			},
+			whenACLNotEnabled: invalidRequest,
+			whenACLEnabled:    invalidRequest,
+		},
+		{
+			name: "put with too many schedulers",
+			request: schedulerWorkerConfigTest_testRequest{
+				verb:        http.MethodPut,
+				aclToken:    "agent_write",
+				requestBody: `{"num_schedulers":9223372036854775807,"enabled_schedulers":["_core", "batch"]}`,
+			},
+			whenACLNotEnabled: invalidRequest,
+			whenACLEnabled:    invalidRequest,
+		},
 	}
 }
 
@@ -1913,8 +2112,7 @@ func TestHTTP_AgentSchedulerWorkerConfigRequest_NoACL(t *testing.T) {
 	ci.Parallel(t)
 
 	configFn := func(c *Config) {
-		var numSchedulers = 8
-		c.Server.NumSchedulers = &numSchedulers
+		c.Server.NumSchedulers = pointer.Of(runtime.NumCPU())
 		c.Server.EnabledSchedulers = []string{"_core", "batch"}
 		c.Client.Enabled = false
 	}
@@ -1946,8 +2144,7 @@ func TestHTTP_AgentSchedulerWorkerConfigRequest_ACL(t *testing.T) {
 	ci.Parallel(t)
 
 	configFn := func(c *Config) {
-		var numSchedulers = 8
-		c.Server.NumSchedulers = &numSchedulers
+		c.Server.NumSchedulers = pointer.Of(runtime.NumCPU())
 		c.Server.EnabledSchedulers = []string{"_core", "batch"}
 		c.Client.Enabled = false
 	}

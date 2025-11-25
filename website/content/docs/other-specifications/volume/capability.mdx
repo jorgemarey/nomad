@@ -1,10 +1,11 @@
 ---
 layout: docs
-page_title: capability Block - Volume Specification
-description: The "capability" block allows for validating the capability of a volume.
+page_title: Nomad volume specification capability block
+description: |-
+  Configure Container Storage Interface (CSI) and dynamic host storage volume capability in the `capability`block of the Nomad volume specification. Set single node or multiple node access and file system or block device attachment mode.
 ---
 
-# `capability` Block
+# Nomad volume specification capability block
 
 <Placement
   groups={[
@@ -33,27 +34,58 @@ capability {
 You must provide at least one `capability` block, and you must provide a block
 for each capability you intend to use in a job's [`volume`] block.
 
-## `capability` Parameters
+## Parameters
 
-- `access_mode` `(string: <required>)` - Defines whether a volume should be
-available concurrently. Can be one of `"single-node-reader-only"`,
-`"single-node-writer"`, `"multi-node-reader-only"`,
-`"multi-node-single-writer"`, or `"multi-node-multi-writer"`. Most CSI plugins
-support only single-node modes. Consult the documentation of the storage
-provider and CSI plugin.
+- `access_mode` `(string)` - Defines whether a volume should be available
+  concurrently. The `access_mode` and `attachment_mode` from the volume request
+  must exactly match one of the volume's `capability` blocks.
 
-- `attachment_mode` `(string: <required>)` - The storage API that will be used
-by the volume. Most storage providers will support `"file-system"`, to mount
-volumes using the CSI filesystem API. Some storage providers will support
-`"block-device"`, which will mount the volume with the CSI block device API
-within the container.
+  - For CSI volumes the `access_mode` is required. Can be one of the following:
 
-## `capability` Examples
+    - `"single-node-reader-only"`: Jobs can only request the volume with
+      read-only access, and only one node can mount the volume at a time.
+    - `"single-node-writer"`: Jobs can request the volume with read/write or
+      read-only access, and only one node can mount the volume at a time.
+    - `"multi-node-reader-only"`: Jobs can only request the volume with
+      read-only access, but multiple nodes can mount the volume simultaneously.
+    - `"multi-node-single-writer"`: Jobs can request the volume with read/write
+      or read-only access, but the scheduler only allows one allocation to have
+      read/write access. Multiple nodes can mount the volume simultaneously.
+    - `"multi-node-multi-writer"`: Jobs can request the volume with read/write
+      or read-only access, and the scheduler allows multiple allocations to have
+      read/write access. Multiple nodes can mount the volume simultaneously.
 
-The following examples only show the `capability` blocks. Remember that the
-`capability` block is only valid in the placement shown above.
+    Most CSI plugins support only single-node modes. Consult the documentation
+    of the storage provider and CSI plugin.
 
-### Multiple capabilities
+  - For dynamic host volumes the `access_mode` is optional. Can be one of the following:
+
+    - `"single-node-writer"`: Jobs can only request the volume with read/write access.
+    - `"single-node-reader-only"`: Jobs can only request the volume with read-only access.
+    - `"single-node-single-writer"`: Jobs can request either read/write or
+      read-only access, but the scheduler only allows one allocation to have
+      read/write access.
+    - `"single-node-multi-writer"`: Jobs can request either read/write or
+      read-only access, and the scheduler allows multiple allocations to have
+      read/write access.
+
+    In the job specification, the default is `single-node-writer` unless
+    `read_only = true`, which translates to `single-node-reader-only`.
+
+- `attachment_mode` `(string)` - The storage API used by the volume. One of
+  `"file-system"` or `"block-device"`. The `access_mode` and `attachment_mode`
+  from the volume request must exactly match one of the volume's `capability`
+  blocks.
+
+  - For CSI volumes the `attachment_mode` field is required. Most storage
+    providers support `"file-system"`, to mount volumes using the CSI
+    filesystem API. Some storage providers support `"block-device"`, which
+    mounts the volume with the CSI block device API within the container.
+
+  - For dynamic host volumes the `attachment_mode` field is optional and
+    defaults to `"file-system"`.
+
+## Example
 
 This examples shows a volume that must satisfy multiple capability
 requirements.

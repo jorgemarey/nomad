@@ -344,9 +344,35 @@ func TestTask_Canonicalize_TaskLifecycle(t *testing.T) {
 		{
 			name: "empty",
 			task: &Task{
-				Lifecycle: &TaskLifecycle{},
+				Lifecycle: nil,
 			},
 			expected: nil,
+		},
+		{
+			name: "missing hook",
+			task: &Task{
+				Lifecycle: &TaskLifecycle{},
+			},
+			expected: &TaskLifecycle{},
+		},
+		{
+			name: "with sidecar",
+			task: &Task{
+				Lifecycle: &TaskLifecycle{
+					Sidecar: true,
+				},
+			},
+			expected: &TaskLifecycle{Sidecar: true},
+		},
+		{
+			name: "valid",
+			task: &Task{
+				Lifecycle: &TaskLifecycle{
+					Hook:    "prestart",
+					Sidecar: true,
+				},
+			},
+			expected: &TaskLifecycle{Hook: "prestart", Sidecar: true},
 		},
 	}
 
@@ -890,23 +916,6 @@ func TestTaskGroup_Canonicalize_Consul(t *testing.T) {
 
 		must.Eq(t, "ns1", *job.ConsulNamespace)
 		must.Eq(t, "ns2", tg.Consul.Namespace)
-	})
-
-	t.Run("inherit job consul in group", func(t *testing.T) {
-		job := &Job{
-			ID:              pointerOf("job"),
-			ConsulNamespace: pointerOf("ns1"),
-		}
-		job.Canonicalize()
-
-		tg := &TaskGroup{
-			Name:   pointerOf("group"),
-			Consul: nil, // not set, inherit from job
-		}
-		tg.Canonicalize(job)
-
-		must.Eq(t, "ns1", *job.ConsulNamespace)
-		must.Eq(t, "ns1", tg.Consul.Namespace)
 	})
 
 	t.Run("set in group only", func(t *testing.T) {

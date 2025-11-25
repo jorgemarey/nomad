@@ -14,6 +14,7 @@ import (
 	"net/rpc"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,9 +22,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/armon/go-metrics"
 	consulapi "github.com/hashicorp/consul/api"
 	log "github.com/hashicorp/go-hclog"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/raft"
 	autopilot "github.com/hashicorp/raft-autopilot"
@@ -255,12 +256,6 @@ type Server struct {
 	// consulConfigEntries is used for managing Consul Configuration Entries.
 	consulConfigEntries ConsulConfigsAPI
 
-	// consulACLs is used for managing Consul Service Identity tokens.
-	consulACLs ConsulACLsAPI
-
-	// vault is the client for communicating with Vault.
-	vault VaultClient
-
 	// Worker used for processing
 	workers          []*Worker
 	workerLock       sync.RWMutex
@@ -275,6 +270,11 @@ type Server struct {
 	// the provider performs background HTTP requests. When the Nomad server is
 	// shutting down, the oidcProviderCache.Shutdown() function must be called.
 	oidcProviderCache *oidc.ProviderCache
+
+	// oidcRequestCache stores a cache of OIDC requests, so request state
+	// (mainly PKCE challenge/verification) can persist between calls to
+	// OIDCAuthURL and OIDCCompleteAuth.
+	oidcRequestCache *oidc.RequestCache
 
 	// lockTTLTimer and lockDelayTimer are used to track variable lock timers.
 	// These are held in memory on the leader rather than in state to avoid
@@ -322,7 +322,7 @@ type Server struct {
 
 // NewServer is used to construct a new Nomad server from the
 // configuration, potentially returning an error
-func NewServer(config *Config, consulCatalog consul.CatalogAPI, consulConfigFunc consul.ConfigAPIFunc, consulACLs consul.ACLsAPI) (*Server, error) {
+func NewServer(config *Config, consulCatalog consul.CatalogAPI, consulConfigFunc consul.ConfigAPIFunc) (*Server, error) {
 	// Configure TLS
 	tlsConf, err := tlsutil.NewTLSConfiguration(config.TLSConfig, true, true)
 	if err != nil {
@@ -345,7 +345,7 @@ func NewServer(config *Config, consulCatalog consul.CatalogAPI, consulConfigFunc
 	s := &Server{
 		config:                  config,
 		consulCatalog:           consulCatalog,
-		connPool:                pool.NewPool(logger, serverRPCCache, serverMaxStreams, tlsWrap),
+		connPool:                pool.NewPool(logger, serverRPCCache, serverMaxStreams, tlsWrap, config.RPCSessionConfig),
 		logger:                  logger,
 		tlsWrap:                 tlsWrap,
 		rpcServer:               rpc.NewServer(),
@@ -367,6 +367,11 @@ func NewServer(config *Config, consulCatalog consul.CatalogAPI, consulConfigFunc
 
 	s.shutdownCtx, s.shutdownCancel = context.WithCancel(context.Background())
 	s.shutdownCh = s.shutdownCtx.Done()
+
+	// Generate a timeout context for the server process which we wait for and
+	// can time out on.
+	startupTimeout, startupCancel := context.WithTimeout(s.shutdownCtx, s.config.StartTimeout)
+	defer startupCancel()
 
 	// Create an eval broker
 	evalBroker, err := NewEvalBroker(
@@ -402,15 +407,8 @@ func NewServer(config *Config, consulCatalog consul.CatalogAPI, consulConfigFunc
 	// Initialize the stats fetcher that autopilot will use.
 	s.statsFetcher = NewStatsFetcher(s.logger, s.connPool, s.config.Region)
 
-	// Setup Consul (more)
-	s.setupConsul(consulConfigFunc, consulACLs)
-
-	// Setup Vault
-	if err := s.setupVaultClient(); err != nil {
-		s.Shutdown()
-		s.logger.Error("failed to setup Vault client", "error", err)
-		return nil, fmt.Errorf("Failed to setup Vault client: %v", err)
-	}
+	// Setup Consul
+	s.consulConfigEntries = NewConsulConfigsAPI(consulConfigFunc, s.logger)
 
 	// Set up the keyring
 	keystorePath := filepath.Join(s.config.DataDir, "keystore")
@@ -443,6 +441,13 @@ func NewServer(config *Config, consulCatalog consul.CatalogAPI, consulConfigFunc
 	// must be done separately so that the server can stop all background
 	// processes when it shuts down itself.
 	s.oidcProviderCache = oidc.NewProviderCache()
+
+	// Set up OIDC requests cache for state that persists between calls to
+	// ACL.OIDCAuthURL and ACL.OIDCCompleteAuth.
+	// It needs no special handling to handle agent shutdowns (its Store method
+	// handles this lifecycle).
+	// 6 minutes is 1 minute longer than the JWT expiration time in the cap lib.
+	s.oidcRequestCache = oidc.NewRequestCache(6 * time.Minute)
 
 	// Initialize the RPC layer
 	if err := s.setupRPC(tlsWrap); err != nil {
@@ -535,9 +540,6 @@ func NewServer(config *Config, consulCatalog consul.CatalogAPI, consulConfigFunc
 	// Emit metrics for the blocked eval tracker.
 	go s.blockedEvals.EmitStats(time.Second, s.shutdownCh)
 
-	// Emit metrics for the Vault client.
-	go s.vault.EmitStats(time.Second, s.shutdownCh)
-
 	// Emit metrics
 	go s.heartbeatStats()
 
@@ -552,8 +554,16 @@ func NewServer(config *Config, consulCatalog consul.CatalogAPI, consulConfigFunc
 	// exist before it can start.
 	s.keyringReplicator = NewKeyringReplicator(s, encrypter)
 
-	// Block until keys are decrypted
-	s.encrypter.IsReady(s.shutdownCtx)
+	// Wait for the keyring to be ready. This is a blocking call and will
+	// time out if the keyring takes too long to decrypt its initial set of
+	// keys.
+	//
+	// In the event of a timeout, we shut down the server and return an error to
+	// the caller which will include what keys were not decrypted.
+	if err := s.encrypter.IsReady(startupTimeout); err != nil {
+		_ = s.Shutdown()
+		return nil, fmt.Errorf("failed to wait for keyring decryption to complete: %v", err)
+	}
 
 	// Done
 	return s, nil
@@ -681,6 +691,9 @@ func (s *Server) reloadTLSConnections(newTLSConfig *config.TLSConfig) error {
 	// Kill any old listeners
 	s.rpcCancel()
 
+	// Update the authenticator, so any changes in TLS verification are applied.
+	s.auth.SetVerifyTLS(s.config.TLSConfig != nil && s.config.TLSConfig.EnableRPC && s.config.TLSConfig.VerifyServerHostname)
+
 	s.rpcTLS = incomingTLS
 	s.connPool.ReloadTLS(tlsWrap)
 
@@ -759,14 +772,6 @@ func (s *Server) Shutdown() error {
 	if s.fsm != nil {
 		s.fsm.Close()
 	}
-
-	// Stop Vault token renewal and revocations
-	if s.vault != nil {
-		s.vault.Stop()
-	}
-
-	// Stop the Consul ACLs token revocations
-	s.consulACLs.Stop()
 
 	// Stop being able to set Configuration Entries
 	s.consulConfigEntries.Stop()
@@ -892,30 +897,6 @@ func (s *Server) Reload(newConfig *Config) error {
 	}
 
 	var mErr multierror.Error
-
-	// Handle the Vault reload. Vault should never be nil but just guard.
-	if s.vault != nil {
-		vconfig := newConfig.GetDefaultVault()
-
-		// Verify if the new configuration would cause the client type to
-		// change.
-		var err error
-		switch s.vault.(type) {
-		case *NoopVault:
-			if vconfig != nil && vconfig.Token != "" {
-				err = fmt.Errorf("setting a Vault token requires restarting the Nomad agent")
-			}
-		case *vaultClient:
-			if vconfig != nil && vconfig.Token == "" {
-				err = fmt.Errorf("removing the Vault token requires restarting the Nomad agent")
-			}
-		}
-		if err != nil {
-			_ = multierror.Append(&mErr, err)
-		} else if err := s.vault.SetConfig(newConfig.GetDefaultVault()); err != nil {
-			_ = multierror.Append(&mErr, err)
-		}
-	}
 
 	shouldReloadTLS, err := tlsutil.ShouldReloadRPCConnections(s.config.TLSConfig, newConfig.TLSConfig)
 	if err != nil {
@@ -1203,29 +1184,6 @@ func (s *Server) setupNodeDrainer() {
 	s.nodeDrainer = drainer.NewNodeDrainer(c)
 }
 
-// setupConsul is used to setup Server specific consul components.
-func (s *Server) setupConsul(consulConfigFunc consul.ConfigAPIFunc, consulACLs consul.ACLsAPI) {
-	s.consulConfigEntries = NewConsulConfigsAPI(consulConfigFunc, s.logger)
-	s.consulACLs = NewConsulACLsAPI(consulACLs, s.logger, s.purgeSITokenAccessors)
-}
-
-// setupVaultClient is used to set up the Vault API client.
-func (s *Server) setupVaultClient() error {
-	vconfig := s.config.GetDefaultVault()
-	if vconfig != nil && vconfig.Token == "" {
-		s.vault = NewNoopVault(vconfig, s.logger, s.purgeVaultAccessors)
-		return nil
-	}
-
-	delegate := s.entVaultDelegate()
-	v, err := NewVaultClient(vconfig, s.logger, s.purgeVaultAccessors, delegate)
-	if err != nil {
-		return err
-	}
-	s.vault = v
-	return nil
-}
-
 // setupRPC is used to setup the RPC listener
 func (s *Server) setupRPC(tlsWrap tlsutil.RegionWrapper) error {
 	// Populate the static RPC server
@@ -1357,6 +1315,9 @@ func (s *Server) setupRpcServer(server *rpc.Server, ctx *RPCContext) {
 	_ = server.Register(NewStatusEndpoint(s, ctx))
 	_ = server.Register(NewSystemEndpoint(s, ctx))
 	_ = server.Register(NewVariablesEndpoint(s, ctx, s.encrypter))
+	_ = server.Register(NewHostVolumeEndpoint(s, ctx))
+	_ = server.Register(NewTaskGroupVolumeClaimEndpoint(s, ctx))
+	_ = server.Register(NewClientHostVolumeEndpoint(s, ctx))
 
 	// Register non-streaming
 
@@ -1699,12 +1660,12 @@ func (swpa SchedulerWorkerPoolArgs) IsInvalid() bool {
 	return !swpa.IsValid()
 }
 
-// IsValid verifies that the pool arguments are valid. That is, they have a non-negative
-// numSchedulers value and the enabledSchedulers list has _core and only refers to known
+// IsValid verifies that the pool arguments are valid. That is, they have a
+// non-negative numSchedulers value which is less than the number of CPUs on the
+// machine and the enabledSchedulers list has _core and only refers to known
 // schedulers.
 func (swpa SchedulerWorkerPoolArgs) IsValid() bool {
-	if swpa.NumSchedulers < 0 {
-		// the pool has to be non-negative
+	if swpa.NumSchedulers < 0 || swpa.NumSchedulers > runtime.NumCPU() {
 		return false
 	}
 
@@ -1743,7 +1704,7 @@ func getSchedulerWorkerPoolArgsFromConfigLocked(c *Config) *SchedulerWorkerPoolA
 	}
 }
 
-// GetSchedulerWorkerInfo returns a slice of WorkerInfos from all of
+// GetSchedulerWorkersInfo returns a slice of WorkerInfos from all of
 // the running scheduler workers.
 func (s *Server) GetSchedulerWorkersInfo() []WorkerInfo {
 	s.workerLock.RLock()
@@ -2063,7 +2024,6 @@ func (s *Server) Stats() map[string]map[string]string {
 		"raft":    s.raft.Stats(),
 		"serf":    s.serf.Stats(),
 		"runtime": goruntime.RuntimeStats(),
-		"vault":   s.vault.Stats(),
 	}
 
 	return stats

@@ -30,6 +30,7 @@ import (
 	structsc "github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/nomad/plugins/base"
 	"github.com/hashicorp/nomad/version"
+	"github.com/hashicorp/yamux"
 )
 
 var (
@@ -241,6 +242,11 @@ type Config struct {
 	// before garbage collection is triggered.
 	GCMaxAllocs int
 
+	// GCVolumesOnNodeGC indicates that the server should GC any dynamic host
+	// volumes on this node when the node is GC'd. This should only be set if
+	// you know that a GC'd node can never come back
+	GCVolumesOnNodeGC bool
+
 	// NoHostUUID disables using the host's UUID and will force generation of a
 	// random UUID.
 	NoHostUUID bool
@@ -270,6 +276,9 @@ type Config struct {
 	// This period is meant to be long enough for a leader election to take
 	// place, and a small jitter is applied to avoid a thundering herd.
 	RPCHoldTimeout time.Duration
+
+	// RPCSessionConfig configures yamux multiplex
+	RPCSessionConfig *yamux.Config
 
 	// PluginLoader is used to load plugins.
 	PluginLoader loader.PluginCatalog
@@ -316,6 +325,13 @@ type Config struct {
 
 	// HostVolumes is a map of the configured host volumes by name.
 	HostVolumes map[string]*structs.ClientHostVolumeConfig
+
+	// HostVolumesDir is the suggested directory for plugins to put volumes.
+	// Volume plugins may ignore this suggestion, but we provide this default.
+	HostVolumesDir string
+
+	// HostVolumePluginDir is the directory with dynamic host volume plugins.
+	HostVolumePluginDir string
 
 	// HostNetworks is a map of the conigured host networks by name.
 	HostNetworks map[string]*structs.ClientHostNetworkConfig
@@ -364,6 +380,13 @@ type Config struct {
 
 	// ExtraAllocHooks are run with other allocation hooks, mainly for testing.
 	ExtraAllocHooks []interfaces.RunnerHook
+
+	// NodeMaxAllocs is an optional field that sets the maximum number of
+	// allocations a node can be assigned. Defaults to 0 and ignored if unset.
+	NodeMaxAllocs int
+
+	// LogFile is used by MonitorExport to stream a server's log file
+	LogFile string `hcl:"log_file"`
 }
 
 type APIListenerRegistrar interface {
@@ -888,6 +911,7 @@ func DefaultConfig() *Config {
 		DisableRemoteExec:       false,
 		TemplateConfig:          DefaultTemplateConfig(),
 		RPCHoldTimeout:          5 * time.Second,
+		RPCSessionConfig:        yamux.DefaultConfig(),
 		CNIPath:                 "/opt/cni/bin",
 		CNIConfigDir:            "/opt/cni/config",
 		CNIInterfacePrefix:      "eth",

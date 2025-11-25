@@ -36,6 +36,7 @@ import (
 	"github.com/hashicorp/go-version"
 	"github.com/hashicorp/nomad/acl"
 	"github.com/hashicorp/nomad/client/lib/idset"
+	"github.com/hashicorp/nomad/client/lib/numalib"
 	"github.com/hashicorp/nomad/client/lib/numalib/hw"
 	"github.com/hashicorp/nomad/command/agent/host"
 	"github.com/hashicorp/nomad/command/agent/pprof"
@@ -131,6 +132,11 @@ const (
 	WrappedRootKeysUpsertRequestType             MessageType = 62
 	NamespaceUpsertRequestType                   MessageType = 64
 	NamespaceDeleteRequestType                   MessageType = 65
+
+	// MessageTypes 66-74 are in Nomad Enterprise
+	HostVolumeRegisterRequestType             MessageType = 75
+	HostVolumeDeleteRequestType               MessageType = 76
+	TaskGroupHostVolumeClaimDeleteRequestType MessageType = 77
 
 	// NOTE: MessageTypes are shared between CE and ENT. If you need to add a
 	// new type, check that ENT is not already using that value.
@@ -938,6 +944,7 @@ type JobDispatchRequest struct {
 	Meta    map[string]string
 	WriteRequest
 	IdPrefixTemplate string
+	Priority         int
 }
 
 // JobValidateRequest is used to validate a job
@@ -957,18 +964,6 @@ type JobRevertRequest struct {
 	// EnforcePriorVersion if set will enforce that the job is at the given
 	// version before reverting.
 	EnforcePriorVersion *uint64
-
-	// ConsulToken is the Consul token that proves the submitter of the job revert
-	// has access to the Service Identity policies associated with the job's
-	// Consul Connect enabled services. This field is only used to transfer the
-	// token and is not stored after the Job revert.
-	ConsulToken string
-
-	// VaultToken is the Vault token that proves the submitter of the job revert
-	// has access to any Vault policies specified in the targeted job version. This
-	// field is only used to transfer the token and is not stored after the Job
-	// revert.
-	VaultToken string
 
 	WriteRequest
 }
@@ -1272,21 +1267,6 @@ type ClusterMetadata struct {
 	CreateTime int64
 }
 
-// DeriveVaultTokenRequest is used to request wrapped Vault tokens for the
-// following tasks in the given allocation
-type DeriveVaultTokenRequest struct {
-	NodeID   string
-	SecretID string
-	AllocID  string
-	Tasks    []string
-	QueryOptions
-}
-
-// VaultAccessorsRequest is used to operate on a set of Vault accessors
-type VaultAccessorsRequest struct {
-	Accessors []*VaultAccessor
-}
-
 // VaultAccessor is a reference to a created Vault token on behalf of
 // an allocation's task.
 type VaultAccessor struct {
@@ -1298,18 +1278,6 @@ type VaultAccessor struct {
 
 	// Raft Indexes
 	CreateIndex uint64
-}
-
-// DeriveVaultTokenResponse returns the wrapped tokens for each requested task
-type DeriveVaultTokenResponse struct {
-	// Tasks is a mapping between the task name and the wrapped token
-	Tasks map[string]string
-
-	// Error stores any error that occurred. Errors are stored here so we can
-	// communicate whether it is retryable
-	Error *RecoverableError
-
-	QueryMeta
 }
 
 // GenericRequest is used to request where no
@@ -2199,11 +2167,19 @@ type Node struct {
 	// HostVolumes is a map of host volume names to their configuration
 	HostVolumes map[string]*ClientHostVolumeConfig
 
+	// GCVolumesOnNodeGC indicates that the server should GC any dynamic host
+	// volumes on this node when the node is GC'd. This should only be set if
+	// you know that a GC'd node can never come back
+	GCVolumesOnNodeGC bool
+
 	// HostNetworks is a map of host host_network names to their configuration
 	HostNetworks map[string]*ClientHostNetworkConfig
 
 	// LastDrain contains metadata about the most recent drain operation
 	LastDrain *DrainMetadata
+
+	// NodeMaxAllocs defaults to 0 unless set in the client config
+	NodeMaxAllocs int
 
 	// LastMissedHeartbeatIndex stores the Raft index when the node last missed
 	// a heartbeat. It resets to zero once the node is marked as ready again.
@@ -2292,6 +2268,12 @@ func (n *Node) Canonicalize() {
 				n.NodeResources.NodeNetworks = append(n.NodeResources.NodeNetworks, nnr)
 			}
 		}
+
+		if n.NodeResources.Processors.Empty() {
+			n.NodeResources.Processors = NodeProcessorResources{
+				Topology: &numalib.Topology{},
+			}
+		}
 	}
 }
 
@@ -2367,7 +2349,6 @@ func (n *Node) HasEvent(msg string) bool {
 
 // Stub returns a summarized version of the node
 func (n *Node) Stub(fields *NodeStubFields) *NodeListStub {
-
 	addr, _, _ := net.SplitHostPort(n.HTTPAddr)
 
 	s := &NodeListStub{
@@ -3802,11 +3783,6 @@ type NodeReservedNetworkResources struct {
 	ReservedHostPorts string
 }
 
-// ParseReservedHostPorts returns the reserved host ports.
-func (n *NodeReservedNetworkResources) ParseReservedHostPorts() ([]uint64, error) {
-	return ParsePortRanges(n.ReservedHostPorts)
-}
-
 // AllocatedResources is the set of resources to be used by an allocation.
 type AllocatedResources struct {
 	// Tasks is a mapping of task name to the resources for the task.
@@ -4555,19 +4531,8 @@ type Job struct {
 	// job. This is opaque to Nomad.
 	Meta map[string]string
 
-	// ConsulToken is the Consul token that proves the submitter of the job has
-	// access to the Service Identity policies associated with the job's
-	// Consul Connect enabled services. This field is only used to transfer the
-	// token and is not stored after Job submission.
-	ConsulToken string
-
 	// ConsulNamespace is the Consul namespace
 	ConsulNamespace string
-
-	// VaultToken is the Vault token that proves the submitter of the job has
-	// access to the specified Vault policies. This field is only used to
-	// transfer the token and is not stored after Job submission.
-	VaultToken string
 
 	// VaultNamespace is the Vault namespace
 	VaultNamespace string
@@ -4917,26 +4882,10 @@ func (j *Job) Validate() error {
 			mErr.Errors = append(mErr.Errors, errors.New("ShutdownDelay must be a positive value"))
 		}
 
-		if tg.StopAfterClientDisconnect != nil && *tg.StopAfterClientDisconnect != 0 {
-			if *tg.StopAfterClientDisconnect > 0 &&
-				!(j.Type == JobTypeBatch || j.Type == JobTypeService) {
-				mErr.Errors = append(mErr.Errors, errors.New("stop_after_client_disconnect can only be set in batch and service jobs"))
-			} else if *tg.StopAfterClientDisconnect < 0 {
-				mErr.Errors = append(mErr.Errors, errors.New("stop_after_client_disconnect must be a positive value"))
-			}
-		}
-
 		if j.Type == "system" && tg.Count > 1 {
 			mErr.Errors = append(mErr.Errors,
 				fmt.Errorf("Job task group %s has count %d. Count cannot exceed 1 with system scheduler",
 					tg.Name, tg.Count))
-		}
-
-		if tg.MaxClientDisconnect != nil &&
-			(tg.ReschedulePolicy != nil && tg.ReschedulePolicy.Attempts > 0) &&
-			tg.PreventRescheduleOnLost {
-			err := fmt.Errorf("max_client_disconnect and prevent_reschedule_on_lost cannot be enabled when rechedule.attempts > 0")
-			mErr.Errors = append(mErr.Errors, err)
 		}
 	}
 
@@ -7037,14 +6986,6 @@ func (tg *TaskGroup) Copy() *TaskGroup {
 		ntg.ShutdownDelay = tg.ShutdownDelay
 	}
 
-	if tg.StopAfterClientDisconnect != nil {
-		ntg.StopAfterClientDisconnect = tg.StopAfterClientDisconnect
-	}
-
-	if tg.MaxClientDisconnect != nil {
-		ntg.MaxClientDisconnect = tg.MaxClientDisconnect
-	}
-
 	return ntg
 }
 
@@ -7079,18 +7020,6 @@ func (tg *TaskGroup) Canonicalize(job *Job) {
 
 	if tg.Disconnect != nil {
 		tg.Disconnect.Canonicalize()
-
-		if tg.MaxClientDisconnect != nil && tg.Disconnect.LostAfter == 0 {
-			tg.Disconnect.LostAfter = *tg.MaxClientDisconnect
-		}
-
-		if tg.StopAfterClientDisconnect != nil && tg.Disconnect.StopOnClientAfter == nil {
-			tg.Disconnect.StopOnClientAfter = tg.StopAfterClientDisconnect
-		}
-
-		if tg.PreventRescheduleOnLost && tg.Disconnect.Replace == nil {
-			tg.Disconnect.Replace = pointer.Of(false)
-		}
 	}
 
 	// Canonicalize Migrate for service jobs
@@ -7170,27 +7099,7 @@ func (tg *TaskGroup) Validate(j *Job) error {
 		mErr = multierror.Append(mErr, errors.New("Missing tasks for task group"))
 	}
 
-	if tg.MaxClientDisconnect != nil && tg.StopAfterClientDisconnect != nil {
-		mErr = multierror.Append(mErr, errors.New("Task group cannot be configured with both max_client_disconnect and stop_after_client_disconnect"))
-	}
-
-	if tg.MaxClientDisconnect != nil && *tg.MaxClientDisconnect < 0 {
-		mErr = multierror.Append(mErr, errors.New("max_client_disconnect cannot be negative"))
-	}
-
 	if tg.Disconnect != nil {
-		if tg.MaxClientDisconnect != nil && tg.Disconnect.LostAfter > 0 {
-			return multierror.Append(mErr, errors.New("using both lost_after and max_client_disconnect is not allowed"))
-		}
-
-		if tg.StopAfterClientDisconnect != nil && tg.Disconnect.StopOnClientAfter != nil {
-			return multierror.Append(mErr, errors.New("using both stop_after_client_disconnect and stop_on_client_after is not allowed"))
-		}
-
-		if tg.PreventRescheduleOnLost && tg.Disconnect.Replace != nil {
-			return multierror.Append(mErr, errors.New("using both prevent_reschedule_on_lost and replace is not allowed"))
-		}
-
 		if err := tg.Disconnect.Validate(j); err != nil {
 			mErr = multierror.Append(mErr, err)
 		}
@@ -7678,15 +7587,15 @@ func (tg *TaskGroup) Warnings(j *Job) error {
 	}
 
 	if tg.MaxClientDisconnect != nil {
-		mErr.Errors = append(mErr.Errors, errors.New("MaxClientDisconnect will be deprecated favor of Disconnect.LostAfter"))
+		mErr.Errors = append(mErr.Errors, errors.New("MaxClientDisconnect is deprecated and ignored in favor of Disconnect.LostAfter"))
 	}
 
 	if tg.StopAfterClientDisconnect != nil {
-		mErr.Errors = append(mErr.Errors, errors.New("StopAfterClientDisconnect will be deprecated favor of Disconnect.StopOnClientAfter"))
+		mErr.Errors = append(mErr.Errors, errors.New("StopAfterClientDisconnect is deprecated and ignored favor of Disconnect.StopOnClientAfter"))
 	}
 
 	if tg.PreventRescheduleOnLost {
-		mErr.Errors = append(mErr.Errors, errors.New("PreventRescheduleOnLost will be deprecated favor of Disconnect.Replace"))
+		mErr.Errors = append(mErr.Errors, errors.New("PreventRescheduleOnLost is deprecated and ignored in favor of Disconnect.Replace"))
 	}
 
 	// Check for mbits network field
@@ -7755,14 +7664,9 @@ func (tg *TaskGroup) GoString() string {
 	return fmt.Sprintf("*%#v", *tg)
 }
 
-// Replace is a helper meant to simplify the future depracation of
-// PreventRescheduleOnLost in favor of Disconnect.Replace
-// introduced in 1.8.0.
+// Replace is a helper meant to simplify the logic for getting
+// the Disconnect.Replace field of a task group.
 func (tg *TaskGroup) Replace() bool {
-	if tg.PreventRescheduleOnLost {
-		return false
-	}
-
 	if tg.Disconnect == nil || tg.Disconnect.Replace == nil {
 		return true
 	}
@@ -7770,14 +7674,9 @@ func (tg *TaskGroup) Replace() bool {
 	return *tg.Disconnect.Replace
 }
 
-// GetDisconnectLostTimeout is a helper meant to simplify the future depracation of
-// MaxClientDisconnect in favor of Disconnect.LostAfter
-// introduced in 1.8.0.
+// GetDisconnectLostTimeout is a helper meant to simplify the logic for
+// getting the Disconnect.LostAfter field of a task group.
 func (tg *TaskGroup) GetDisconnectLostTimeout() time.Duration {
-	if tg.MaxClientDisconnect != nil {
-		return *tg.MaxClientDisconnect
-	}
-
 	if tg.Disconnect != nil {
 		return tg.Disconnect.LostAfter
 	}
@@ -7785,14 +7684,9 @@ func (tg *TaskGroup) GetDisconnectLostTimeout() time.Duration {
 	return 0
 }
 
-// GetDisconnectStopTimeout is a helper meant to simplify the future depracation of
-// StopAfterClientDisconnect in favor of Disconnect.StopOnClientAfter
-// introduced in 1.8.0.
+// GetDisconnectStopTimeout is a helper meant to simplify the logic for
+// getting the Disconnect.StopOnClientAfter field of a task group.
 func (tg *TaskGroup) GetDisconnectStopTimeout() *time.Duration {
-	if tg.StopAfterClientDisconnect != nil {
-		return tg.StopAfterClientDisconnect
-	}
-
 	if tg.Disconnect != nil && tg.Disconnect.StopOnClientAfter != nil {
 		return tg.Disconnect.StopOnClientAfter
 	}
@@ -8490,6 +8384,10 @@ func validateServices(t *Task, tgNetworks Networks) error {
 			mErr.Errors = append(mErr.Errors, fmt.Errorf("service %q cannot use address_mode=\"alloc\", only services defined in a \"group\" block can use this mode", service.Name))
 		}
 
+		if service.AddressMode == AddressModeAllocIPv6 {
+			mErr.Errors = append(mErr.Errors, fmt.Errorf("service %q cannot use address_mode=\"alloc_ipv6\", only services defined in a \"group\" block can use this mode", service.Name))
+		}
+
 		// Ensure that services with the same name are not being registered for
 		// the same port
 		if _, ok := knownServices[service.Name+service.PortLabel]; ok {
@@ -8525,6 +8423,10 @@ func validateServices(t *Task, tgNetworks Networks) error {
 
 			if check.AddressMode == AddressModeAlloc {
 				mErr.Errors = append(mErr.Errors, fmt.Errorf("check %q cannot use address_mode=\"alloc\", only checks defined in a \"group\" service block can use this mode", service.Name))
+			}
+
+			if check.AddressMode == AddressModeAllocIPv6 {
+				mErr.Errors = append(mErr.Errors, fmt.Errorf("check %q cannot use address_mode=\"alloc_ipv6\", only checks defined in a \"group\" service block can use this mode", service.Name))
 			}
 
 			if !check.RequiresPort() {
@@ -8835,6 +8737,10 @@ type Template struct {
 	// ChangeMode is set to script.
 	ChangeScript *ChangeScript
 
+	// Once will wait for the templates to render and then exit without
+	// watching for changes.
+	Once bool
+
 	// Splay is used to avoid coordinated restarts of processes by applying a
 	// random wait between 0 and the given splay value before signalling the
 	// application of a change
@@ -8902,6 +8808,8 @@ func (t *Template) Equal(o *Template) bool {
 	case t.ChangeSignal != o.ChangeSignal:
 		return false
 	case !t.ChangeScript.Equal(o.ChangeScript):
+		return false
+	case t.Once != o.Once:
 		return false
 	case t.Splay != o.Splay:
 		return false
@@ -9151,44 +9059,6 @@ type AllocState struct {
 	Time  time.Time
 }
 
-// TaskHandle is  optional handle to a task propogated to the servers for use
-// by remote tasks. Since remote tasks are not implicitly lost when the node
-// they are assigned to is down, their state is migrated to the replacement
-// allocation.
-//
-// Minimal set of fields from plugins/drivers/task_handle.go:TaskHandle
-type TaskHandle struct {
-	// Version of driver state. Used by the driver to gracefully handle
-	// plugin upgrades.
-	Version int
-
-	// Driver-specific state containing a handle to the remote task.
-	DriverState []byte
-}
-
-func (h *TaskHandle) Copy() *TaskHandle {
-	if h == nil {
-		return nil
-	}
-
-	newTH := TaskHandle{
-		Version:     h.Version,
-		DriverState: make([]byte, len(h.DriverState)),
-	}
-	copy(newTH.DriverState, h.DriverState)
-	return &newTH
-}
-
-func (h *TaskHandle) Equal(o *TaskHandle) bool {
-	if h == nil || o == nil {
-		return h == o
-	}
-	if h.Version != o.Version {
-		return false
-	}
-	return bytes.Equal(h.DriverState, o.DriverState)
-}
-
 // Set of possible states for a task.
 const (
 	TaskStatePending = "pending" // The task is waiting to be run.
@@ -9223,9 +9093,9 @@ type TaskState struct {
 	// Series of task events that transition the state of the task.
 	Events []*TaskEvent
 
-	// Experimental -  TaskHandle is based on drivers.TaskHandle and used
-	// by remote task drivers to migrate task handles between allocations.
-	TaskHandle *TaskHandle
+	// // Experimental -  TaskHandle is based on drivers.TaskHandle and used
+	// // by remote task drivers to migrate task handles between allocations.
+	// TaskHandle *TaskHandle
 
 	// Enterprise Only - Paused is set to the paused state of the task. See
 	// task_sched.go
@@ -9261,7 +9131,6 @@ func (ts *TaskState) Copy() *TaskState {
 		}
 	}
 
-	newTS.TaskHandle = ts.TaskHandle.Copy()
 	return newTS
 }
 
@@ -9294,9 +9163,6 @@ func (ts *TaskState) Equal(o *TaskState) bool {
 	if !slices.EqualFunc(ts.Events, o.Events, func(ts, o *TaskEvent) bool {
 		return ts.Equal(o)
 	}) {
-		return false
-	}
-	if !ts.TaskHandle.Equal(o.TaskHandle) {
 		return false
 	}
 
@@ -10475,9 +10341,6 @@ type Vault struct {
 	// cluster default role.
 	Role string
 
-	// Policies is the set of policies that the task needs access to
-	Policies []string
-
 	// Namespace is the vault namespace that should be used.
 	Namespace string
 
@@ -10516,8 +10379,6 @@ func (v *Vault) Equal(o *Vault) bool {
 	}
 	switch {
 	case v.Role != o.Role:
-		return false
-	case !slices.Equal(v.Policies, o.Policies):
 		return false
 	case v.Namespace != o.Namespace:
 		return false
@@ -10568,11 +10429,6 @@ func (v *Vault) Validate() error {
 	}
 
 	var mErr multierror.Error
-	for _, p := range v.Policies {
-		if p == "root" {
-			_ = multierror.Append(&mErr, fmt.Errorf("Can not specify \"root\" policy"))
-		}
-	}
 
 	switch v.ChangeMode {
 	case VaultChangeModeSignal:
@@ -10731,6 +10587,11 @@ func (d *Deployment) Copy() *Deployment {
 	}
 
 	return c
+}
+
+// Stub implements support for pagination
+func (d *Deployment) Stub() (*Deployment, error) {
+	return d, nil
 }
 
 // Active returns whether the deployment is active or terminal.
@@ -11563,7 +11424,7 @@ func (a *Allocation) ShouldClientStop() bool {
 }
 
 // WaitClientStop uses the reschedule delay mechanism to block rescheduling until
-// StopAfterClientDisconnect's block interval passes
+// disconnect.stop_on_client_after's interval passes
 func (a *Allocation) WaitClientStop() time.Time {
 	tg := a.Job.LookupTaskGroup(a.TaskGroup)
 
@@ -11594,7 +11455,7 @@ func (a *Allocation) WaitClientStop() time.Time {
 	return t.Add(*tg.GetDisconnectStopTimeout() + kill)
 }
 
-// DisconnectTimeout uses the MaxClientDisconnect to compute when the allocation
+// DisconnectTimeout uses the Disconnect.LostAfter to compute when the allocation
 // should transition to lost.
 func (a *Allocation) DisconnectTimeout(now time.Time) time.Time {
 	if a == nil || a.Job == nil {
@@ -11629,15 +11490,13 @@ func (a *Allocation) SupportsDisconnectedClients(serverSupportsDisconnectedClien
 	return false
 }
 
-// PreventRescheduleOnLost determines if an alloc allows to have a replacement
+// PreventReplaceOnDisconnect determines if an alloc allows to have a replacement
 // when Disconnected.
-func (a *Allocation) PreventRescheduleOnDisconnect() bool {
+func (a *Allocation) PreventReplaceOnDisconnect() bool {
 	if a.Job != nil {
 		tg := a.Job.LookupTaskGroup(a.TaskGroup)
 		if tg != nil {
-			return (tg.Disconnect != nil && tg.Disconnect.Replace != nil &&
-				!*tg.Disconnect.Replace) ||
-				tg.PreventRescheduleOnLost
+			return !tg.Replace()
 		}
 	}
 
@@ -11903,6 +11762,22 @@ func (a *Allocation) NeedsToReconnect() bool {
 	return disconnected
 }
 
+// FollowupEvalForReconnect returns the ID of the allocation's follow-up eval if
+// the allocation is waiting to reconnect and the clientUpdate indicates that
+// the client has reconnected.
+func (a *Allocation) FollowupEvalForReconnect(clientUpdate *Allocation) (string, bool) {
+	if !a.NeedsToReconnect() || a.FollowupEvalID == "" {
+		return "", false
+	}
+
+	switch clientUpdate.ClientStatus {
+	case AllocClientStatusRunning, AllocClientStatusComplete, AllocClientStatusFailed:
+		return a.FollowupEvalID, true
+	}
+
+	return "", false
+}
+
 // LastStartOfTask returns the time of the last start event for the given task
 // using the allocations TaskStates. If the task has not started, the zero time
 // will be returned.
@@ -12038,6 +11913,9 @@ type AllocMetric struct {
 
 	// NodesInPool is the number of nodes in the node pool used by the job.
 	NodesInPool int
+
+	// NodePool is the node pool the node belongs to.
+	NodePool string
 
 	// NodesAvailable is the number of nodes available for evaluation per DC.
 	NodesAvailable map[string]int
@@ -13140,6 +13018,7 @@ func (p *Plan) NormalizeAllocations() {
 				DesiredDescription: alloc.DesiredDescription,
 				ClientStatus:       alloc.ClientStatus,
 				FollowupEvalID:     alloc.FollowupEvalID,
+				RescheduleTracker:  alloc.RescheduleTracker,
 			}
 		}
 	}
@@ -13443,6 +13322,7 @@ func (a *ACLPolicy) Stub() *ACLPolicyListStub {
 	return &ACLPolicyListStub{
 		Name:        a.Name,
 		Description: a.Description,
+		JobACL:      a.JobACL,
 		Hash:        a.Hash,
 		CreateIndex: a.CreateIndex,
 		ModifyIndex: a.ModifyIndex,
@@ -13485,6 +13365,7 @@ func (a *ACLPolicy) Validate() error {
 type ACLPolicyListStub struct {
 	Name        string
 	Description string
+	JobACL      *JobACL
 	Hash        []byte
 	CreateIndex uint64
 	ModifyIndex uint64
@@ -13680,7 +13561,7 @@ func (a *ACLToken) SetHash() []byte {
 	return hashVal
 }
 
-func (a *ACLToken) Stub() *ACLTokenListStub {
+func (a *ACLToken) Stub() (*ACLTokenListStub, error) {
 	return &ACLTokenListStub{
 		AccessorID:     a.AccessorID,
 		Name:           a.Name,
@@ -13693,7 +13574,7 @@ func (a *ACLToken) Stub() *ACLTokenListStub {
 		ExpirationTime: a.ExpirationTime,
 		CreateIndex:    a.CreateIndex,
 		ModifyIndex:    a.ModifyIndex,
-	}
+	}, nil
 }
 
 // ACLTokenListRequest is used to request a list of tokens

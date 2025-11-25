@@ -13,6 +13,7 @@ import (
 	"time"
 
 	humanize "github.com/dustin/go-humanize"
+	"github.com/hashicorp/go-set/v3"
 	"github.com/hashicorp/nomad/api"
 	"github.com/hashicorp/nomad/api/contexts"
 	"github.com/hashicorp/nomad/helper/pointer"
@@ -42,6 +43,7 @@ type NodeStatusCommand struct {
 	pageToken   string
 	filter      string
 	tmpl        string
+	openURL     bool
 }
 
 func (c *NodeStatusCommand) Help() string {
@@ -91,6 +93,9 @@ Node Status Options:
   -filter
     Specifies an expression used to filter query results.
 
+  -ui
+    Open the node status page in the browser.
+
   -os
     Display operating system name.
 
@@ -125,12 +130,17 @@ func (c *NodeStatusCommand) AutocompleteFlags() complete.Flags {
 			"-os":         complete.PredictAnything,
 			"-quiet":      complete.PredictAnything,
 			"-verbose":    complete.PredictNothing,
+			"-ui":         complete.PredictNothing,
 		})
 }
 
 func (c *NodeStatusCommand) AutocompleteArgs() complete.Predictor {
+	return nodePredictor(c.Client, nil)
+}
+
+func nodePredictor(factory ApiClientFactory, filter *set.Set[string]) complete.Predictor {
 	return complete.PredictFunc(func(a complete.Args) []string {
-		client, err := c.Meta.Client()
+		client, err := factory()
 		if err != nil {
 			return nil
 		}
@@ -161,6 +171,7 @@ func (c *NodeStatusCommand) Run(args []string) int {
 	flags.StringVar(&c.filter, "filter", "", "")
 	flags.IntVar(&c.perPage, "per-page", 0, "")
 	flags.StringVar(&c.pageToken, "page-token", "", "")
+	flags.BoolVar(&c.openURL, "ui", false, "")
 
 	if err := flags.Parse(args); err != nil {
 		return 1
@@ -307,6 +318,14 @@ Results have been paginated. To get the next page run:
 %s -page-token %s`, argsWithoutPageToken(os.Args), qm.NextToken))
 		}
 
+		hint, _ := c.Meta.showUIPath(UIHintContext{
+			Command: c.Name(),
+			OpenURL: c.openURL,
+		})
+		if hint != "" {
+			c.Ui.Warn(hint)
+		}
+
 		return 0
 	}
 
@@ -364,6 +383,7 @@ Results have been paginated. To get the next page run:
 	}
 
 	return c.formatNode(client, node)
+
 }
 
 func nodeDrivers(n *api.Node) []string {
@@ -499,6 +519,17 @@ func (c *NodeStatusCommand) formatNode(client *api.Client, node *api.Node) int {
 		basic = append(basic, fmt.Sprintf("Drivers|%s", strings.Join(nodeDrivers(node), ",")))
 		c.Ui.Output(c.Colorize().Color(formatKV(basic)))
 
+		hint, _ := c.Meta.showUIPath(UIHintContext{
+			Command: "node status single",
+			PathParams: map[string]string{
+				"nodeID": node.ID,
+			},
+			OpenURL: c.openURL,
+		})
+		if hint != "" {
+			c.Ui.Warn(hint)
+		}
+
 		// Output alloc info
 		if err := c.outputAllocInfo(node, nodeAllocs); err != nil {
 			c.Ui.Error(fmt.Sprintf("%s", err))
@@ -584,6 +615,17 @@ func (c *NodeStatusCommand) formatNode(client *api.Client, node *api.Node) int {
 	if err := c.outputAllocInfo(node, nodeAllocs); err != nil {
 		c.Ui.Error(fmt.Sprintf("%s", err))
 		return 1
+	}
+
+	hint, _ := c.Meta.showUIPath(UIHintContext{
+		Command: "node status single",
+		PathParams: map[string]string{
+			"nodeID": node.ID,
+		},
+		OpenURL: c.openURL,
+	})
+	if hint != "" {
+		c.Ui.Warn(hint)
 	}
 
 	return 0
@@ -912,16 +954,21 @@ func getAllocatedResources(client *api.Client, runningAllocs []*api.Allocation, 
 		mem += *alloc.Resources.MemoryMB
 		disk += *alloc.Resources.DiskMB
 	}
+	allocCount := strconv.Itoa(len(runningAllocs))
 
+	if node.NodeMaxAllocs != 0 {
+		allocCount = fmt.Sprintf("%d/%d", len(runningAllocs), node.NodeMaxAllocs)
+	}
 	resources := make([]string, 2)
-	resources[0] = "CPU|Memory|Disk"
-	resources[1] = fmt.Sprintf("%d/%d MHz|%s/%s|%s/%s",
+	resources[0] = "CPU|Memory|Disk|Alloc Count"
+	resources[1] = fmt.Sprintf("%d/%d MHz|%s/%s|%s/%s|%s",
 		cpu,
 		*total.CPU,
 		humanize.IBytes(uint64(mem*bytesPerMegabyte)),
 		humanize.IBytes(uint64(*total.MemoryMB*bytesPerMegabyte)),
 		humanize.IBytes(uint64(disk*bytesPerMegabyte)),
-		humanize.IBytes(uint64(*total.DiskMB*bytesPerMegabyte)))
+		humanize.IBytes(uint64(*total.DiskMB*bytesPerMegabyte)),
+		allocCount)
 
 	return resources
 }

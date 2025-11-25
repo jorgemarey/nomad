@@ -1,10 +1,11 @@
 ---
 layout: docs
-page_title: ACL Policy Specification
-description: Learn about Nomad's ACL policy specification.
+page_title: Nomad Access Control List (ACL) policy specification
+description: |-
+  Learn about Nomad's ACL policy specification. Review namespace, node, node pools, agent, operator, resource quota, host volume, and plugin rules policy structure and options. Configure ACLs for the Nomad UI.
 ---
 
-# ACL Policy Specification
+# Nomad Access Control List (ACL) policy specification
 
 The [Secure Nomad with Access Control] guide includes step-by-step instructions
 for bootstrapping Nomad's Access Control List (ACL) system, authoring policies,
@@ -68,7 +69,7 @@ plugin {
 }
 ```
 
-## Namespace Rules
+## Namespace rules
 
 Namespace rules are defined with a `namespace` block. An ACL policy can include
 zero, one, or more namespace rules.
@@ -77,8 +78,8 @@ Namespace rules control access to APIs in Nomad that are namespaced:
 [Jobs][api_jobs], [Allocations][api_allocations],
 [Deployments][api_deployments], [Evaluations][api_evaluations],
 [Recommendations][api_recommendations], [Scaling
-Policies][api_scaling_policies], [Services][api_services], and [CSI
-Volumes][api_volumes]. Namespace rules also filter items related to the above
+Policies][api_scaling_policies], [Services][api_services], and
+[Volumes][api_volumes]. Namespace rules also filter items related to the above
 APIs from the [Event Stream][api_events] and [Search][api_search] APIs.
 
 Each namespace rule is labeled with the namespace name it applies to. If no
@@ -149,6 +150,11 @@ of `capabilities`. This includes:
   and listing external volumes and snapshots.
 - `csi-mount-volume` - Allows jobs to be submitted that claim a CSI volume. This
   implicitly grants `csi-read-volume`.
+- `host-volume-create` - Allows creating dynamic host volumes. This implicitly grants `host-volume-read`.
+- `host-volume-delete` - Allows deleting dynamic host volumes.
+- `host-volume-read` - Allows inspecting dynamic host volumes.
+- `host-volume-register` - Allows registering dynamic host volumes that have been created without a plugin. This implicitly grants `host-volume-read` and `host-volume-create`.
+- `host-volume-write` - Allows all write operations on dynamic host volumes. This implicitly grants `host-volume-read`, `host-volume-create`, `host-volume-register`, and `host-volume-delete`.
 - `list-scaling-policies` - Allows listing scaling policies.
 - `read-scaling-policy` - Allows inspecting a scaling policy.
 - `read-job-scaling` - Allows inspecting the current scaling of a job.
@@ -156,19 +162,18 @@ of `capabilities`. This includes:
 - `sentinel-override` - Allows soft mandatory policies to be overridden.
 - `submit-recommendation` - Allows submitting vertical job scaling recommendations.
 
-The coarse-grained policy permissions are shorthand for the following fine-
-grained namespace capabilities:
+The coarse-grained policy permissions are shorthand for these fine-grained namespace capabilities.
 
-<!-- markdownlint-disable -->
+
 
 | Policy  | Capabilities                                                                                                                                                                                                                                                                                              |
 |---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `deny`  | deny                                                                                                                                                                                                                                                                                                      |
-| `read`  | list-jobs<br />parse-job<br />read-job<br />csi-list-volume<br />csi-read-volume<br />list-scaling-policies<br />read-scaling-policy<br />read-job-scaling                                                                                                                                                |
-| `write` | list-jobs<br />parse-job<br />read-job<br />submit-job<br />dispatch-job<br />read-logs<br />read-fs<br />alloc-exec<br />alloc-lifecycle<br />csi-write-volume<br />csi-mount-volume<br />list-scaling-policies<br />read-scaling-policy<br />read-job-scaling<br />scale-job<br />submit-recommendation |
+| `read`  | list-jobs<br />parse-job<br />read-job<br />csi-list-volume<br />csi-read-volume<br />host-volume-read<br />list-scaling-policies<br />read-scaling-policy<br />read-job-scaling                                                                                                                                                |
+| `write` | list-jobs<br />parse-job<br />read-job<br />submit-job<br />dispatch-job<br />read-logs<br />read-fs<br />alloc-exec<br />alloc-lifecycle<br />csi-write-volume<br />csi-mount-volume<br />host-volume-write<br />list-scaling-policies<br />read-scaling-policy<br />read-job-scaling<br />scale-job<br />submit-recommendation |
 | `scale` | list-scaling-policies<br />read-scaling-policy<br />read-job-scaling<br />scale-job                                                                                                                                                                                                                       |
 
-<!-- markdownlint-enable -->
+
 
 If you provide both a `policy` and `capabilities` list, the capabilities are
 merged. For example, the policy below adds the `submit-job` capability to the `read`
@@ -260,7 +265,7 @@ The `policy` field for the node rule can have one of the following values:
 - `deny`: do not allow the resource to be read or modified. Deny takes
   precedence when multiple policies are associated with a token.
 
-## Node Pools rules
+## Node pools rules
 
 Node pool rules are defined with a `node_pool` block. An ACL policy can
 include zero, one, or more node pool rules.
@@ -372,7 +377,7 @@ The `policy` field for the quota rule can have one of the following values:
 - `deny`: do not allow the resource to be read or modified. Deny takes
   precedence when multiple policies are associated with a token.
 
-## Host Volume rules
+## Host volume rules
 
 The `host_volume` rule controls access to mounting and accessing [host
 volumes][host_volumes]. An ACL Policy can include zero, one, or more host volume
@@ -413,7 +418,7 @@ of fine-grained `capabilities`. These include:
 The coarse-grained policy permissions are shorthand for the fine grained
 capabilities:
 
-<!-- markdownlint-disable -->
+
 
 | Policy  | Capabilities                        |
 |---------|-------------------------------------|
@@ -421,7 +426,7 @@ capabilities:
 | `read`  | mount-readonly                      |
 | `write` | mount-readonly<br />mount-readwrite |
 
-<!-- markdownlint-enable -->
+
 
 When both the policy short hand and a capabilities list are provided, the
 capabilities are merged.
@@ -449,7 +454,7 @@ The `policy` field for the plugin rule can have one of the following values:
 - `deny`: do not allow the resource to be read or modified. Deny takes
   precedence when multiple policies are associated with a token.
 
-## Configuring ACLs for the web UI
+## Configure ACLs for the web UI
 
 The Nomad web UI uses the API endpoints `/v1/agent` and `/v1/node` for nearly
 every page. ACL policies for users who will use the Nomad UI should include the
@@ -474,7 +479,7 @@ plugin {
 }
 ```
 
-[Secure Nomad with Access Control]: /nomad/tutorials/access-control
+[Secure Nomad with Access Control]: /nomad/docs/secure/acl
 [hcl]: https://github.com/hashicorp/hcl
 [hcl_syntax_spec]: https://github.com/hashicorp/hcl/blob/main/hclsyntax/spec.md
 [api_jobs]: /nomad/api-docs/jobs
@@ -495,5 +500,5 @@ plugin {
 [host_volumes]: /nomad/docs/configuration/client#host_volume-block
 [api_plugins]: /nomad/api-docs/plugins/
 [Variables]: /nomad/docs/concepts/variables
-[federated]: /nomad/tutorials/manage-clusters/federation
+[federated]: //nomad/docs/deploy/clusters/federate-regions
 [`authoritative_region`]: /nomad/docs/configuration/server#authoritative_region

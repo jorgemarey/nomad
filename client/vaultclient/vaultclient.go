@@ -13,10 +13,9 @@ import (
 	"sync"
 	"time"
 
-	metrics "github.com/armon/go-metrics"
 	hclog "github.com/hashicorp/go-hclog"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/nomad/helper/useragent"
-	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
 	vaultapi "github.com/hashicorp/vault/api"
 )
@@ -24,11 +23,6 @@ import (
 // VaultClientFunc is the interface of a function that retreives the VaultClient
 // by cluster name. This function is injected into the allocrunner/taskrunner
 type VaultClientFunc func(string) (VaultClient, error)
-
-// TokenDeriverFunc takes in an allocation and a set of tasks and derives a
-// wrapped token for all the tasks, from the nomad server. All the derived
-// wrapped tokens will be unwrapped using the vault API client.
-type TokenDeriverFunc func(*structs.Allocation, []string, *vaultapi.Client) (map[string]string, error)
 
 // JWTLoginRequest is used to derive a Vault ACL token using a JWT login
 // request.
@@ -55,14 +49,10 @@ type VaultClient interface {
 	// Stop terminates the renewal loop for tokens and secrets
 	Stop()
 
-	// DeriveToken contacts the nomad server and fetches wrapped tokens for
-	// a set of tasks. The wrapped tokens will be unwrapped using vault and
-	// returned.
-	DeriveToken(*structs.Allocation, []string) (map[string]string, error)
-
 	// DeriveTokenWithJWT returns a Vault ACL token using the JWT login
-	// endpoint, along with whether or not the token is renewable.
-	DeriveTokenWithJWT(context.Context, JWTLoginRequest) (string, bool, error)
+	// endpoint, along with whether or not the token is renewable and its lease
+	// duration.
+	DeriveTokenWithJWT(context.Context, JWTLoginRequest) (string, bool, int, error)
 
 	// RenewToken renews a token with the given increment and adds it to
 	// the min-heap for periodic renewal.
@@ -76,11 +66,6 @@ type VaultClient interface {
 // Implementation of VaultClient interface to interact with vault and perform
 // token and lease renewals periodically.
 type vaultClient struct {
-	// tokenDeriver is a function pointer passed in by the client to derive
-	// tokens by making RPC calls to the nomad server. The wrapped tokens
-	// returned by the nomad server will be unwrapped by this function
-	// using the vault API client.
-	tokenDeriver TokenDeriverFunc
 
 	// running indicates if the renewal loop is active or not
 	running bool
@@ -142,7 +127,7 @@ type vaultClientHeap struct {
 type vaultDataHeapImp []*vaultClientHeapEntry
 
 // NewVaultClient returns a new vault client from the given config.
-func NewVaultClient(config *config.VaultConfig, logger hclog.Logger, tokenDeriver TokenDeriverFunc) (*vaultClient, error) {
+func NewVaultClient(config *config.VaultConfig, logger hclog.Logger) (*vaultClient, error) {
 	if config == nil {
 		return nil, fmt.Errorf("nil vault config")
 	}
@@ -150,13 +135,11 @@ func NewVaultClient(config *config.VaultConfig, logger hclog.Logger, tokenDerive
 	logger = logger.Named("vault").With("name", config.Name)
 
 	c := &vaultClient{
-		config: config,
-		stopCh: make(chan struct{}),
-		// Update channel should be a buffered channel
-		updateCh:     make(chan struct{}, 1),
-		heap:         newVaultClientHeap(),
-		logger:       logger,
-		tokenDeriver: tokenDeriver,
+		config:   config,
+		stopCh:   make(chan struct{}),
+		updateCh: make(chan struct{}, 1), // Update channel should be buffered.
+		heap:     newVaultClientHeap(),
+		logger:   logger,
 	}
 
 	if !config.IsEnabled() {
@@ -254,40 +237,13 @@ func (c *vaultClient) unlockAndUnset() {
 	c.lock.Unlock()
 }
 
-// DeriveToken takes in an allocation and a set of tasks and for each of the
-// task, it derives a vault token from nomad server and unwraps it using vault.
-// The return value is a map containing all the unwrapped tokens indexed by the
-// task name.
-func (c *vaultClient) DeriveToken(alloc *structs.Allocation, taskNames []string) (map[string]string, error) {
-	if !c.config.IsEnabled() {
-		return nil, fmt.Errorf("vault client not enabled")
-	}
-	if !c.isRunning() {
-		return nil, fmt.Errorf("vault client is not running")
-	}
-
-	c.lock.Lock()
-	defer c.unlockAndUnset()
-
-	// Use the token supplied to interact with vault
-	c.client.SetToken("")
-
-	tokens, err := c.tokenDeriver(alloc, taskNames, c.client)
-	if err != nil {
-		c.logger.Error("error deriving token", "error", err, "alloc_id", alloc.ID, "task_names", taskNames)
-		return nil, err
-	}
-
-	return tokens, nil
-}
-
 // DeriveTokenWithJWT returns a Vault ACL token using the JWT login endpoint.
-func (c *vaultClient) DeriveTokenWithJWT(ctx context.Context, req JWTLoginRequest) (string, bool, error) {
+func (c *vaultClient) DeriveTokenWithJWT(ctx context.Context, req JWTLoginRequest) (string, bool, int, error) {
 	if !c.config.IsEnabled() {
-		return "", false, fmt.Errorf("vault client not enabled")
+		return "", false, 0, fmt.Errorf("vault client not enabled")
 	}
 	if !c.isRunning() {
-		return "", false, fmt.Errorf("vault client is not running")
+		return "", false, 0, fmt.Errorf("vault client is not running")
 	}
 
 	c.lock.Lock()
@@ -308,20 +264,20 @@ func (c *vaultClient) DeriveTokenWithJWT(ctx context.Context, req JWTLoginReques
 		},
 	)
 	if err != nil {
-		return "", false, fmt.Errorf("failed to login with JWT: %v", err)
+		return "", false, 0, fmt.Errorf("failed to login with JWT: %v", err)
 	}
 	if s == nil {
-		return "", false, errors.New("JWT login returned an empty secret")
+		return "", false, 0, errors.New("JWT login returned an empty secret")
 	}
 	if s.Auth == nil {
-		return "", false, errors.New("JWT login did not return a token")
+		return "", false, 0, errors.New("JWT login did not return a token")
 	}
 
 	for _, w := range s.Warnings {
 		c.logger.Warn("JWT login warning", "warning", w)
 	}
 
-	return s.Auth.ClientToken, s.Auth.Renewable, nil
+	return s.Auth.ClientToken, s.Auth.Renewable, s.Auth.LeaseDuration, nil
 }
 
 // RenewToken renews the supplied token for a given duration (in seconds) and
@@ -413,6 +369,7 @@ func (c *vaultClient) renew(req *vaultClientRenewalRequest) error {
 		} else {
 			// Don't set this if renewal fails
 			leaseDuration = renewResp.Auth.LeaseDuration
+			req.increment = leaseDuration
 		}
 
 		// Reset the token in the API client before returning

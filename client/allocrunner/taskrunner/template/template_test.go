@@ -158,6 +158,10 @@ func (h *testHarness) startWithErr() error {
 		MaxTemplateEventRate: h.emitRate,
 		TaskID:               uuid.Generate(),
 	})
+
+	if err == nil {
+		go h.manager.Run()
+	}
 	return err
 }
 
@@ -304,6 +308,31 @@ func TestTaskTemplateManager_InvalidConfig(t *testing.T) {
 				MaxTemplateEventRate: DefaultMaxTemplateEventRate,
 			},
 			expectedErr: "parse signal",
+		},
+		{
+			name: "different Once values",
+			config: &TaskTemplateManagerConfig{
+				UnblockCh: hooks.UnblockCh,
+				Templates: []*structs.Template{
+					{
+						DestPath:     "foo",
+						EmbeddedTmpl: "hello, world",
+						Once:         true,
+					},
+					{
+						DestPath:     "bar",
+						EmbeddedTmpl: "hello, world",
+						Once:         false,
+					},
+				},
+				ClientConfig:         clientConfig,
+				Lifecycle:            hooks,
+				Events:               hooks,
+				TaskDir:              taskDir,
+				EnvBuilder:           envBuilder,
+				MaxTemplateEventRate: DefaultMaxTemplateEventRate,
+			},
+			expectedErr: "templates should have same Once value",
 		},
 	}
 
@@ -2525,6 +2554,65 @@ func TestTaskTemplateManager_Template_Wait_Set(t *testing.T) {
 	}
 }
 
+func Test_newRunnerConfig_consul(t *testing.T) {
+	ci.Parallel(t)
+
+	testCases := []struct {
+		name                 string
+		inputConfig          *TaskTemplateManagerConfig
+		expectedOutputConfig *ctconf.ConsulConfig
+	}{
+		{
+			name: "consul WI token",
+			inputConfig: &TaskTemplateManagerConfig{
+				ConsulConfig: sconfig.DefaultConsulConfig(),
+				ConsulToken:  "token",
+				ClientConfig: config.DefaultConfig(),
+			},
+			expectedOutputConfig: &ctconf.ConsulConfig{
+				Address:   pointer.Of("127.0.0.1:8500"),
+				Namespace: pointer.Of(""),
+				Auth:      ctconf.DefaultAuthConfig(),
+				Retry:     ctconf.DefaultRetryConfig(),
+				SSL:       ctconf.DefaultSSLConfig(),
+				Token:     pointer.Of("token"),
+				TokenFile: pointer.Of(""),
+				Transport: ctconf.DefaultTransportConfig(),
+			},
+		},
+		{
+			name: "no consul WI token",
+			inputConfig: &TaskTemplateManagerConfig{
+				ConsulConfig: sconfig.DefaultConsulConfig(),
+				ClientConfig: config.DefaultConfig(),
+			},
+			expectedOutputConfig: &ctconf.ConsulConfig{
+				Address:   pointer.Of("127.0.0.1:8500"),
+				Namespace: pointer.Of(""),
+				Auth:      ctconf.DefaultAuthConfig(),
+				Retry:     ctconf.DefaultRetryConfig(),
+				SSL:       ctconf.DefaultSSLConfig(),
+				Token:     pointer.Of(""),
+				TokenFile: pointer.Of(""),
+				Transport: ctconf.DefaultTransportConfig(),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+
+			// Finalize the expected configuration, so we don't have to set up
+			// all the pointers.
+			tc.expectedOutputConfig.Finalize()
+
+			actualOutputConfig, err := newRunnerConfig(tc.inputConfig, nil)
+			must.NoError(t, err)
+			must.Eq(t, tc.expectedOutputConfig, actualOutputConfig.Consul)
+		})
+	}
+}
+
 // TestTaskTemplateManager_Template_ErrMissingKey_Set asserts that all template level
 // configuration is accurately mapped from the template to the TaskTemplateManager's
 // template config.
@@ -2655,4 +2743,32 @@ func TestTaskTemplateManager_writeToFile(t *testing.T) {
 	r, err = os.ReadFile(path)
 	must.NoError(t, err)
 	must.Eq(t, "hello", string(r))
+}
+
+func TestTaskTemplateManager_deniedSprig(t *testing.T) {
+	ci.Parallel(t)
+
+	file := "my.tmpl"
+	template := &structs.Template{
+		EmbeddedTmpl: `{{ "hello" | sprig_env }}`,
+		DestPath:     file,
+		ChangeMode:   structs.TemplateChangeModeNoop,
+	}
+
+	harness := newTestHarness(t, []*structs.Template{template}, false, false)
+
+	must.NoError(t, harness.startWithErr(), must.Sprint("couldn't setup initial harness"))
+	defer harness.stop()
+
+	// Using sprig_env should cause a kill
+	select {
+	case <-harness.mockHooks.UnblockCh:
+	case <-harness.mockHooks.EmitEventCh:
+		t.Fatalf("Task event should not have been emitted")
+	case e := <-harness.mockHooks.KillCh:
+		must.StrContains(t, e.DisplayMessage, "not defined")
+	case <-time.After(time.Duration(5*testutil.TestMultiplier()) * time.Second):
+		t.Fatalf("timeout")
+	}
+
 }

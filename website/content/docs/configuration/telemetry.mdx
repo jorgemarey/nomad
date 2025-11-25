@@ -23,7 +23,7 @@ telemetry {
 
 This section of the documentation only covers the configuration options for the
 `telemetry` block. To understand the architecture and metrics themselves,
-refer to the [Telemetry guide](/nomad/docs/operations/monitoring-nomad).
+refer to the [Telemetry guide](/nomad/docs/monitor).
 
 ## `telemetry` Parameters
 
@@ -149,8 +149,10 @@ telemetry {
 
 These `telemetry` parameters apply to [Prometheus].
 
-- `prometheus_metrics` `(bool: false)` - Specifies whether the agent should
-  make Prometheus formatted metrics available at `/v1/metrics?format=prometheus`.
+- `prometheus_metrics` `(bool: false)` - Specifies whether the agent should make
+  Prometheus formatted metrics available at `/v1/metrics?format=prometheus`.
+  Nomad's Prometheus client retains metrics in memory unless scraped, so you
+  should not enable this field unless you are collecting metrics via Promtheus.
 
 ### `circonus` (Apica)
 

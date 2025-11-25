@@ -4,6 +4,7 @@
 package interfaces
 
 import (
+	"github.com/hashicorp/nomad/client/taskenv"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
@@ -16,7 +17,7 @@ type RunnerHook interface {
 // non-terminal allocations. Terminal allocations do *not* call prerun.
 type RunnerPrerunHook interface {
 	RunnerHook
-	Prerun() error
+	Prerun(*taskenv.TaskEnv) error
 }
 
 // A RunnerPreKillHook is executed inside of KillTasks before
@@ -29,8 +30,8 @@ type RunnerPreKillHook interface {
 }
 
 // A RunnerPostrunHook is executed after calling TaskRunner.Run, even for
-// terminal allocations. Therefore Postrun hooks must be safe to call without
-// first calling Prerun hooks.
+// terminal allocations, and all Postrun hooks will be run even if any of them error.
+// Therefore, Postrun hooks must be safe to call without first calling Prerun hooks.
 type RunnerPostrunHook interface {
 	RunnerHook
 	Postrun() error
@@ -55,7 +56,8 @@ type RunnerUpdateHook interface {
 }
 
 type RunnerUpdateRequest struct {
-	Alloc *structs.Allocation
+	Alloc    *structs.Allocation
+	AllocEnv *taskenv.TaskEnv
 }
 
 // A RunnerTaskRestartHook is executed just before the allocation runner is

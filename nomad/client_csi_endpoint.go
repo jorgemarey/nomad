@@ -6,13 +6,13 @@ package nomad
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
-	metrics "github.com/armon/go-metrics"
 	log "github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
+	metrics "github.com/hashicorp/go-metrics/compat"
 
 	cstructs "github.com/hashicorp/nomad/client/structs"
 	"github.com/hashicorp/nomad/nomad/structs"
@@ -280,7 +280,7 @@ func (a *ClientCSI) sendCSINodeRPC(nodeID, method, fwdMethod, op string, args an
 	return nil
 }
 
-// clientIDsForController returns a shuffled list of client IDs where the
+// clientIDsForController returns a sorted list of client IDs where the
 // controller plugin is expected to be running.
 func (a *ClientCSI) clientIDsForController(pluginID string) ([]string, error) {
 
@@ -354,7 +354,7 @@ func (a *ClientCSI) clientIDsForController(pluginID string) ([]string, error) {
 	// and have undocumented expectations of using k8s-specific sidecars to
 	// leader elect. Sort the client IDs so that we prefer sending requests to
 	// the same controller to hack around this.
-	clientIDs = sort.StringSlice(clientIDs)
+	slices.Sort(clientIDs)
 
 	return clientIDs, nil
 }

@@ -1,14 +1,14 @@
 ---
 layout: docs
-page_title: template Block - Job Specification
+page_title: template block in the job specification
 description: |-
-  The "template" block instantiates an instance of a template renderer. This
+  The `template` block instantiates an instance of a template renderer. This
   creates a convenient way to ship configuration files that are populated from
   environment variables, Consul data, Vault secrets, or just general
   configurations within a Nomad task.
 ---
 
-# `template` Block
+# `template` block in the job specification
 
 <Placement groups={['job', 'group', 'task', 'template']} />
 
@@ -43,7 +43,7 @@ For a full list of the API template functions, please refer to the [Consul
 Template documentation][ct_api]. For a an introduction to Go templates, please
 refer to the [Learn Go Template Syntax][gt_learn] guide.
 
-## `template` Parameters
+## Parameters
 
 - `change_mode` `(string: "restart")` - Specifies the behavior Nomad should take
   if the rendered template changes. Nomad will always write the new contents of
@@ -118,6 +118,12 @@ refer to the [Learn Go Template Syntax][gt_learn] guide.
   inside the container may have different IDs than on the host system. This
   feature will also **not** work with Docker Desktop.
 
+- `once` `(bool: false)` - Specifies that the client will wait for the template
+  to be rendered, and then no longer watch the dependencies specified in the
+  template. This is useful for templates that do not need to be updated. Once mode
+  implicitly disables wait/quiescence timers for this template, and ignores change
+  mode/signal/script settings.
+
 - `right_delimiter` `(string: "}}")` - Specifies the right delimiter to use in the
   template. The default is "}}" for some templates, it may be easier to use a
   different delimiter that does not conflict with the output file itself.
@@ -154,12 +160,12 @@ refer to the [Learn Go Template Syntax][gt_learn] guide.
 
 - `vault_grace` `(string: "15s")` - [Deprecated](https://github.com/hashicorp/consul-template/issues/1268)
 
-## `template` Examples
+## Examples
 
 The following examples only show the `template` blocks. Remember that the
 `template` block is only valid in the placements listed above.
 
-### Inline Template
+### Inline template
 
 This example uses an inline template to render a file to disk. This file watches
 various keys in Consul for changes:
@@ -187,7 +193,7 @@ template {
 }
 ```
 
-### Remote Template
+### Remote template
 
 This example uses an [`artifact`][artifact] block to download an input template
 before passing it to the template engine:
@@ -221,7 +227,7 @@ EOH
 }
 ```
 
-### Node Variables
+### Node variables
 
 Use the `env` function to access the Node's attributes and metadata inside a
 template. Note the `meta.` syntax here applies only to node meta fields.
@@ -239,7 +245,7 @@ template {
 }
 ```
 
-### Environment Variables
+### Environment variables
 
 Templates may be used to create environment variables for tasks. These templates
 work exactly like other templates except once the templates are written, they
@@ -303,7 +309,7 @@ DB_PASSWD={{ .Data.data.DB_PASSWD | toJSON }}
 
 For more details see [go-envparser's README][go-envparse].
 
-### Template Destinations
+### Template destinations
 
 Templates are rendered into the task working directory. Drivers without
 filesystem isolation (such as `raw_exec`) or drivers that build a chroot in
@@ -344,9 +350,9 @@ in the Nomad client logs which reports "watching this many dependencies could
 DDoS your servers", referring to the Vault, Consul, or Nomad cluster being
 queried.
 
-## Nomad Integration
+## Nomad integration
 
-### Nomad Services
+### Nomad services
 
 Nomad service registrations can be queried using the `nomadService` and
 `nomadServices` functions. The requests are tied to the same namespace as the
@@ -376,7 +382,7 @@ EOF
   }
 ```
 
-### Simple Load Balancing with Nomad Services
+### Simple load balancing with Nomad services
 
 The `nomadService` function now supports simple load balancing by selecting
 instances of a service via [rendezvous hashing][rhash].
@@ -405,7 +411,7 @@ EOH
 }
 ```
 
-### Nomad Variables
+### Nomad variables
 
 <Warning>
 
@@ -584,7 +590,7 @@ EOH
 }
 ```
 
-## Consul Integration
+## Consul integration
 
 <Warning>
 
@@ -619,7 +625,7 @@ APP_NAME = "{{key "app/name"}}"
   }
 ```
 
-### Consul Services
+### Consul services
 
 The Consul service catalog can be queried using the [`service`][ct_api_service]
 and [`services`][ct_api_services] functions. For Connect-capable services, use
@@ -648,7 +654,7 @@ upstream {{ .Name | toLower }} {
   }
 ```
 
-## Vault Integration
+## Vault integration
 
 <Warning>
 
@@ -659,7 +665,7 @@ for more details and to adjust the retry behaviour.
 
 </Warning>
 
-### PKI Certificate
+### PKI certificate
 
 Vault is a popular open source tool for managing secrets. In addition to acting
 as an encrypted KV store, Vault can also generate dynamic secrets, like PKI/TLS
@@ -784,17 +790,18 @@ access it by index. This secret was set using
   }
 ```
 
-## Client Configuration
+## Client configuration
 
 The `template` block has the following [client configuration
 options](/nomad/docs/configuration/client#options):
 
-- `function_denylist` `([]string: ["plugin"])` - Specifies a list of template
-  rendering functions that should be disallowed in job specs. By default, the
-  `plugin` function is disallowed as it allows running arbitrary commands on the
-  host as root (unless Nomad is configured to run as a non-root user),
-  `executeTemplate` is disallowed to prevent accidental or malicious infinitely
-  recursive execution, and `writeToFile` is disallowed.
+- `function_denylist` `([]string: ["plugin", "executeTemplate",
+  "writeToFile"])` - Specifies a list of template rendering functions that
+  should be disallowed in job specs. By default, the `plugin` function is
+  disallowed as it allows running arbitrary commands on the host as root (unless
+  Nomad is configured to run as a non-root user), `executeTemplate` is
+  disallowed to prevent accidental or malicious infinitely recursive execution,
+  and `writeToFile` is disallowed.
 
 - `disable_file_sandbox` `(bool: false)` - Allows templates access to arbitrary
   files on the client host via the `file` function. By default, templates can
@@ -812,12 +819,12 @@ options](/nomad/docs/configuration/client#options):
 [nvars]: /nomad/docs/concepts/variables 'Nomad Variables'
 [ct_api_tree]: https://github.com/hashicorp/consul-template/blob/master/docs/templating-language.md#tree 'Consul Template API by HashiCorp - tree'
 [gt]: https://pkg.go.dev/text/template 'Go template package'
-[gt_learn]: /nomad/tutorials/templates/go-template-syntax
+[gt_learn]: /nomad/docs/reference/go-template-syntax
 [artifact]: /nomad/docs/job-specification/artifact 'Nomad artifact Job Specification'
-[env]: /nomad/docs/runtime/environment 'Nomad Runtime Environment'
-[nodevars]: /nomad/docs/runtime/interpolation#interpreted_node_vars 'Nomad Node Variables'
+[env]: /nomad/docs/reference/runtime-environment-settings 'Nomad Runtime Environment'
+[nodevars]: /nomad/docs/reference/runtime-variable-interpolation#interpreted_node_vars 'Nomad Node Variables'
 [go-envparse]: https://github.com/hashicorp/go-envparse#readme 'The go-envparse Readme'
-[task working directory]: /nomad/docs/runtime/environment#task-directories 'Task Directories'
+[task working directory]: /nomad/docs/reference/runtime-environment-settings#task-directories 'Task Directories'
 [filesystem internals]: /nomad/docs/concepts/filesystem#templates-artifacts-and-dispatch-payloads
 [`client.template.wait_bounds`]: /nomad/docs/configuration/client#wait_bounds
 [rhash]: https://en.wikipedia.org/wiki/Rendezvous_hashing

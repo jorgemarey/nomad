@@ -1,13 +1,11 @@
 ---
 layout: docs
-page_title: volume Block - Job Specification
+page_title: volume block in the job specification
 description: >-
-  The "volume" block allows the group to specify that it requires a given
-  volume from the cluster. Nomad will automatically handle ensuring that the
-  volume is available and mounted into the task.
+  Configure storage volumes in the `volume` block of a Nomad job specification. Specify dynamic host or Container Storage Interface (CSI) volume type, node access mode, filesystem or block device attachment mode, and mount options. Enable read only access and mounting a unique volume per node. Learn about volume interpolation.
 ---
 
-# `volume` Block
+# `volume` block in the job specification
 
 <Placement groups={['job', 'group', 'volume']} />
 
@@ -50,19 +48,22 @@ job "docs" {
 ```
 
 
-The Nomad server will ensure that the allocations are only scheduled
-on hosts that have a set of volumes that meet the criteria specified
-in the `volume` blocks. These may be [host volumes][host_volume]
-configured on the client, or [CSI volumes][csi_volume] dynamically
-mounted by [CSI plugins][csi_plugin].
+The Nomad server ensures that the allocations are only scheduled on hosts
+that have a set of volumes that meet the criteria specified in the `volume`
+blocks. These may be [static host volumes][host_volume] configured on the
+client, [dynamic host volumes][] created via [`volume create`][] or [`volume
+register`][], or [CSI volumes][csi_volume] dynamically mounted by [CSI
+plugins][csi_plugin].
 
-The Nomad client will make the volumes available to tasks according to
+The Nomad client makes the volumes available to tasks according to
 the [volume_mount][volume_mount] block in the `task` configuration.
 
-## `volume` Parameters
+## Parameters
 
-- `type` `(string: "")` - Specifies the type of a given volume. The
-  valid volume types are `"host"` and `"csi"`.
+- `type` `(string: "")` - Specifies the type of a given volume. The valid volume
+  types are `"host"` and `"csi"`. Setting the `"host"` value can request either
+  statically configured host volumes or dynamic host volumes, depending on what
+  is available on a given node.
 
 - `source` `(string: <required>)` - The name of the volume to
   request. When using `host_volume`'s this should match the published
@@ -75,6 +76,13 @@ the [volume_mount][volume_mount] block in the `task` configuration.
   used for validating `host_volume` ACLs and for scheduling when a
   matching `host_volume` requires `read_only` usage.
 
+- `sticky` `(bool: false)` - Specifies that this volume sticks to the allocation
+  that uses it. Upon every reschedule and replacement, the task
+  group always receives the volume with the same ID, if available. Use sticky
+  volumes for [stateful deployments]. You may only use the `sticky` field for
+  dynamic host volumes. For CSI volumes, the `per_alloc` field provides similar
+  functionality
+
 - `per_alloc` `(bool: false)` - Specifies that the `source` of the volume
   should have the suffix `[n]`, where `n` is the allocation index. This allows
   mounting a unique volume per allocation, so long as the volume's source is
@@ -83,24 +91,52 @@ the [volume_mount][volume_mount] block in the `task` configuration.
   volume ID `myvolume[0]`.
 
   The `per_alloc` field cannot be true for system jobs, sysbatch jobs, or jobs
-  that use canaries.
+  that use canaries. `per_alloc` is mutually exclusive with the `sticky`
+  property. Use `per_alloc` only with CSI volumes and `sticky` only
+  with dynamic host volumes.
+
+The following fields are only valid for volumes with `type = "csi"` or dynamic
+host volumes with `type = "host"`:
+
+- `access_mode` `(string)` - Defines whether a volume should be
+  available concurrently. The `access_mode` and `attachment_mode` together
+  must exactly match one of the volume's `capability` blocks.
+
+  - For CSI volumes the `access_mode` is required. Can be one of the following:
+
+    - `"single-node-reader-only"`
+    - `"single-node-writer"`
+    - `"multi-node-reader-only"`
+    - `"multi-node-single-writer"`
+    - `"multi-node-multi-writer"`
+
+    Most CSI plugins support only single-node modes.
+    Consult the documentation of the storage provider and CSI plugin.
+
+  - For dynamic host volumes the `access_mode` is optional. Can be one of the following:
+
+    - `"single-node-writer"`
+    - `"single-node-reader-only"`
+    - `"single-node-single-writer"`
+    - `"single-node-multi-writer"`
+
+    Defaults to `single-node-writer` unless `read_only = true`, in which case it
+    defaults to `single-node-reader-only`.
+
+- `attachment_mode` `(string)` - The storage API used by the
+  volume. One of `"file-system"` or `"block-device"`. The `access_mode` and
+  `attachment_mode` together must exactly match one of the volume's `capability`
+  blocks.
+
+  - For CSI volumes the `attachment_mode` field is required. Most storage
+    providers support `"file-system"`, to mount volumes using the CSI
+    filesystem API. Some storage providers support `"block-device"`, which
+    mounts the volume with the CSI block device API within the container.
+
+  - For dynamic host volumes the `attachment_mode` field is optional and
+    defaults to `"file-system"`.
 
 The following fields are only valid for volumes with `type = "csi"`:
-
-- `access_mode` `(string: <required>)` - Defines whether a volume should be
-  available concurrently. The `access_mode` and `attachment_mode` together
-  must exactly match one of the volume's `capability` blocks. Can be one of
-  `"single-node-reader-only"`, `"single-node-writer"`,
-  `"multi-node-reader-only"`, `"multi-node-single-writer"`, or
-  `"multi-node-multi-writer"`. Most CSI plugins support only single-node
-  modes. Consult the documentation of the storage provider and CSI plugin.
-
-- `attachment_mode` `(string: <required>)` - The storage API that will be used
-  by the volume. The `access_mode` and `attachment_mode` together must exactly
-  match one of the volume's `capability` blocks. Most storage providers will
-  support `"file-system"`, to mount volumes using the CSI filesystem API. Some
-  storage providers will support `"block-device"`, which will mount the volume
-  with the CSI block device API within the container.
 
 - `mount_options` - Options for mounting CSI volumes that have the
   `file-system` [attachment mode]. These options override the `mount_options`
@@ -111,7 +147,7 @@ The following fields are only valid for volumes with `type = "csi"`:
   - `fs_type`: file system type (ex. `"ext4"`)
   - `mount_flags`: the flags passed to `mount` (ex. `["ro", "noatime"]`)
 
-## Volume Interpolation
+## Volume interpolation
 
 Because volumes represent state, many workloads with multiple allocations will
 want to mount specific volumes to specific tasks. The `volume` block is used
@@ -202,8 +238,12 @@ ID        Node ID   Task Group  Version  Desired  Status   Created  Modified
 
 [volume_mount]: /nomad/docs/job-specification/volume_mount 'Nomad volume_mount Job Specification'
 [host_volume]: /nomad/docs/configuration/client#host_volume-block
-[csi_volume]: /nomad/docs/commands/volume/register
+[csi_volume]: /nomad/commands/volume/register
 [csi_plugin]: /nomad/docs/job-specification/csi_plugin
-[csi_volume]: /nomad/docs/commands/volume/register
-[attachment mode]: /nomad/docs/commands/volume/register#attachment_mode
-[volume registration]: /nomad/docs/commands/volume/register#mount_options
+[csi_volume]: /nomad/commands/volume/register
+[attachment mode]: /nomad/commands/volume/register#attachment_mode
+[volume registration]: /nomad/commands/volume/register#mount_options
+[dynamic host volumes]: /nomad/docs/other-specifications/volume/host
+[stateful deployments]: /nomad/docs/concepts/stateful-deployments
+[`volume create`]: /nomad/commands/volume/create
+[`volume register`]: /nomad/commands/volume/register

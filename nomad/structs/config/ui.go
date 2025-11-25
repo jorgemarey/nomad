@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/hashicorp/nomad/helper/pointer"
 )
 
 // UIConfig contains the operator configuration of the web UI
@@ -28,6 +30,9 @@ type UIConfig struct {
 
 	// Label configures UI label styles
 	Label *LabelUIConfig `hcl:"label"`
+
+	// ShowCLIHints controls whether CLI commands that return URLs will output that url as a hint
+	ShowCLIHints *bool `hcl:"show_cli_hints"`
 }
 
 // only covers the elements of
@@ -43,20 +48,20 @@ type ContentSecurityPolicy struct {
 }
 
 // Copy returns a copy of this Vault UI config.
-func (old *ContentSecurityPolicy) Copy() *ContentSecurityPolicy {
-	if old == nil {
+func (csp *ContentSecurityPolicy) Copy() *ContentSecurityPolicy {
+	if csp == nil {
 		return nil
 	}
 
 	nc := new(ContentSecurityPolicy)
-	*nc = *old
-	nc.ConnectSrc = slices.Clone(old.ConnectSrc)
-	nc.DefaultSrc = slices.Clone(old.DefaultSrc)
-	nc.FormAction = slices.Clone(old.FormAction)
-	nc.FrameAncestors = slices.Clone(old.FrameAncestors)
-	nc.ImgSrc = slices.Clone(old.ImgSrc)
-	nc.ScriptSrc = slices.Clone(old.ScriptSrc)
-	nc.StyleSrc = slices.Clone(old.StyleSrc)
+	*nc = *csp
+	nc.ConnectSrc = slices.Clone(csp.ConnectSrc)
+	nc.DefaultSrc = slices.Clone(csp.DefaultSrc)
+	nc.FormAction = slices.Clone(csp.FormAction)
+	nc.FrameAncestors = slices.Clone(csp.FrameAncestors)
+	nc.ImgSrc = slices.Clone(csp.ImgSrc)
+	nc.ScriptSrc = slices.Clone(csp.ScriptSrc)
+	nc.StyleSrc = slices.Clone(csp.StyleSrc)
 	return nc
 }
 
@@ -142,6 +147,7 @@ func DefaultUIConfig() *UIConfig {
 		Vault:                 &VaultUIConfig{},
 		Label:                 &LabelUIConfig{},
 		ContentSecurityPolicy: DefaultCSPConfig(),
+		ShowCLIHints:          pointer.Of(true),
 	}
 }
 
@@ -176,6 +182,10 @@ func (old *UIConfig) Merge(other *UIConfig) *UIConfig {
 	result.Vault = result.Vault.Merge(other.Vault)
 	result.Label = result.Label.Merge(other.Label)
 	result.ContentSecurityPolicy = result.ContentSecurityPolicy.Merge(other.ContentSecurityPolicy)
+
+	if other.ShowCLIHints != nil {
+		result.ShowCLIHints = other.ShowCLIHints
+	}
 
 	return result
 }

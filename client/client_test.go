@@ -14,8 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/armon/go-metrics"
+	hclog "github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/client/allocrunner"
 	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
@@ -23,6 +24,7 @@ import (
 	"github.com/hashicorp/nomad/client/config"
 	"github.com/hashicorp/nomad/client/fingerprint"
 	regMock "github.com/hashicorp/nomad/client/serviceregistration/mock"
+	"github.com/hashicorp/nomad/client/state"
 	cstate "github.com/hashicorp/nomad/client/state"
 	ctestutil "github.com/hashicorp/nomad/client/testutil"
 	"github.com/hashicorp/nomad/command/agent/consul"
@@ -352,7 +354,7 @@ func TestClient_MixedTLS(t *testing.T) {
 			return true, nil
 		},
 		func(err error) {
-			t.Fatalf(err.Error())
+			t.Fatal(err)
 		},
 	)
 }
@@ -414,7 +416,7 @@ func TestClient_BadTLS(t *testing.T) {
 			return true, nil
 		},
 		func(err error) {
-			t.Fatalf(err.Error())
+			t.Fatal(err)
 		},
 	)
 }
@@ -1033,8 +1035,10 @@ func TestClient_AddAllocError(t *testing.T) {
 	// Ensure the allocation has been marked as invalid and failed on the server
 	testutil.WaitForResult(func() (bool, error) {
 		c1.allocLock.RLock()
+		c1.invalidAllocsLock.Lock()
 		ar := c1.allocs[alloc1.ID]
 		_, isInvalid := c1.invalidAllocs[alloc1.ID]
+		c1.invalidAllocsLock.Unlock()
 		c1.allocLock.RUnlock()
 		if ar != nil {
 			return false, fmt.Errorf("expected nil alloc runner")
@@ -1271,7 +1275,7 @@ func TestClient_ReloadTLS_UpgradePlaintextToTLS(t *testing.T) {
 			return true, nil
 		},
 			func(err error) {
-				t.Fatalf(err.Error())
+				t.Fatal(err)
 			},
 		)
 	}
@@ -1304,7 +1308,7 @@ func TestClient_ReloadTLS_UpgradePlaintextToTLS(t *testing.T) {
 			return true, nil
 		},
 			func(err error) {
-				t.Fatalf(err.Error())
+				t.Fatal(err)
 			},
 		)
 	}
@@ -1357,7 +1361,7 @@ func TestClient_ReloadTLS_DowngradeTLSToPlaintext(t *testing.T) {
 			}
 			return true, nil
 		}, func(err error) {
-			t.Fatalf(err.Error())
+			t.Fatal(err)
 		},
 		)
 	}
@@ -1382,7 +1386,7 @@ func TestClient_ReloadTLS_DowngradeTLSToPlaintext(t *testing.T) {
 			}
 			return true, nil
 		}, func(err error) {
-			t.Fatalf(err.Error())
+			t.Fatal(err)
 		},
 		)
 	}
@@ -1927,10 +1931,14 @@ func TestClient_updateNodeFromDriverUpdatesAll(t *testing.T) {
 func TestClient_hasLocalState(t *testing.T) {
 	ci.Parallel(t)
 
-	c, cleanup := TestClient(t, nil)
-	defer cleanup()
+	newStateDB := func(logger hclog.Logger, _ string) (state.StateDB, error) {
+		return cstate.NewMemDB(logger), nil
+	}
 
-	c.stateDB = cstate.NewMemDB(c.logger)
+	c, cleanup := TestClient(t, func(c *config.Config) {
+		c.StateDBFactory = newStateDB
+	})
+	defer cleanup()
 
 	t.Run("nil Job", func(t *testing.T) {
 		alloc := mock.BatchAlloc()

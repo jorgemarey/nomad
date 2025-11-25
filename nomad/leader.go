@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/go-version"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/uuid"
@@ -83,6 +83,11 @@ var minNodePoolsVersion = version.Must(version.NewVersion("1.6.0"))
 // multiple identity blocks to tasks and workload identities can be
 // automatically added to jobs that need access to Consul or Vault
 var minVersionMultiIdentities = version.Must(version.NewVersion("1.7.0"))
+
+// minVersionDynamicHostVolumes is the Nomad version at which the dynamic host
+// volumes feature was introduced. It forms the minimum version all local
+// servers must meet before the feature can be used.
+var minVersionDynamicHostVolumes = version.Must(version.NewVersion("1.10.0"))
 
 // monitorLeadership is used to monitor if we acquire or lose our role
 // as the leader in the Raft cluster. There is some work the leader is
@@ -405,9 +410,6 @@ func (s *Server) establishLeadership(stopCh chan struct{}) error {
 		}
 	}
 
-	// Activate the vault client
-	s.vault.SetActive(true)
-
 	// Enable the periodic dispatcher, since we are now the leader.
 	s.periodicDispatcher.SetEnabled(true)
 
@@ -497,16 +499,6 @@ func (s *Server) establishLeadership(stopCh chan struct{}) error {
 
 	// Setup any enterprise systems required.
 	if err := s.establishEnterpriseLeadership(stopCh, clusterMetadata); err != nil {
-		return err
-	}
-
-	// Cleanup orphaned Vault token accessors
-	if err := s.revokeVaultAccessorsOnRestore(); err != nil {
-		return err
-	}
-
-	// Cleanup orphaned Service Identity token accessors
-	if err := s.revokeSITokenAccessorsOnRestore(); err != nil {
 		return err
 	}
 
@@ -828,105 +820,6 @@ func (s *Server) restoreEvals() error {
 			s.blockedEvals.Block(eval)
 		}
 	}
-	return nil
-}
-
-// revokeVaultAccessorsOnRestore is used to restore Vault accessors that should be
-// revoked.
-func (s *Server) revokeVaultAccessorsOnRestore() error {
-	// An accessor should be revoked if its allocation or node is terminal
-	ws := memdb.NewWatchSet()
-	state := s.fsm.State()
-	iter, err := state.VaultAccessors(ws)
-	if err != nil {
-		return fmt.Errorf("failed to get vault accessors: %v", err)
-	}
-
-	var revoke []*structs.VaultAccessor
-	for {
-		raw := iter.Next()
-		if raw == nil {
-			break
-		}
-
-		va := raw.(*structs.VaultAccessor)
-
-		// Check the allocation
-		alloc, err := state.AllocByID(ws, va.AllocID)
-		if err != nil {
-			return fmt.Errorf("failed to lookup allocation %q: %v", va.AllocID, err)
-		}
-		if alloc == nil || alloc.Terminated() {
-			// No longer running and should be revoked
-			revoke = append(revoke, va)
-			continue
-		}
-
-		// Check the node
-		node, err := state.NodeByID(ws, va.NodeID)
-		if err != nil {
-			return fmt.Errorf("failed to lookup node %q: %v", va.NodeID, err)
-		}
-		if node == nil || node.TerminalStatus() {
-			// Node is terminal so any accessor from it should be revoked
-			revoke = append(revoke, va)
-			continue
-		}
-	}
-
-	if len(revoke) != 0 {
-		s.logger.Info("revoking vault accessors after becoming leader", "accessors", len(revoke))
-
-		if err := s.vault.MarkForRevocation(revoke); err != nil {
-			return fmt.Errorf("failed to revoke tokens: %v", err)
-		}
-	}
-
-	return nil
-}
-
-// revokeSITokenAccessorsOnRestore is used to revoke Service Identity token
-// accessors on behalf of allocs that are now gone / terminal.
-func (s *Server) revokeSITokenAccessorsOnRestore() error {
-	ws := memdb.NewWatchSet()
-	fsmState := s.fsm.State()
-	iter, err := fsmState.SITokenAccessors(ws)
-	if err != nil {
-		return fmt.Errorf("failed to get SI token accessors: %w", err)
-	}
-
-	var toRevoke []*structs.SITokenAccessor
-	for raw := iter.Next(); raw != nil; raw = iter.Next() {
-		accessor := raw.(*structs.SITokenAccessor)
-
-		// Check the allocation
-		alloc, err := fsmState.AllocByID(ws, accessor.AllocID)
-		if err != nil {
-			return fmt.Errorf("failed to lookup alloc %q: %w", accessor.AllocID, err)
-		}
-		if alloc == nil || alloc.Terminated() {
-			// no longer running and associated accessors should be revoked
-			toRevoke = append(toRevoke, accessor)
-			continue
-		}
-
-		// Check the node
-		node, err := fsmState.NodeByID(ws, accessor.NodeID)
-		if err != nil {
-			return fmt.Errorf("failed to lookup node %q: %w", accessor.NodeID, err)
-		}
-		if node == nil || node.TerminalStatus() {
-			// node is terminal and associated accessors should be revoked
-			toRevoke = append(toRevoke, accessor)
-			continue
-		}
-	}
-
-	if len(toRevoke) > 0 {
-		s.logger.Info("revoking consul accessors after becoming leader", "accessors", len(toRevoke))
-		s.consulACLs.MarkForRevocation(toRevoke)
-	}
-
 	return nil
 }
 
@@ -1509,9 +1402,6 @@ func (s *Server) revokeLeadership() error {
 
 	// Disable the periodic dispatcher, since it is only useful as a leader
 	s.periodicDispatcher.SetEnabled(false)
-
-	// Disable the Vault client as it is only useful as a leader.
-	s.vault.SetActive(false)
 
 	// Disable the deployment watcher as it is only useful as a leader.
 	s.deploymentWatcher.SetEnabled(false, nil)
@@ -2734,7 +2624,7 @@ func (s *Server) initializeKeyring(stopCh <-chan struct{}) {
 	store := s.fsm.State()
 	key, err := store.GetActiveRootKey(nil)
 	if err != nil {
-		logger.Error("failed to get active key: %v", err)
+		logger.Error("failed to get active key", "error", err)
 		return
 	}
 	if key != nil {
@@ -2763,7 +2653,7 @@ func (s *Server) initializeKeyring(stopCh <-chan struct{}) {
 	rootKey, err := structs.NewUnwrappedRootKey(structs.EncryptionAlgorithmAES256GCM)
 	rootKey = rootKey.MakeActive()
 	if err != nil {
-		logger.Error("could not initialize keyring: %v", err)
+		logger.Error("could not initialize keyring", "error", err)
 		return
 	}
 

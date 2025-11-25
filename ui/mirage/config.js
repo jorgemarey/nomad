@@ -231,6 +231,12 @@ export default function () {
                   job[condition.field] &&
                   job[condition.field].includes(condition.value)
                 );
+              } else if (condition.operator === 'matches') {
+                // strip the (?i) bit out of the value; used for case-insensitive matching
+                // but JS doesn't support PCRE-style regex modifiers the way our backend does,
+                // so strip 'em out here.
+                const value = condition.value.replace('(?i)', '');
+                return new RegExp(value, 'i').test(job[condition.field]);
               } else if (condition.operator === '==') {
                 return job[condition.field] === condition.value;
               } else if (condition.operator === '!=') {
@@ -656,19 +662,33 @@ export default function () {
 
   this.get(
     '/volumes',
-    withBlockingSupport(function ({ csiVolumes }, { queryParams }) {
-      if (queryParams.type !== 'csi') {
+    withBlockingSupport(function (
+      { csiVolumes, dynamicHostVolumes },
+      { queryParams }
+    ) {
+      if (queryParams.type !== 'csi' && queryParams.type !== 'host') {
         return new Response(200, {}, '[]');
       }
 
-      const json = this.serialize(csiVolumes.all());
-      const namespace = queryParams.namespace || 'default';
-      return json.filter((volume) => {
-        if (namespace === '*') return true;
-        return namespace === 'default'
-          ? !volume.NamespaceID || volume.NamespaceID === namespace
-          : volume.NamespaceID === namespace;
-      });
+      if (queryParams.type === 'host') {
+        const json = this.serialize(dynamicHostVolumes.all());
+        const namespace = queryParams.namespace || 'default';
+        return json.filter((volume) => {
+          if (namespace === '*') return true;
+          return namespace === 'default'
+            ? !volume.NamespaceID || volume.NamespaceID === namespace
+            : volume.NamespaceID === namespace;
+        });
+      } else {
+        const json = this.serialize(csiVolumes.all());
+        const namespace = queryParams.namespace || 'default';
+        return json.filter((volume) => {
+          if (namespace === '*') return true;
+          return namespace === 'default'
+            ? !volume.NamespaceID || volume.NamespaceID === namespace
+            : volume.NamespaceID === namespace;
+        });
+      }
     })
   );
 
@@ -677,6 +697,26 @@ export default function () {
     withBlockingSupport(function ({ csiVolumes }, { params, queryParams }) {
       const { id } = params;
       const volume = csiVolumes.all().models.find((volume) => {
+        const volumeIsDefault =
+          !volume.namespaceId || volume.namespaceId === 'default';
+        const qpIsDefault =
+          !queryParams.namespace || queryParams.namespace === 'default';
+        return (
+          volume.id === id &&
+          (volume.namespaceId === queryParams.namespace ||
+            (volumeIsDefault && qpIsDefault))
+        );
+      });
+
+      return volume ? this.serialize(volume) : new Response(404, {}, null);
+    })
+  );
+
+  this.get(
+    '/volume/host/:id',
+    withBlockingSupport(function ({ dynamicHostVolumes }, { params, queryParams }) {
+      const { id } = params;
+      const volume = dynamicHostVolumes.all().models.find((volume) => {
         const volumeIsDefault =
           !volume.namespaceId || volume.namespaceId === 'default';
         const qpIsDefault =

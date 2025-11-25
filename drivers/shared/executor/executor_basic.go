@@ -1,7 +1,7 @@
 // Copyright (c) HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
-//go:build !linux
+//go:build !linux && !windows
 
 package executor
 
@@ -34,8 +34,6 @@ func (e *UniversalExecutor) start(command *ExecCommand) error {
 func withNetworkIsolation(f func() error, _ *drivers.NetworkIsolationSpec) error {
 	return f()
 }
-
-func setCmdUser(*exec.Cmd, string) error { return nil }
 
 func (e *UniversalExecutor) ListProcesses() set.Collection[int] {
 	return procstats.ListByPid(e.childCmd.Process.Pid)

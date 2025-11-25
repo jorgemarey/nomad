@@ -16,10 +16,10 @@ import (
 	"sync"
 	"time"
 
-	metrics "github.com/armon/go-metrics"
 	"github.com/dustin/go-humanize"
 	consulapi "github.com/hashicorp/consul/api"
 	log "github.com/hashicorp/go-hclog"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	uuidparse "github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/nomad/client"
 	clientconfig "github.com/hashicorp/nomad/client/config"
@@ -40,6 +40,7 @@ import (
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/raft"
+	"github.com/hashicorp/yamux"
 )
 
 const (
@@ -528,6 +529,26 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 		conf.DefaultSchedulerConfig = *agentConfig.Server.DefaultSchedulerConfig
 	}
 
+	// handle rpc yamux configuration
+	conf.RPCSessionConfig = yamux.DefaultConfig()
+	if agentConfig.RPC != nil {
+		if agentConfig.RPC.AcceptBacklog > 0 {
+			conf.RPCSessionConfig.AcceptBacklog = agentConfig.RPC.AcceptBacklog
+		}
+		if agentConfig.RPC.KeepAliveInterval > 0 {
+			conf.RPCSessionConfig.KeepAliveInterval = agentConfig.RPC.KeepAliveInterval
+		}
+		if agentConfig.RPC.ConnectionWriteTimeout > 0 {
+			conf.RPCSessionConfig.ConnectionWriteTimeout = agentConfig.RPC.ConnectionWriteTimeout
+		}
+		if agentConfig.RPC.StreamCloseTimeout > 0 {
+			conf.RPCSessionConfig.StreamCloseTimeout = agentConfig.RPC.StreamCloseTimeout
+		}
+		if agentConfig.RPC.StreamOpenTimeout > 0 {
+			conf.RPCSessionConfig.StreamOpenTimeout = agentConfig.RPC.StreamOpenTimeout
+		}
+	}
+
 	// Set the TLS config
 	conf.TLSConfig = agentConfig.TLSConfig
 
@@ -616,6 +637,26 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 
 	conf.KEKProviderConfigs = agentConfig.KEKProviders
 
+	if startTimeout := agentConfig.Server.StartTimeout; startTimeout != "" {
+		dur, err := time.ParseDuration(startTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse start_timeout: %v", err)
+		} else if dur <= time.Duration(0) {
+			return nil, fmt.Errorf("start_timeout should be greater than 0s")
+		}
+		conf.StartTimeout = dur
+	}
+
+	// Ensure the passed number of scheduler is between the bounds of zero and
+	// the number of CPU cores on the machine. The runtime CPU count object is
+	// populated at process start time, so there is no overhead in calling the
+	// function compared to saving the value.
+	if conf.NumSchedulers < 0 || conf.NumSchedulers > runtime.NumCPU() {
+		return nil, fmt.Errorf("number of schedulers should be between 0 and %d",
+			runtime.NumCPU())
+	}
+	// Copy LogFile config value
+	conf.LogFile = agentConfig.LogFile
 	return conf, nil
 }
 
@@ -713,7 +754,6 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	if conf == nil {
 		conf = clientconfig.DefaultConfig()
 	}
-
 	conf.Servers = agentConfig.Client.Servers
 	conf.DevMode = agentConfig.DevMode
 	conf.EnableDebug = agentConfig.EnableDebug
@@ -724,6 +764,8 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	if agentConfig.DataDir != "" {
 		conf.StateDir = filepath.Join(agentConfig.DataDir, "client")
 		conf.AllocDir = filepath.Join(agentConfig.DataDir, "alloc")
+		conf.HostVolumesDir = filepath.Join(agentConfig.DataDir, "host_volumes")
+		conf.HostVolumePluginDir = filepath.Join(agentConfig.DataDir, "host_volume_plugins")
 		dataParent := filepath.Dir(agentConfig.DataDir)
 		conf.AllocMountsDir = filepath.Join(dataParent, "alloc_mounts")
 	}
@@ -736,8 +778,35 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	if agentConfig.Client.AllocMountsDir != "" {
 		conf.AllocMountsDir = agentConfig.Client.AllocMountsDir
 	}
+	if agentConfig.Client.HostVolumePluginDir != "" {
+		conf.HostVolumePluginDir = agentConfig.Client.HostVolumePluginDir
+	}
+	if agentConfig.Client.HostVolumesDir != "" {
+		conf.HostVolumesDir = agentConfig.Client.HostVolumesDir
+	}
 	if agentConfig.Client.NetworkInterface != "" {
 		conf.NetworkInterface = agentConfig.Client.NetworkInterface
+	}
+	conf.NodeMaxAllocs = agentConfig.Client.NodeMaxAllocs
+
+	// handle rpc yamux configuration
+	conf.RPCSessionConfig = yamux.DefaultConfig()
+	if agentConfig.RPC != nil {
+		if agentConfig.RPC.AcceptBacklog > 0 {
+			conf.RPCSessionConfig.AcceptBacklog = agentConfig.RPC.AcceptBacklog
+		}
+		if agentConfig.RPC.KeepAliveInterval > 0 {
+			conf.RPCSessionConfig.KeepAliveInterval = agentConfig.RPC.KeepAliveInterval
+		}
+		if agentConfig.RPC.ConnectionWriteTimeout > 0 {
+			conf.RPCSessionConfig.ConnectionWriteTimeout = agentConfig.RPC.ConnectionWriteTimeout
+		}
+		if agentConfig.RPC.StreamCloseTimeout > 0 {
+			conf.RPCSessionConfig.StreamCloseTimeout = agentConfig.RPC.StreamCloseTimeout
+		}
+		if agentConfig.RPC.StreamOpenTimeout > 0 {
+			conf.RPCSessionConfig.StreamOpenTimeout = agentConfig.RPC.StreamOpenTimeout
+		}
 	}
 
 	conf.PreferredAddressFamily = agentConfig.Client.PreferredAddressFamily
@@ -878,6 +947,8 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 	conf.GCDiskUsageThreshold = agentConfig.Client.GCDiskUsageThreshold
 	conf.GCInodeUsageThreshold = agentConfig.Client.GCInodeUsageThreshold
 	conf.GCMaxAllocs = agentConfig.Client.GCMaxAllocs
+	conf.GCVolumesOnNodeGC = agentConfig.Client.GCVolumesOnNodeGC
+
 	if agentConfig.Client.NoHostUUID != nil {
 		conf.NoHostUUID = *agentConfig.Client.NoHostUUID
 	} else {
@@ -945,6 +1016,7 @@ func convertClientConfig(agentConfig *Config) (*clientconfig.Config, error) {
 
 	conf.Users = clientconfig.UsersConfigFromAgent(agentConfig.Client.Users)
 
+	conf.LogFile = agentConfig.LogFile
 	return conf, nil
 }
 
@@ -975,7 +1047,6 @@ func (a *Agent) setupServer() error {
 	server, err := nomad.NewServer(conf,
 		a.consulCatalog,           // self service discovery
 		a.consulConfigEntriesFunc, // writing config entries for gateways
-		a.consulACLs,              // DEPRECATED(1.9): remove in 1.9
 	)
 	if err != nil {
 		return fmt.Errorf("server setup failed: %v", err)

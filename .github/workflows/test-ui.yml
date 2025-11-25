@@ -13,7 +13,7 @@ on:
 
 jobs:
   pre-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     defaults:
       run:
@@ -24,9 +24,9 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: ./.github/actions/setup-js
       - name: lint:js
-        run: yarn run lint:js
+        run: pnpm lint:js
       - name: lint:hbs
-        run: yarn run lint:hbs
+        run: pnpm lint:hbs
       - id: nonce
         name: nonce
         run: echo "nonce=${{ github.run_id }}-$(date +%s)" >> "$GITHUB_OUTPUT"
@@ -34,7 +34,7 @@ jobs:
   tests:
     needs:
       - pre-test
-    runs-on: ${{ endsWith(github.repository, '-enterprise') && fromJSON('["self-hosted", "ondemand", "linux", "type=m7a.2xlarge;m6a.2xlarge"]') || 'ubuntu-latest' }}
+    runs-on: ${{ endsWith(github.repository, '-enterprise') && fromJSON('["self-hosted", "ondemand", "linux", "type=m7a.2xlarge;m6a.2xlarge"]') || 'ubuntu-22.04' }}
     timeout-minutes: 30
     defaults:
       run:
@@ -67,7 +67,7 @@ jobs:
           PERCY_TOKEN: ${{ env.PERCY_TOKEN || secrets.PERCY_TOKEN }}
           PERCY_PARALLEL_NONCE: ${{ needs.pre-test.outputs.nonce }}
         run: |
-          yarn exam:parallel --split=${{ matrix.split }} --partition=${{ matrix.partition }} --json-report=test-results/test-results.json
+          pnpm exam:parallel --split=${{ matrix.split }} --partition=${{ matrix.partition }} --json-report=test-results/test-results.json
         continue-on-error: true
       - name: Express failure
         if: steps.ember_exam.outcome == 'failure'
@@ -93,7 +93,7 @@ jobs:
     needs:
       - pre-test
       - tests
-    runs-on: ${{ endsWith(github.repository, '-enterprise') && fromJSON('["self-hosted", "ondemand", "linux", "type=m7a.2xlarge;m6a.2xlarge"]') || 'ubuntu-latest' }}
+    runs-on: ${{ endsWith(github.repository, '-enterprise') && fromJSON('["self-hosted", "ondemand", "linux", "type=m7a.2xlarge;m6a.2xlarge"]') || 'ubuntu-22.04' }}
     timeout-minutes: 30
     defaults:
       run:
@@ -134,7 +134,7 @@ jobs:
         env:
           PERCY_TOKEN: ${{ env.PERCY_TOKEN || secrets.PERCY_TOKEN }}
           PERCY_PARALLEL_NONCE: ${{ needs.pre-test.outputs.nonce }}
-        run: yarn percy build:finalize
+        run: pnpm percy build:finalize
 
   handle-failure:
     needs:

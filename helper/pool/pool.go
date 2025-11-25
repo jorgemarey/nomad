@@ -197,6 +197,9 @@ type ConnPool struct {
 	// TLS wrapper
 	tlsWrap tlsutil.RegionWrapper
 
+	// yamuxCfg is used for setup rpc client
+	yamuxCfg *yamux.Config
+
 	// Used to indicate the pool is shutdown
 	shutdown   bool
 	shutdownCh chan struct{}
@@ -211,7 +214,9 @@ type ConnPool struct {
 // Set maxTime to 0 to disable reaping. maxStreams is used to control
 // the number of idle streams allowed.
 // If TLS settings are provided outgoing connections use TLS.
-func NewPool(logger hclog.Logger, maxTime time.Duration, maxStreams int, tlsWrap tlsutil.RegionWrapper) *ConnPool {
+func NewPool(
+	logger hclog.Logger, maxTime time.Duration, maxStreams int, tlsWrap tlsutil.RegionWrapper, yamuxCfg *yamux.Config,
+) *ConnPool {
 	pool := &ConnPool{
 		logger:     logger.StandardLogger(&hclog.StandardLoggerOptions{InferLevels: true}),
 		maxTime:    maxTime,
@@ -221,6 +226,19 @@ func NewPool(logger hclog.Logger, maxTime time.Duration, maxStreams int, tlsWrap
 		tlsWrap:    tlsWrap,
 		shutdownCh: make(chan struct{}),
 	}
+
+	// The passed yamux config is the shared server object, so we do not want to
+	// modify it directly. Instead, clone it and set up the logger to avoid data
+	// races.
+	//
+	// Performing this work here avoids doing this per new connection within
+	// getNewConn.
+	poolMUXCfg := yamuxCfg.Clone()
+	poolMUXCfg.LogOutput = nil
+	poolMUXCfg.Logger = pool.logger
+
+	pool.yamuxCfg = poolMUXCfg
+
 	if maxTime > 0 {
 		go pool.reap()
 	}
@@ -388,13 +406,8 @@ func (p *ConnPool) getNewConn(region string, addr net.Addr) (*Conn, error) {
 		return nil, err
 	}
 
-	// Setup the logger
-	conf := yamux.DefaultConfig()
-	conf.LogOutput = nil
-	conf.Logger = p.logger
-
 	// Create a multiplexed session
-	session, err := yamux.Client(conn, conf)
+	session, err := yamux.Client(conn, p.yamuxCfg)
 	if err != nil {
 		conn.Close()
 		return nil, err

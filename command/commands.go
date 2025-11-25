@@ -5,7 +5,9 @@ package command
 
 import (
 	"fmt"
+	"maps"
 	"os"
+	"runtime"
 
 	"github.com/hashicorp/cli"
 	"github.com/hashicorp/nomad/command/agent"
@@ -19,6 +21,9 @@ const (
 
 	// EnvNomadCLIForceColor is an env var that forces colored UI output.
 	EnvNomadCLIForceColor = `NOMAD_CLI_FORCE_COLOR`
+
+	// EnvNomadCLIShowHints is an env var that toggles CLI hints.
+	EnvNomadCLIShowHints = `NOMAD_CLI_SHOW_HINTS`
 )
 
 // DeprecatedCommand is a command that wraps an existing command and prints a
@@ -167,6 +172,11 @@ func Commands(metaPtr *Meta, agentUi cli.Ui) map[string]cli.CommandFactory {
 		},
 		"acl policy list": func() (cli.Command, error) {
 			return &ACLPolicyListCommand{
+				Meta: meta,
+			}, nil
+		},
+		"acl policy self": func() (cli.Command, error) {
+			return &ACLPolicySelfCommand{
 				Meta: meta,
 			}, nil
 		},
@@ -521,6 +531,11 @@ func Commands(metaPtr *Meta, agentUi cli.Ui) map[string]cli.CommandFactory {
 				Meta: meta,
 			}, nil
 		},
+		"job start": func() (cli.Command, error) {
+			return &JobStartCommand{
+				Meta: meta,
+			}, nil
+		},
 		"job tag": func() (cli.Command, error) {
 			return &JobTagCommand{
 				Meta: meta,
@@ -563,6 +578,11 @@ func Commands(metaPtr *Meta, agentUi cli.Ui) map[string]cli.CommandFactory {
 		},
 		"monitor": func() (cli.Command, error) {
 			return &MonitorCommand{
+				Meta: meta,
+			}, nil
+		},
+		"monitor export": func() (cli.Command, error) {
+			return &MonitorExportCommand{
 				Meta: meta,
 			}, nil
 		},
@@ -879,6 +899,11 @@ func Commands(metaPtr *Meta, agentUi cli.Ui) map[string]cli.CommandFactory {
 				Meta: meta,
 			}, nil
 		},
+		"operator utilization": func() (cli.Command, error) {
+			return &OperatorUtilizationCommand{
+				Meta: meta,
+			}, nil
+		},
 
 		"plan": func() (cli.Command, error) {
 			return &JobPlanCommand{
@@ -1101,6 +1126,11 @@ func Commands(metaPtr *Meta, agentUi cli.Ui) map[string]cli.CommandFactory {
 				Meta: meta,
 			}, nil
 		},
+		"start": func() (cli.Command, error) {
+			return &JobStartCommand{
+				Meta: meta,
+			}, nil
+		},
 		"system": func() (cli.Command, error) {
 			return &SystemCommand{
 				Meta: meta,
@@ -1269,6 +1299,46 @@ func Commands(metaPtr *Meta, agentUi cli.Ui) map[string]cli.CommandFactory {
 				Meta: meta,
 			}, nil
 		},
+		"volume claim": func() (cli.Command, error) {
+			return &VolumeClaimCommand{
+				Meta: meta,
+			}, nil
+		},
+		"volume claim list": func() (cli.Command, error) {
+			return &VolumeClaimListCommand{
+				Meta: meta,
+			}, nil
+		},
+		"volume claim delete": func() (cli.Command, error) {
+			return &VolumeClaimDeleteCommand{
+				Meta: meta,
+			}, nil
+		},
+	}
+
+	if runtime.GOOS == "windows" {
+		maps.Copy(all, map[string]cli.CommandFactory{
+			"windows": func() (cli.Command, error) {
+				return &WindowsCommand{
+					Meta: meta,
+				}, nil
+			},
+			"windows service": func() (cli.Command, error) {
+				return &WindowsServiceCommand{
+					Meta: meta,
+				}, nil
+			},
+			"windows service install": func() (cli.Command, error) {
+				return &WindowsServiceInstallCommand{
+					Meta: meta,
+				}, nil
+			},
+			"windows service uninstall": func() (cli.Command, error) {
+				return &WindowsServiceUninstallCommand{
+					Meta: meta,
+				}, nil
+			},
+		})
 	}
 
 	deprecated := map[string]cli.CommandFactory{

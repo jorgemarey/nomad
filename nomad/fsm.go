@@ -5,16 +5,17 @@ package nomad
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
 	"sync"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-bexpr"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/go-msgpack/v2/codec"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/uuid"
@@ -36,7 +37,6 @@ const (
 	AllocSnapshot                        SnapshotType = 4
 	PeriodicLaunchSnapshot               SnapshotType = 6
 	JobSummarySnapshot                   SnapshotType = 7
-	VaultAccessorSnapshot                SnapshotType = 8
 	JobVersionSnapshot                   SnapshotType = 9
 	DeploymentSnapshot                   SnapshotType = 10
 	ACLPolicySnapshot                    SnapshotType = 11
@@ -58,6 +58,20 @@ const (
 	NodePoolSnapshot                     SnapshotType = 28
 	JobSubmissionSnapshot                SnapshotType = 29
 	RootKeySnapshot                      SnapshotType = 30
+	HostVolumeSnapshot                   SnapshotType = 31
+
+	// TimeTableSnapshot
+	// Deprecated: Nomad no longer supports TimeTable snapshots since 1.9.2
+	TimeTableSnapshot SnapshotType = 5
+
+	// VaultAccessorSnapshot
+	// Deprecated: Nomad no longer supports the Vault legacy token based
+	// workflow and therefore accessor snapshots since 1.10.0.
+	VaultAccessorSnapshot SnapshotType = 8
+
+	// EventSinkSnapshot
+	// Deprecated: Nomad no longer supports EventSink snapshots since 1.0
+	EventSinkSnapshot SnapshotType = 20
 
 	// TimeTableSnapshot
 	// Deprecated: Nomad no longer supports TimeTable snapshots since 1.9.2
@@ -103,6 +117,7 @@ var snapshotTypeStrings = map[SnapshotType]string{
 	NodePoolSnapshot:                     "NodePool",
 	JobSubmissionSnapshot:                "JobSubmission",
 	RootKeySnapshot:                      "WrappedRootKeys",
+	HostVolumeSnapshot:                   "HostVolumeSnapshot",
 	NamespaceSnapshot:                    "Namespace",
 }
 
@@ -281,9 +296,9 @@ func (n *nomadFSM) Apply(log *raft.Log) interface{} {
 	case structs.ReconcileJobSummariesRequestType:
 		return n.applyReconcileSummaries(buf[1:], log.Index)
 	case structs.VaultAccessorRegisterRequestType:
-		return n.applyUpsertVaultAccessor(buf[1:], log.Index)
+		return nil
 	case structs.VaultAccessorDeregisterRequestType:
-		return n.applyDeregisterVaultAccessor(buf[1:], log.Index)
+		return nil
 	case structs.ApplyPlanResultsRequestType:
 		return n.applyPlanResults(msgType, buf[1:], log.Index)
 	case structs.DeploymentStatusUpdateRequestType:
@@ -325,9 +340,9 @@ func (n *nomadFSM) Apply(log *raft.Log) interface{} {
 	case structs.ClusterMetadataRequestType:
 		return n.applyClusterMetadata(buf[1:], log.Index)
 	case structs.ServiceIdentityAccessorRegisterRequestType:
-		return n.applyUpsertSIAccessor(buf[1:], log.Index)
+		return nil
 	case structs.ServiceIdentityAccessorDeregisterRequestType:
-		return n.applyDeregisterSIAccessor(buf[1:], log.Index)
+		return nil
 	case structs.CSIVolumeRegisterRequestType:
 		return n.applyCSIVolumeRegister(buf[1:], log.Index)
 	case structs.CSIVolumeDeregisterRequestType:
@@ -382,9 +397,14 @@ func (n *nomadFSM) Apply(log *raft.Log) interface{} {
 		return n.applyACLBindingRulesDelete(buf[1:], log.Index)
 	case structs.WrappedRootKeysUpsertRequestType:
 		return n.applyWrappedRootKeysUpsert(msgType, buf[1:], log.Index)
-
 	case structs.JobVersionTagRequestType:
 		return n.applyJobVersionTag(buf[1:], log.Index)
+	case structs.HostVolumeRegisterRequestType:
+		return n.applyHostVolumeRegister(msgType, buf[1:], log.Index)
+	case structs.HostVolumeDeleteRequestType:
+		return n.applyHostVolumeDelete(msgType, buf[1:], log.Index)
+	case structs.TaskGroupHostVolumeClaimDeleteRequestType:
+		return n.applyTaskGroupHostVolumeClaimDelete(buf[1:], log.Index)
 	}
 
 	// Check enterprise only message types.
@@ -713,8 +733,8 @@ func (n *nomadFSM) applyUpsertJob(msgType structs.MessageType, buf []byte, index
 		}
 	}
 
-	// COMPAT: Prior to Nomad 0.12.x evaluations were submitted in a separate Raft log,
-	// so this may be nil during server upgrades.
+	// Not all job registrations will include an eval (ex. registering a
+	// dispatch/periodic job)
 	if req.Eval != nil {
 		req.Eval.JobModifyIndex = index
 
@@ -789,6 +809,7 @@ func (n *nomadFSM) applyBatchDeregisterJob(msgType structs.MessageType, buf []by
 // handleJobDeregister is used to deregister a job. Leaves error logging up to
 // caller.
 func (n *nomadFSM) handleJobDeregister(index uint64, jobID, namespace string, purge bool, submitTime int64, noShutdownDelay bool, tx state.Txn) error {
+
 	// If it is periodic remove it from the dispatcher
 	if err := n.periodicDispatcher.Remove(namespace, jobID); err != nil {
 		return fmt.Errorf("periodicDispatcher.Remove failed: %w", err)
@@ -822,27 +843,34 @@ func (n *nomadFSM) handleJobDeregister(index uint64, jobID, namespace string, pu
 		// the job was updated to be non-periodic, thus checking if it is periodic
 		// doesn't ensure we clean it up properly.
 		n.state.DeletePeriodicLaunchTxn(index, namespace, jobID, tx)
-	} else {
-		// Get the current job and mark it as stopped and re-insert it.
-		ws := memdb.NewWatchSet()
-		current, err := n.state.JobByIDTxn(ws, namespace, jobID, tx)
-		if err != nil {
-			return fmt.Errorf("JobByID lookup failed: %w", err)
-		}
+		return nil
+	}
 
-		if current == nil {
-			return fmt.Errorf("job %q in namespace %q doesn't exist to be deregistered", jobID, namespace)
-		}
+	// Get the current job and mark it as stopped and re-insert it.
+	ws := memdb.NewWatchSet()
+	current, err := n.state.JobByIDTxn(ws, namespace, jobID, tx)
+	if err != nil {
+		return fmt.Errorf("JobByID lookup failed: %w", err)
+	}
 
-		stopped := current.Copy()
-		stopped.Stop = true
-		if submitTime != 0 {
-			stopped.SubmitTime = submitTime
-		}
+	if current == nil {
+		return fmt.Errorf("job %q in namespace %q doesn't exist to be deregistered", jobID, namespace)
+	}
 
-		if err := n.state.UpsertJobTxn(index, nil, stopped, tx); err != nil {
-			return fmt.Errorf("UpsertJob failed: %w", err)
-		}
+	stopped := current.Copy()
+	stopped.Stop = true
+	if submitTime != 0 {
+		stopped.SubmitTime = submitTime
+	}
+
+	// Disable scaling policies to avoid monitoring stopped jobs
+	scalingPolicies := stopped.GetScalingPolicies()
+	for _, policy := range scalingPolicies {
+		policy.Enabled = false
+	}
+
+	if err := n.state.UpsertJobTxn(index, nil, stopped, tx); err != nil {
+		return fmt.Errorf("UpsertJob failed: %w", err)
 	}
 
 	return nil
@@ -936,11 +964,21 @@ func (n *nomadFSM) applyAllocClientUpdate(msgType structs.MessageType, buf []byt
 	// Create a watch set
 	ws := memdb.NewWatchSet()
 
+	followupEvalsToCancel := []string{}
+
 	// Updating the allocs with the job id and task group name
 	for _, alloc := range req.Alloc {
 		if existing, _ := n.state.AllocByID(ws, alloc.ID); existing != nil {
 			alloc.JobID = existing.JobID
 			alloc.TaskGroup = existing.TaskGroup
+
+			// a reconnecting alloc has a followup eval which will be stuck in
+			// pending, blocking new evals for failure of this alloc. The
+			// UpdateAllocsFromClient method will cancel the eval in the state
+			// store but we need to remove it from the broker too.
+			if eval, ok := existing.FollowupEvalForReconnect(alloc); ok {
+				followupEvalsToCancel = append(followupEvalsToCancel, eval)
+			}
 		}
 	}
 
@@ -980,6 +1018,23 @@ func (n *nomadFSM) applyAllocClientUpdate(msgType structs.MessageType, buf []byt
 
 			n.blockedEvals.UnblockClassAndQuota(node.ComputedClass, quota, index)
 			n.blockedEvals.UnblockNode(node.ID, index)
+		}
+	}
+
+	// It's possible that allocs on different nodes were marked unknown in the
+	// same eval and therefore have the same FollowupEvalID. If only one of
+	// those allocs reconnects, we need to ensure we keep around the waiting
+	// eval for the other allocs. Otherwise, drop it from the eval broker.
+	for _, evalID := range followupEvalsToCancel {
+		// ws is nil because we need the update done above
+		eval, err := n.state.EvalByID(nil, evalID)
+		if err != nil {
+			n.logger.Error("looking up followup eval failed",
+				"eval_id", evalID, "error", err)
+			return err
+		}
+		if !eval.ShouldEnqueue() {
+			n.evalBroker.DropWaiting(eval)
 		}
 	}
 
@@ -1034,69 +1089,6 @@ func (n *nomadFSM) applyUpsertNodeEvent(msgType structs.MessageType, buf []byte,
 
 	if err := n.state.UpsertNodeEvents(msgType, index, req.NodeEvents); err != nil {
 		n.logger.Error("failed to add node events", "error", err)
-		return err
-	}
-
-	return nil
-}
-
-// applyUpsertVaultAccessor stores the Vault accessors for a given allocation
-// and task
-func (n *nomadFSM) applyUpsertVaultAccessor(buf []byte, index uint64) interface{} {
-	defer metrics.MeasureSince([]string{"nomad", "fsm", "upsert_vault_accessor"}, time.Now())
-	var req structs.VaultAccessorsRequest
-	if err := structs.Decode(buf, &req); err != nil {
-		panic(fmt.Errorf("failed to decode request: %v", err))
-	}
-
-	if err := n.state.UpsertVaultAccessor(index, req.Accessors); err != nil {
-		n.logger.Error("UpsertVaultAccessor failed", "error", err)
-		return err
-	}
-
-	return nil
-}
-
-// applyDeregisterVaultAccessor deregisters a set of Vault accessors
-func (n *nomadFSM) applyDeregisterVaultAccessor(buf []byte, index uint64) interface{} {
-	defer metrics.MeasureSince([]string{"nomad", "fsm", "deregister_vault_accessor"}, time.Now())
-	var req structs.VaultAccessorsRequest
-	if err := structs.Decode(buf, &req); err != nil {
-		panic(fmt.Errorf("failed to decode request: %v", err))
-	}
-
-	if err := n.state.DeleteVaultAccessors(index, req.Accessors); err != nil {
-		n.logger.Error("DeregisterVaultAccessor failed", "error", err)
-		return err
-	}
-
-	return nil
-}
-
-func (n *nomadFSM) applyUpsertSIAccessor(buf []byte, index uint64) interface{} {
-	defer metrics.MeasureSince([]string{"nomad", "fsm", "upsert_si_accessor"}, time.Now())
-	var request structs.SITokenAccessorsRequest
-	if err := structs.Decode(buf, &request); err != nil {
-		panic(fmt.Errorf("failed to decode request: %w", err))
-	}
-
-	if err := n.state.UpsertSITokenAccessors(index, request.Accessors); err != nil {
-		n.logger.Error("UpsertSITokenAccessors failed", "error", err)
-		return err
-	}
-
-	return nil
-}
-
-func (n *nomadFSM) applyDeregisterSIAccessor(buf []byte, index uint64) interface{} {
-	defer metrics.MeasureSince([]string{"nomad", "fsm", "deregister_si_accessor"}, time.Now())
-	var request structs.SITokenAccessorsRequest
-	if err := structs.Decode(buf, &request); err != nil {
-		panic(fmt.Errorf("failed to decode request: %w", err))
-	}
-
-	if err := n.state.DeleteSITokenAccessors(index, request.Accessors); err != nil {
-		n.logger.Error("DeregisterSITokenAccessor failed", "error", err)
 		return err
 	}
 
@@ -1459,7 +1451,7 @@ func (n *nomadFSM) applyCSIPluginDelete(buf []byte, index uint64) interface{} {
 	if err := n.state.DeleteCSIPlugin(index, req.ID); err != nil {
 		// "plugin in use" is an error for the state store but not for typical
 		// callers, so reduce log noise by not logging that case here
-		if err.Error() != "plugin in use" {
+		if !errors.Is(err, structs.ErrCSIPluginInUse) {
 			n.logger.Error("DeleteCSIPlugin failed", "error", err)
 		}
 		return err
@@ -1690,25 +1682,21 @@ func (n *nomadFSM) restoreImpl(old io.ReadCloser, filter *FSMFilter) error {
 			}
 
 		case VaultAccessorSnapshot:
+			// COMPAT: Nomad 1.10.0 removed the Vault accessor table. This case
+			// kept to gracefully handle snapshot requests which include an
+			// object from this.
 			accessor := new(structs.VaultAccessor)
 			if err := dec.Decode(accessor); err != nil {
 				return err
 			}
-			if filter.Include(accessor) {
-				if err := restore.VaultAccessorRestore(accessor); err != nil {
-					return err
-				}
-			}
 
 		case ServiceIdentityTokenAccessorSnapshot:
+			// COMPAT: Nomad 1.10.0 removed the SI Token accessor table. This case
+			// kept to gracefully handle snapshot requests which include an
+			// object from this.
 			accessor := new(structs.SITokenAccessor)
 			if err := dec.Decode(accessor); err != nil {
 				return err
-			}
-			if filter.Include(accessor) {
-				if err := restore.SITokenAccessorRestore(accessor); err != nil {
-					return err
-				}
 			}
 
 		case JobVersionSnapshot:
@@ -1980,6 +1968,17 @@ func (n *nomadFSM) restoreImpl(old io.ReadCloser, filter *FSMFilter) error {
 			// Perform the restoration.
 			if err := restore.JobSubmissionRestore(jobSubmissions); err != nil {
 				return err
+			}
+
+		case HostVolumeSnapshot:
+			vol := new(structs.HostVolume)
+			if err := dec.Decode(vol); err != nil {
+				return err
+			}
+			if filter.Include(vol) {
+				if err := restore.HostVolumeRestore(vol); err != nil {
+					return err
+				}
 			}
 
 		default:
@@ -2450,6 +2449,51 @@ func (n *nomadFSM) applyWrappedRootKeysDelete(msgType structs.MessageType, buf [
 	return nil
 }
 
+func (n *nomadFSM) applyHostVolumeRegister(msgType structs.MessageType, buf []byte, index uint64) interface{} {
+	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_host_volume_register"}, time.Now())
+
+	var req structs.HostVolumeRegisterRequest
+	if err := structs.Decode(buf, &req); err != nil {
+		panic(fmt.Errorf("failed to decode request: %v", err))
+	}
+
+	if err := n.state.UpsertHostVolume(index, req.Volume); err != nil {
+		n.logger.Error("UpsertHostVolumes failed", "error", err)
+		return err
+	}
+	return nil
+}
+
+func (n *nomadFSM) applyHostVolumeDelete(msgType structs.MessageType, buf []byte, index uint64) interface{} {
+	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_host_volume_delete"}, time.Now())
+
+	var req structs.HostVolumeDeleteRequest
+	if err := structs.Decode(buf, &req); err != nil {
+		panic(fmt.Errorf("failed to decode request: %v", err))
+	}
+
+	if err := n.state.DeleteHostVolume(index, req.RequestNamespace(), req.VolumeID); err != nil {
+		n.logger.Error("DeleteHostVolumes failed", "error", err)
+		return err
+	}
+	return nil
+}
+
+func (n *nomadFSM) applyTaskGroupHostVolumeClaimDelete(buf []byte, index uint64) interface{} {
+	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_task_group_host_volume_claim_delete"}, time.Now())
+
+	var req structs.TaskGroupVolumeClaimDeleteRequest
+	if err := structs.Decode(buf, &req); err != nil {
+		panic(fmt.Errorf("failed to decode request: %v", err))
+	}
+
+	if err := n.state.DeleteTaskGroupHostVolumeClaim(index, req.ClaimID); err != nil {
+		n.logger.Error("DeleteTaskGroupHostVolumeClaim failed", "error", err)
+		return err
+	}
+	return nil
+}
+
 func (s *nomadSnapshot) Persist(sink raft.SnapshotSink) error {
 	defer metrics.MeasureSince([]string{"nomad", "fsm", "persist"}, time.Now())
 	// Register the nodes
@@ -2492,14 +2536,6 @@ func (s *nomadSnapshot) Persist(sink raft.SnapshotSink) error {
 		return err
 	}
 	if err := s.persistJobSummaries(sink, encoder); err != nil {
-		sink.Cancel()
-		return err
-	}
-	if err := s.persistVaultAccessors(sink, encoder); err != nil {
-		sink.Cancel()
-		return err
-	}
-	if err := s.persistSITokenAccessors(sink, encoder); err != nil {
 		sink.Cancel()
 		return err
 	}
@@ -2580,6 +2616,10 @@ func (s *nomadSnapshot) Persist(sink raft.SnapshotSink) error {
 		return err
 	}
 	if err := s.persistJobSubmissions(sink, encoder); err != nil {
+		sink.Cancel()
+		return err
+	}
+	if err := s.persistHostVolumes(sink, encoder); err != nil {
 		sink.Cancel()
 		return err
 	}
@@ -2793,48 +2833,6 @@ func (s *nomadSnapshot) persistJobSummaries(sink raft.SnapshotSink,
 
 		sink.Write([]byte{byte(JobSummarySnapshot)})
 		if err := encoder.Encode(jobSummary); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *nomadSnapshot) persistVaultAccessors(sink raft.SnapshotSink,
-	encoder *codec.Encoder) error {
-
-	ws := memdb.NewWatchSet()
-	accessors, err := s.snap.VaultAccessors(ws)
-	if err != nil {
-		return err
-	}
-
-	for {
-		raw := accessors.Next()
-		if raw == nil {
-			break
-		}
-
-		accessor := raw.(*structs.VaultAccessor)
-
-		sink.Write([]byte{byte(VaultAccessorSnapshot)})
-		if err := encoder.Encode(accessor); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *nomadSnapshot) persistSITokenAccessors(sink raft.SnapshotSink, encoder *codec.Encoder) error {
-	ws := memdb.NewWatchSet()
-	accessors, err := s.snap.SITokenAccessors(ws)
-	if err != nil {
-		return err
-	}
-
-	for raw := accessors.Next(); raw != nil; raw = accessors.Next() {
-		accessor := raw.(*structs.SITokenAccessor)
-		sink.Write([]byte{byte(ServiceIdentityTokenAccessorSnapshot)})
-		if err := encoder.Encode(accessor); err != nil {
 			return err
 		}
 	}
@@ -3145,21 +3143,18 @@ func (s *nomadSnapshot) persistServiceRegistrations(sink raft.SnapshotSink,
 		return err
 	}
 
-	for {
-		// Get the next item.
-		for raw := serviceRegs.Next(); raw != nil; raw = serviceRegs.Next() {
+	for raw := serviceRegs.Next(); raw != nil; raw = serviceRegs.Next() {
 
-			// Prepare the request struct.
-			reg := raw.(*structs.ServiceRegistration)
+		// Prepare the request struct.
+		reg := raw.(*structs.ServiceRegistration)
 
-			// Write out a service registration snapshot.
-			sink.Write([]byte{byte(ServiceRegistrationSnapshot)})
-			if err := encoder.Encode(reg); err != nil {
-				return err
-			}
+		// Write out a service registration snapshot.
+		sink.Write([]byte{byte(ServiceRegistrationSnapshot)})
+		if err := encoder.Encode(reg); err != nil {
+			return err
 		}
-		return nil
 	}
+	return nil
 }
 
 func (s *nomadSnapshot) persistVariables(sink raft.SnapshotSink,
@@ -3314,6 +3309,22 @@ func (s *nomadSnapshot) persistJobSubmissions(sink raft.SnapshotSink, encoder *c
 		// write the snapshot
 		sink.Write([]byte{byte(JobSubmissionSnapshot)})
 		if err := encoder.Encode(jobSubmission); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *nomadSnapshot) persistHostVolumes(sink raft.SnapshotSink, encoder *codec.Encoder) error {
+	iter, err := s.snap.HostVolumes(nil, state.SortDefault)
+	if err != nil {
+		return err
+	}
+	for raw := iter.Next(); raw != nil; raw = iter.Next() {
+		vol := raw.(*structs.HostVolume)
+
+		sink.Write([]byte{byte(HostVolumeSnapshot)})
+		if err := encoder.Encode(vol); err != nil {
 			return err
 		}
 	}

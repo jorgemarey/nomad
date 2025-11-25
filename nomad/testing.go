@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/hashicorp/nomad/ci"
@@ -17,7 +18,6 @@ import (
 	"github.com/hashicorp/nomad/nomad/structs"
 	structsconfig "github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/nomad/version"
-	testing "github.com/mitchellh/go-testing-interface"
 	"github.com/shoenig/test/must"
 )
 
@@ -132,14 +132,13 @@ func TestServerErr(t testing.TB, cb func(*Config)) (*Server, func(), error) {
 	cCatalog := consul.NewMockCatalog(config.Logger)
 	cConfigs := consul.NewMockConfigsAPI(config.Logger)
 	cConfigFunc := func(_ string) consul.ConfigAPI { return cConfigs }
-	cACLs := consul.NewMockACLsAPI(config.Logger)
 
 	var server *Server
 	var err error
 
 	for i := 10; i >= 0; i-- {
 		// Create server
-		server, err = NewServer(config, cCatalog, cConfigFunc, cACLs)
+		server, err = NewServer(config, cCatalog, cConfigFunc)
 		if err == nil {
 			return server, func() {
 				ch := make(chan error)

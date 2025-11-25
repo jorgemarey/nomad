@@ -1,6 +1,8 @@
 // Copyright (c) HashiCorp, Inc.
 // SPDX-License-Identifier: BUSL-1.1
 
+//go:build linux
+
 package taskrunner
 
 import (
@@ -21,13 +23,13 @@ import (
 	"github.com/armon/go-metrics"
 	"github.com/golang/snappy"
 	consulapi "github.com/hashicorp/consul/api"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/client/allocdir"
 	"github.com/hashicorp/nomad/client/allocrunner/hookstats"
 	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
 	"github.com/hashicorp/nomad/client/allocrunner/taskrunner/getter"
 	"github.com/hashicorp/nomad/client/config"
-	consulclient "github.com/hashicorp/nomad/client/consul"
 	"github.com/hashicorp/nomad/client/devicemanager"
 	"github.com/hashicorp/nomad/client/lib/cgroupslib"
 	"github.com/hashicorp/nomad/client/lib/proclib"
@@ -48,7 +50,6 @@ import (
 	"github.com/hashicorp/nomad/drivers/rawexec"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/testlog"
-	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/plugins/device"
@@ -148,9 +149,9 @@ func testTaskRunnerConfig(t *testing.T, alloc *structs.Allocation, taskName stri
 	if vault != nil {
 		vaultFunc = func(_ string) (vaultclient.VaultClient, error) { return vault, nil }
 	}
-	// the envBuilder for the WIDMgr never has access to the task, so don't
-	// include it here
-	envBuilder := taskenv.NewBuilder(mock.Node(), alloc, nil, "global")
+	// the env for the WIDMgr never has access to the task, so don't include it
+	// here
+	allocEnv := taskenv.NewBuilder(mock.Node(), alloc, nil, "global").Build()
 
 	conf := &Config{
 		Alloc:                 alloc,
@@ -159,7 +160,6 @@ func testTaskRunnerConfig(t *testing.T, alloc *structs.Allocation, taskName stri
 		TaskDir:               taskDir,
 		Logger:                clientConf.Logger,
 		ConsulServices:        consulRegMock,
-		ConsulSI:              consulclient.NewMockServiceIdentitiesClient(),
 		VaultFunc:             vaultFunc,
 		StateDB:               cstate.NoopDB{},
 		StateUpdater:          NewMockTaskStateUpdater(),
@@ -172,7 +172,7 @@ func testTaskRunnerConfig(t *testing.T, alloc *structs.Allocation, taskName stri
 		ServiceRegWrapper:     wrapperMock,
 		Getter:                getter.TestSandbox(t),
 		Wranglers:             proclib.MockWranglers(t),
-		WIDMgr:                widmgr.NewWIDMgr(widsigner, alloc, db, logger, envBuilder),
+		WIDMgr:                widmgr.NewWIDMgr(widsigner, alloc, db, logger, allocEnv),
 		AllocHookResources:    cstructs.NewAllocHookResources(),
 	}
 
@@ -1446,182 +1446,6 @@ func useMockEnvoyBootstrapHook(tr *TaskRunner) {
 	}
 }
 
-// TestTaskRunner_BlockForSIDSToken asserts tasks do not start until a Consul
-// Service Identity token is derived.
-func TestTaskRunner_BlockForSIDSToken(t *testing.T) {
-	ci.Parallel(t)
-	r := require.New(t)
-
-	alloc := mock.BatchConnectAlloc()
-	task := alloc.Job.TaskGroups[0].Tasks[0]
-	task.Config = map[string]interface{}{
-		"run_for": "0s",
-	}
-
-	trConfig, cleanup := testTaskRunnerConfig(t, alloc, task.Name, nil)
-	defer cleanup()
-
-	// set a consul token on the Nomad client's consul config, because that is
-	// what gates the action of requesting SI token(s)
-	trConfig.ClientConfig.GetDefaultConsul().Token = uuid.Generate()
-
-	// control when we get a Consul SI token
-	token := uuid.Generate()
-	waitCh := make(chan struct{})
-	deriveFn := func(context.Context, *structs.Allocation, []string) (map[string]string, error) {
-		<-waitCh
-		return map[string]string{task.Name: token}, nil
-	}
-	siClient := trConfig.ConsulSI.(*consulclient.MockServiceIdentitiesClient)
-	siClient.DeriveTokenFn = deriveFn
-
-	// start the task runner
-	tr, err := NewTaskRunner(trConfig)
-	r.NoError(err)
-	defer tr.Kill(context.Background(), structs.NewTaskEvent("cleanup"))
-	useMockEnvoyBootstrapHook(tr) // mock the envoy bootstrap hook
-
-	go tr.Run()
-
-	// assert task runner blocks on SI token
-	select {
-	case <-tr.WaitCh():
-		r.Fail("task_runner exited before si unblocked")
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	// assert task state is still pending
-	r.Equal(structs.TaskStatePending, tr.TaskState().State)
-
-	// unblock service identity token
-	close(waitCh)
-
-	// task runner should exit now that it has been unblocked and it is a batch
-	// job with a zero sleep time
-	testWaitForTaskToDie(t, tr)
-
-	// assert task exited successfully
-	finalState := tr.TaskState()
-	r.Equal(structs.TaskStateDead, finalState.State)
-	r.False(finalState.Failed)
-
-	// assert the token is on disk
-	tokenPath := filepath.Join(trConfig.TaskDir.SecretsDir, sidsTokenFile)
-	data, err := os.ReadFile(tokenPath)
-	r.NoError(err)
-	r.Equal(token, string(data))
-}
-
-func TestTaskRunner_DeriveSIToken_Retry(t *testing.T) {
-	ci.Parallel(t)
-	r := require.New(t)
-
-	alloc := mock.BatchConnectAlloc()
-	task := alloc.Job.TaskGroups[0].Tasks[0]
-	task.Config = map[string]interface{}{
-		"run_for": "0s",
-	}
-
-	trConfig, cleanup := testTaskRunnerConfig(t, alloc, task.Name, nil)
-	defer cleanup()
-
-	// set a consul token on the Nomad client's consul config, because that is
-	// what gates the action of requesting SI token(s)
-	trConfig.ClientConfig.GetDefaultConsul().Token = uuid.Generate()
-
-	// control when we get a Consul SI token (recoverable failure on first call)
-	token := uuid.Generate()
-	deriveCount := 0
-	deriveFn := func(context.Context, *structs.Allocation, []string) (map[string]string, error) {
-		if deriveCount > 0 {
-
-			return map[string]string{task.Name: token}, nil
-		}
-		deriveCount++
-		return nil, structs.NewRecoverableError(errors.New("try again later"), true)
-	}
-	siClient := trConfig.ConsulSI.(*consulclient.MockServiceIdentitiesClient)
-	siClient.DeriveTokenFn = deriveFn
-
-	// start the task runner
-	tr, err := NewTaskRunner(trConfig)
-	r.NoError(err)
-	defer tr.Kill(context.Background(), structs.NewTaskEvent("cleanup"))
-	useMockEnvoyBootstrapHook(tr) // mock the envoy bootstrap
-	go tr.Run()
-
-	// assert task runner blocks on SI token
-	testWaitForTaskToDie(t, tr)
-
-	// assert task exited successfully
-	finalState := tr.TaskState()
-	r.Equal(structs.TaskStateDead, finalState.State)
-	r.False(finalState.Failed)
-
-	// assert the token is on disk
-	tokenPath := filepath.Join(trConfig.TaskDir.SecretsDir, sidsTokenFile)
-	data, err := os.ReadFile(tokenPath)
-	r.NoError(err)
-	r.Equal(token, string(data))
-}
-
-// TestTaskRunner_DeriveSIToken_Unrecoverable asserts that an unrecoverable error
-// from deriving a service identity token will fail a task.
-func TestTaskRunner_DeriveSIToken_Unrecoverable(t *testing.T) {
-	ci.Parallel(t)
-	r := require.New(t)
-
-	alloc := mock.BatchConnectAlloc()
-	tg := alloc.Job.TaskGroups[0]
-	tg.RestartPolicy.Attempts = 0
-	tg.RestartPolicy.Interval = 0
-	tg.RestartPolicy.Delay = 0
-	tg.RestartPolicy.Mode = structs.RestartPolicyModeFail
-	task := tg.Tasks[0]
-	task.Config = map[string]interface{}{
-		"run_for": "0s",
-	}
-
-	trConfig, cleanup := testTaskRunnerConfig(t, alloc, task.Name, nil)
-	defer cleanup()
-
-	// set a consul token on the Nomad client's consul config, because that is
-	// what gates the action of requesting SI token(s)
-	trConfig.ClientConfig.GetDefaultConsul().Token = uuid.Generate()
-
-	// SI token derivation suffers a non-retryable error
-	siClient := trConfig.ConsulSI.(*consulclient.MockServiceIdentitiesClient)
-	siClient.SetDeriveTokenError(alloc.ID, []string{task.Name}, errors.New("non-recoverable"))
-
-	tr, err := NewTaskRunner(trConfig)
-	r.NoError(err)
-
-	defer tr.Kill(context.Background(), structs.NewTaskEvent("cleanup"))
-	useMockEnvoyBootstrapHook(tr) // mock the envoy bootstrap hook
-	go tr.Run()
-
-	// Wait for the task to die
-	select {
-	case <-tr.WaitCh():
-	case <-time.After(time.Duration(testutil.TestMultiplier()*15) * time.Second):
-		require.Fail(t, "timed out waiting for task runner to fail")
-	}
-
-	// assert we have died and failed
-	finalState := tr.TaskState()
-	r.Equal(structs.TaskStateDead, finalState.State)
-	r.True(finalState.Failed)
-	r.Equal(5, len(finalState.Events))
-	/*
-	 + event: Task received by client
-	 + event: Building Task Directory
-	 + event: consul: failed to derive SI token: non-recoverable
-	 + event: consul_sids: context canceled
-	 + event: Policy allows no restarts
-	*/
-	r.Equal("true", finalState.Events[2].Details["fails_task"])
-}
-
 // TestTaskRunner_BlockForVaultToken asserts tasks do not start until a vault token
 // is derived.
 func TestTaskRunner_BlockForVaultToken(t *testing.T) {
@@ -1633,25 +1457,42 @@ func TestTaskRunner_BlockForVaultToken(t *testing.T) {
 		"run_for": "0s",
 	}
 	task.Vault = &structs.Vault{
-		Cluster:  structs.VaultDefaultCluster,
-		Policies: []string{"default"},
+		Cluster: structs.VaultDefaultCluster,
 	}
 
 	// Control when we get a Vault token
 	token := "1234"
 	waitCh := make(chan struct{})
-	handler := func(*structs.Allocation, []string) (map[string]string, error) {
+	handler := func(ctx context.Context, req vaultclient.JWTLoginRequest) (string, bool, int, error) {
 		<-waitCh
-		return map[string]string{task.Name: token}, nil
+		return token, true, 30, nil
 	}
 
 	vc, err := vaultclient.NewMockVaultClient(structs.VaultDefaultCluster)
 	must.NoError(t, err)
 	vaultClient := vc.(*vaultclient.MockVaultClient)
-	vaultClient.DeriveTokenFn = handler
+	vaultClient.SetDeriveTokenWithJWTFn(handler)
 
 	conf, cleanup := testTaskRunnerConfig(t, alloc, task.Name, vaultClient)
 	defer cleanup()
+
+	// The test triggers the task runner Vault hook which performs a call to
+	// the WI manager. We therefore need to seed the WI manager with data and
+	// use the mock implementation for this. The data itself doesn't matter, we
+	// just care about the lookup success.
+	mockIDManager := widmgr.NewMockIdentityManager()
+	mockIDManager.(*widmgr.MockIdentityManager).SetIdentity(
+		structs.WIHandle{
+			IdentityName:       task.Vault.IdentityName(),
+			WorkloadIdentifier: task.Name,
+			WorkloadType:       structs.WorkloadTypeTask,
+		}, &structs.SignedWorkloadIdentity{
+			WorkloadIdentityRequest: structs.WorkloadIdentityRequest{},
+			JWT:                     "",
+		},
+	)
+
+	conf.WIDMgr = mockIDManager
 
 	tr, err := NewTaskRunner(conf)
 	require.NoError(t, err)
@@ -1726,22 +1567,39 @@ func TestTaskRunner_DisableFileForVaultToken(t *testing.T) {
 	}
 	task.Vault = &structs.Vault{
 		Cluster:     structs.VaultDefaultCluster,
-		Policies:    []string{"default"},
 		DisableFile: true,
 	}
 
 	// Setup a test Vault client
 	token := "1234"
-	handler := func(*structs.Allocation, []string) (map[string]string, error) {
-		return map[string]string{task.Name: token}, nil
+	handler := func(ctx context.Context, req vaultclient.JWTLoginRequest) (string, bool, int, error) {
+		return token, true, 30, nil
 	}
 	vc, err := vaultclient.NewMockVaultClient(structs.VaultDefaultCluster)
 	must.NoError(t, err)
 	vaultClient := vc.(*vaultclient.MockVaultClient)
-	vaultClient.DeriveTokenFn = handler
+	vaultClient.SetDeriveTokenWithJWTFn(handler)
 
 	conf, cleanup := testTaskRunnerConfig(t, alloc, task.Name, vaultClient)
 	defer cleanup()
+
+	// The test triggers the task runner Vault hook which performs a call to
+	// the WI manager. We therefore need to seed the WI manager with data and
+	// use the mock implementation for this. The data itself doesn't matter, we
+	// just care about the lookup success.
+	mockIDManager := widmgr.NewMockIdentityManager()
+	mockIDManager.(*widmgr.MockIdentityManager).SetIdentity(
+		structs.WIHandle{
+			IdentityName:       task.Vault.IdentityName(),
+			WorkloadIdentifier: task.Name,
+			WorkloadType:       structs.WorkloadTypeTask,
+		}, &structs.SignedWorkloadIdentity{
+			WorkloadIdentityRequest: structs.WorkloadIdentityRequest{},
+			JWT:                     "",
+		},
+	)
+
+	conf.WIDMgr = mockIDManager
 
 	// Start task runner and wait for it to complete.
 	tr, err := NewTaskRunner(conf)
@@ -1776,28 +1634,45 @@ func TestTaskRunner_DeriveToken_Retry(t *testing.T) {
 	alloc := mock.BatchAlloc()
 	task := alloc.Job.TaskGroups[0].Tasks[0]
 	task.Vault = &structs.Vault{
-		Cluster:  structs.VaultDefaultCluster,
-		Policies: []string{"default"},
+		Cluster: structs.VaultDefaultCluster,
 	}
 
 	// Fail on the first attempt to derive a vault token
 	token := "1234"
 	count := 0
-	handler := func(*structs.Allocation, []string) (map[string]string, error) {
+	handler := func(ctx context.Context, req vaultclient.JWTLoginRequest) (string, bool, int, error) {
 		if count > 0 {
-			return map[string]string{task.Name: token}, nil
+			return token, true, 30, nil
 		}
 
 		count++
-		return nil, structs.NewRecoverableError(fmt.Errorf("Want a retry"), true)
+		return "", false, 0, structs.NewRecoverableError(fmt.Errorf("want a retry"), true)
 	}
 	vc, err := vaultclient.NewMockVaultClient(structs.VaultDefaultCluster)
 	must.NoError(t, err)
 	vaultClient := vc.(*vaultclient.MockVaultClient)
-	vaultClient.DeriveTokenFn = handler
+	vaultClient.SetDeriveTokenWithJWTFn(handler)
 
 	conf, cleanup := testTaskRunnerConfig(t, alloc, task.Name, vaultClient)
 	defer cleanup()
+
+	// The test triggers the task runner Vault hook which performs a call to
+	// the WI manager. We therefore need to seed the WI manager with data and
+	// use the mock implementation for this. The data itself doesn't matter, we
+	// just care about the lookup success.
+	mockIDManager := widmgr.NewMockIdentityManager()
+	mockIDManager.(*widmgr.MockIdentityManager).SetIdentity(
+		structs.WIHandle{
+			IdentityName:       task.Vault.IdentityName(),
+			WorkloadIdentifier: task.Name,
+			WorkloadType:       structs.WorkloadTypeTask,
+		}, &structs.SignedWorkloadIdentity{
+			WorkloadIdentityRequest: structs.WorkloadIdentityRequest{},
+			JWT:                     "",
+		},
+	)
+
+	conf.WIDMgr = mockIDManager
 
 	tr, err := NewTaskRunner(conf)
 	require.NoError(t, err)
@@ -1859,19 +1734,39 @@ func TestTaskRunner_DeriveToken_Unrecoverable(t *testing.T) {
 		"run_for": "0s",
 	}
 	task.Vault = &structs.Vault{
-		Cluster:  structs.VaultDefaultCluster,
-		Policies: []string{"default"},
+		Cluster: structs.VaultDefaultCluster,
 	}
 
 	// Error the token derivation
 	vc, err := vaultclient.NewMockVaultClient(structs.VaultDefaultCluster)
 	must.NoError(t, err)
-	vaultClient := vc.(*vaultclient.MockVaultClient)
-	vaultClient.SetDeriveTokenError(
-		alloc.ID, []string{task.Name}, fmt.Errorf("Non recoverable"))
 
-	conf, cleanup := testTaskRunnerConfig(t, alloc, task.Name, vaultClient)
+	vc.(*vaultclient.MockVaultClient).SetDeriveTokenWithJWTFn(
+		func(ctx context.Context, req vaultclient.JWTLoginRequest) (string, bool, int, error) {
+			return "", false, 0, errors.New("unrecoverable")
+		},
+	)
+
+	conf, cleanup := testTaskRunnerConfig(t, alloc, task.Name, vc)
 	defer cleanup()
+
+	// The test triggers the task runner Vault hook which performs a call to
+	// the WI manager. We therefore need to seed the WI manager with data and
+	// use the mock implementation for this. The data itself doesn't matter, we
+	// just care about the lookup success.
+	mockIDManager := widmgr.NewMockIdentityManager()
+	mockIDManager.(*widmgr.MockIdentityManager).SetIdentity(
+		structs.WIHandle{
+			IdentityName:       task.Vault.IdentityName(),
+			WorkloadIdentifier: task.Name,
+			WorkloadType:       structs.WorkloadTypeTask,
+		}, &structs.SignedWorkloadIdentity{
+			WorkloadIdentityRequest: structs.WorkloadIdentityRequest{},
+			JWT:                     "",
+		},
+	)
+
+	conf.WIDMgr = mockIDManager
 
 	tr, err := NewTaskRunner(conf)
 	require.NoError(t, err)
@@ -1881,7 +1776,7 @@ func TestTaskRunner_DeriveToken_Unrecoverable(t *testing.T) {
 	// Wait for the task to die
 	select {
 	case <-tr.WaitCh():
-	case <-time.After(time.Duration(testutil.TestMultiplier()*15) * time.Second):
+	case <-time.After(time.Duration(testutil.TestMultiplier()*30) * time.Second):
 		require.Fail(t, "timed out waiting for task runner to fail")
 	}
 
@@ -2153,10 +2048,10 @@ func TestTaskRunner_DriverNetwork(t *testing.T) {
 	}, func(err error) {
 		services, _ := consulAgent.ServicesWithFilterOpts("", nil)
 		for _, s := range services {
-			t.Logf(pretty.Sprint("Service: ", s))
+			t.Log(pretty.Sprint("Service: ", s))
 		}
 		for _, c := range consulAgent.CheckRegs() {
-			t.Logf(pretty.Sprint("Check:   ", c))
+			t.Log(pretty.Sprint("Check:   ", c))
 		}
 		require.NoError(t, err)
 	})
@@ -2176,24 +2071,41 @@ func TestTaskRunner_RestartSignalTask_NotRunning(t *testing.T) {
 
 	// Use vault to block the start
 	task.Vault = &structs.Vault{
-		Cluster:  structs.VaultDefaultCluster,
-		Policies: []string{"default"},
+		Cluster: structs.VaultDefaultCluster,
 	}
 
 	// Control when we get a Vault token
 	waitCh := make(chan struct{}, 1)
 	defer close(waitCh)
-	handler := func(*structs.Allocation, []string) (map[string]string, error) {
+	handler := func(ctx context.Context, req vaultclient.JWTLoginRequest) (string, bool, int, error) {
 		<-waitCh
-		return map[string]string{task.Name: "1234"}, nil
+		return "1234", true, 30, nil
 	}
 	vc, err := vaultclient.NewMockVaultClient(structs.VaultDefaultCluster)
 	must.NoError(t, err)
 	vaultClient := vc.(*vaultclient.MockVaultClient)
-	vaultClient.DeriveTokenFn = handler
+	vaultClient.SetDeriveTokenWithJWTFn(handler)
 
 	conf, cleanup := testTaskRunnerConfig(t, alloc, task.Name, vaultClient)
 	defer cleanup()
+
+	// The test triggers the task runner Vault hook which performs a call to
+	// the WI manager. We therefore need to seed the WI manager with data and
+	// use the mock implementation for this. The data itself doesn't matter, we
+	// just care about the lookup success.
+	mockIDManager := widmgr.NewMockIdentityManager()
+	mockIDManager.(*widmgr.MockIdentityManager).SetIdentity(
+		structs.WIHandle{
+			IdentityName:       task.Vault.IdentityName(),
+			WorkloadIdentifier: task.Name,
+			WorkloadType:       structs.WorkloadTypeTask,
+		}, &structs.SignedWorkloadIdentity{
+			WorkloadIdentityRequest: structs.WorkloadIdentityRequest{},
+			JWT:                     "",
+		},
+	)
+
+	conf.WIDMgr = mockIDManager
 
 	tr, err := NewTaskRunner(conf)
 	require.NoError(t, err)
@@ -2341,8 +2253,7 @@ func TestTaskRunner_Template_BlockingPreStart(t *testing.T) {
 	}
 
 	task.Vault = &structs.Vault{
-		Cluster:  structs.VaultDefaultCluster,
-		Policies: []string{"default"},
+		Cluster: structs.VaultDefaultCluster,
 	}
 
 	conf, cleanup := testTaskRunnerConfig(t, alloc, task.Name, nil)
@@ -2551,8 +2462,7 @@ func TestTaskRunner_Template_NewVaultToken(t *testing.T) {
 		},
 	}
 	task.Vault = &structs.Vault{
-		Cluster:  structs.VaultDefaultCluster,
-		Policies: []string{"default"},
+		Cluster: structs.VaultDefaultCluster,
 	}
 
 	vc, err := vaultclient.NewMockVaultClient(structs.VaultDefaultCluster)
@@ -2561,6 +2471,24 @@ func TestTaskRunner_Template_NewVaultToken(t *testing.T) {
 
 	conf, cleanup := testTaskRunnerConfig(t, alloc, task.Name, vaultClient)
 	defer cleanup()
+
+	// The test triggers the task runner Vault hook which performs a call to
+	// the WI manager. We therefore need to seed the WI manager with data and
+	// use the mock implementation for this. The data itself doesn't matter, we
+	// just care about the lookup success.
+	mockIDManager := widmgr.NewMockIdentityManager()
+	mockIDManager.(*widmgr.MockIdentityManager).SetIdentity(
+		structs.WIHandle{
+			IdentityName:       task.Vault.IdentityName(),
+			WorkloadIdentifier: task.Name,
+			WorkloadType:       structs.WorkloadTypeTask,
+		}, &structs.SignedWorkloadIdentity{
+			WorkloadIdentityRequest: structs.WorkloadIdentityRequest{},
+			JWT:                     "",
+		},
+	)
+
+	conf.WIDMgr = mockIDManager
 
 	tr, err := NewTaskRunner(conf)
 	require.NoError(t, err)
@@ -2621,8 +2549,9 @@ func TestTaskRunner_Template_NewVaultToken(t *testing.T) {
 
 }
 
-// TestTaskRunner_VaultManager_Restart asserts that the alloc is restarted when the alloc
-// derived vault token expires, when task is configured with Restart change mode
+// TestTaskRunner_VaultManager_Restart asserts that the alloc is restarted when
+// the alloc derived vault token expires, when task is configured with Restart
+// change mode.
 func TestTaskRunner_VaultManager_Restart(t *testing.T) {
 	ci.Parallel(t)
 
@@ -2633,7 +2562,6 @@ func TestTaskRunner_VaultManager_Restart(t *testing.T) {
 	}
 	task.Vault = &structs.Vault{
 		Cluster:    structs.VaultDefaultCluster,
-		Policies:   []string{"default"},
 		ChangeMode: structs.VaultChangeModeRestart,
 	}
 
@@ -2643,6 +2571,24 @@ func TestTaskRunner_VaultManager_Restart(t *testing.T) {
 
 	conf, cleanup := testTaskRunnerConfig(t, alloc, task.Name, vaultClient)
 	defer cleanup()
+
+	// The test triggers the task runner Vault hook which performs a call to
+	// the WI manager. We therefore need to seed the WI manager with data and
+	// use the mock implementation for this. The data itself doesn't matter, we
+	// just care about the lookup success.
+	mockIDManager := widmgr.NewMockIdentityManager()
+	mockIDManager.(*widmgr.MockIdentityManager).SetIdentity(
+		structs.WIHandle{
+			IdentityName:       task.Vault.IdentityName(),
+			WorkloadIdentifier: task.Name,
+			WorkloadType:       structs.WorkloadTypeTask,
+		}, &structs.SignedWorkloadIdentity{
+			WorkloadIdentityRequest: structs.WorkloadIdentityRequest{},
+			JWT:                     "",
+		},
+	)
+
+	conf.WIDMgr = mockIDManager
 
 	tr, err := NewTaskRunner(conf)
 	require.NoError(t, err)
@@ -2698,8 +2644,9 @@ func TestTaskRunner_VaultManager_Restart(t *testing.T) {
 	})
 }
 
-// TestTaskRunner_VaultManager_Signal asserts that the alloc is signalled when the alloc
-// derived vault token expires, when task is configured with signal change mode
+// TestTaskRunner_VaultManager_Signal asserts that the alloc is signalled when
+// the alloc derived vault token expires, when task is configured with signal
+// change mode.
 func TestTaskRunner_VaultManager_Signal(t *testing.T) {
 	ci.Parallel(t)
 
@@ -2710,7 +2657,6 @@ func TestTaskRunner_VaultManager_Signal(t *testing.T) {
 	}
 	task.Vault = &structs.Vault{
 		Cluster:      structs.VaultDefaultCluster,
-		Policies:     []string{"default"},
 		ChangeMode:   structs.VaultChangeModeSignal,
 		ChangeSignal: "SIGUSR1",
 	}
@@ -2720,6 +2666,24 @@ func TestTaskRunner_VaultManager_Signal(t *testing.T) {
 
 	conf, cleanup := testTaskRunnerConfig(t, alloc, task.Name, vaultClient)
 	defer cleanup()
+
+	// The test triggers the task runner Vault hook which performs a call to
+	// the WI manager. We therefore need to seed the WI manager with data and
+	// use the mock implementation for this. The data itself doesn't matter, we
+	// just care about the lookup success.
+	mockIDManager := widmgr.NewMockIdentityManager()
+	mockIDManager.(*widmgr.MockIdentityManager).SetIdentity(
+		structs.WIHandle{
+			IdentityName:       task.Vault.IdentityName(),
+			WorkloadIdentifier: task.Name,
+			WorkloadType:       structs.WorkloadTypeTask,
+		}, &structs.SignedWorkloadIdentity{
+			WorkloadIdentityRequest: structs.WorkloadIdentityRequest{},
+			JWT:                     "",
+		},
+	)
+
+	conf.WIDMgr = mockIDManager
 
 	tr, err := NewTaskRunner(conf)
 	require.NoError(t, err)

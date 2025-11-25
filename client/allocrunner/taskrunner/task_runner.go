@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	metrics "github.com/armon/go-metrics"
 	log "github.com/hashicorp/go-hclog"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/hcl/v2/hcldec"
 	"github.com/hashicorp/nomad/client/allocdir"
@@ -192,10 +192,6 @@ type TaskRunner struct {
 	// sidecar or gateway task.
 	consulProxiesClientFunc consul.SupportedProxiesAPIFunc
 
-	// sidsClient is the client used by the service identity hook for managing
-	// service identity tokens
-	siClient consul.ServiceIdentityAPI
-
 	// vaultClientFunc is the function to get a client to use to derive and
 	// renew Vault tokens
 	vaultClientFunc vaultclient.VaultClientFunc
@@ -316,9 +312,6 @@ type Config struct {
 	// from Consul.
 	ConsulProxiesFunc consul.SupportedProxiesAPIFunc
 
-	// ConsulSI is the client to use for managing Consul SI tokens
-	ConsulSI consul.ServiceIdentityAPI
-
 	// DynamicRegistry is where dynamic plugins should be registered.
 	DynamicRegistry dynamicplugins.Registry
 
@@ -414,7 +407,6 @@ func NewTaskRunner(config *Config) (*TaskRunner, error) {
 		dynamicRegistry:         config.DynamicRegistry,
 		consulServiceClient:     config.ConsulServices,
 		consulProxiesClientFunc: config.ConsulProxiesFunc,
-		siClient:                config.ConsulSI,
 		vaultClientFunc:         config.VaultFunc,
 		state:                   tstate,
 		localState:              state.NewLocalState(),
@@ -1362,12 +1354,6 @@ func (tr *TaskRunner) UpdateState(state string, event *structs.TaskEvent) {
 		// Only log the error as we persistence errors should not
 		// affect task state.
 		tr.logger.Error("error persisting task state", "error", err, "event", event, "state", state)
-	}
-
-	// Store task handle for remote tasks
-	if tr.driverCapabilities != nil && tr.driverCapabilities.RemoteTasks {
-		tr.logger.Trace("storing remote task handle state")
-		tr.localState.TaskHandle.Store(tr.state)
 	}
 
 	// Notify the alloc runner of the transition

@@ -8,9 +8,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
 	humanize "github.com/dustin/go-humanize"
@@ -61,6 +59,9 @@ FS Specific Options:
   -job <job-id>
     Use a random allocation from the specified job ID or prefix.
 
+  -group <group-name>
+    Specifies the task group with the task when a random allocation is selected.
+
   -stat
     Show file stat information instead of displaying the file, or listing the directory.
 
@@ -92,6 +93,7 @@ func (f *AllocFSCommand) AutocompleteFlags() complete.Flags {
 			"-H":       complete.PredictNothing,
 			"-verbose": complete.PredictNothing,
 			"-job":     complete.PredictAnything,
+			"-group":   complete.PredictAnything,
 			"-stat":    complete.PredictNothing,
 			"-f":       complete.PredictNothing,
 			"-tail":    complete.PredictNothing,
@@ -120,12 +122,14 @@ func (f *AllocFSCommand) Name() string { return "alloc fs" }
 func (f *AllocFSCommand) Run(args []string) int {
 	var verbose, machine, job, stat, tail, follow bool
 	var numLines, numBytes int64
+	var group string
 
 	flags := f.Meta.FlagSet(f.Name(), FlagSetClient)
 	flags.Usage = func() { f.Ui.Output(f.Help()) }
 	flags.BoolVar(&verbose, "verbose", false, "")
 	flags.BoolVar(&machine, "H", false, "")
 	flags.BoolVar(&job, "job", false, "")
+	flags.StringVar(&group, "group", "", "")
 	flags.BoolVar(&stat, "stat", false, "")
 	flags.BoolVar(&follow, "f", false, "")
 	flags.BoolVar(&tail, "tail", false, "")
@@ -173,7 +177,7 @@ func (f *AllocFSCommand) Run(args []string) int {
 			return 1
 		}
 
-		allocID, err = getRandomJobAllocID(client, jobID, "", ns)
+		allocID, err = getRandomJobAllocID(client, jobID, group, ns)
 		if err != nil {
 			f.Ui.Error(fmt.Sprintf("Error fetching allocations: %v", err))
 			return 1
@@ -349,38 +353,19 @@ func (f *AllocFSCommand) Run(args []string) int {
 	return 0
 }
 
-// followFile outputs the contents of the file to stdout relative to the end of
-// the file. If numLines does not equal -1, then tail -n behavior is used.
+// followFile calls the streamFrames helper to output the contents of the
+// file to stdout relative to the end of the file. If numLines does not equal
+// -1, then tail -n behavior is used.
 func (f *AllocFSCommand) followFile(client *api.Client, alloc *api.Allocation,
 	path, origin string, offset, numLines int64) (io.ReadCloser, error) {
 
 	cancel := make(chan struct{})
+
 	frames, errCh := client.AllocFS().Stream(alloc, path, origin, offset, cancel, nil)
-	select {
-	case err := <-errCh:
+	r, err := streamFrames(frames, errCh, numLines, cancel)
+	if err != nil {
 		return nil, err
-	default:
 	}
-	signalCh := make(chan os.Signal, 1)
-	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
-
-	// Create a reader
-	var r io.ReadCloser
-	frameReader := api.NewFrameReader(frames, errCh, cancel)
-	frameReader.SetUnblockTime(500 * time.Millisecond)
-	r = frameReader
-
-	// If numLines is set, wrap the reader
-	if numLines != -1 {
-		r = NewLineLimitReader(r, int(numLines), int(numLines*bytesToLines), 1*time.Second)
-	}
-
-	go func() {
-		<-signalCh
-
-		// End the streaming
-		r.Close()
-	}()
 
 	return r, nil
 }

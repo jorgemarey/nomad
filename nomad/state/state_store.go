@@ -20,6 +20,7 @@ import (
 	"github.com/hashicorp/go-set/v3"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/pointer"
+	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/lib/lang"
 	"github.com/hashicorp/nomad/nomad/stream"
 	"github.com/hashicorp/nomad/nomad/structs"
@@ -1039,6 +1040,9 @@ func upsertNodeTxn(txn *txn, index uint64, node *structs.Node) error {
 	if err := upsertCSIPluginsForNode(txn, node, index); err != nil {
 		return fmt.Errorf("csi plugin update failed: %v", err)
 	}
+	if err := upsertHostVolumeForNode(txn, node, index); err != nil {
+		return fmt.Errorf("dynamic host volumes update failed: %v", err)
+	}
 
 	return nil
 }
@@ -1048,14 +1052,14 @@ func (s *StateStore) DeleteNode(msgType structs.MessageType, index uint64, nodes
 	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
-	err := deleteNodeTxn(txn, index, nodes)
+	err := s.deleteNodeTxn(txn, index, nodes)
 	if err != nil {
 		return nil
 	}
 	return txn.Commit()
 }
 
-func deleteNodeTxn(txn *txn, index uint64, nodes []string) error {
+func (s *StateStore) deleteNodeTxn(txn *txn, index uint64, nodes []string) error {
 	if len(nodes) == 0 {
 		return fmt.Errorf("node ids missing")
 	}
@@ -1077,6 +1081,11 @@ func deleteNodeTxn(txn *txn, index uint64, nodes []string) error {
 		node := existing.(*structs.Node)
 		if err := deleteNodeCSIPlugins(txn, node, index); err != nil {
 			return fmt.Errorf("csi plugin delete failed: %v", err)
+		}
+		if node.GCVolumesOnNodeGC {
+			if err := s.deleteHostVolumesOnNode(txn, index, node.ID); err != nil {
+				return fmt.Errorf("dynamic host volume delete failed: %v", err)
+			}
 		}
 	}
 
@@ -1139,11 +1148,6 @@ func (s *StateStore) updateNodeStatusTxn(txn *txn, nodeID, status string, update
 	}
 	if err := txn.Insert("index", &IndexEntry{"nodes", txn.Index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
-	}
-
-	// Deregister any services on the node in the same transaction
-	if copyNode.Status == structs.NodeStatusDown {
-		s.deleteServiceRegistrationByNodeIDTxn(txn, txn.Index, copyNode.ID)
 	}
 
 	return nil
@@ -1386,7 +1390,7 @@ func appendNodeEvents(index uint64, node *structs.Node, events []*structs.NodeEv
 func upsertCSIPluginsForNode(txn *txn, node *structs.Node, index uint64) error {
 
 	upsertFn := func(info *structs.CSIInfo) error {
-		raw, err := txn.First("csi_plugins", "id", info.PluginID)
+		raw, err := txn.First(TableCSIPlugins, "id", info.PluginID)
 		if err != nil {
 			return fmt.Errorf("csi_plugin lookup error: %s %v", info.PluginID, err)
 		}
@@ -1417,7 +1421,7 @@ func upsertCSIPluginsForNode(txn *txn, node *structs.Node, index uint64) error {
 
 		plug.ModifyIndex = index
 
-		err = txn.Insert("csi_plugins", plug)
+		err = txn.Insert(TableCSIPlugins, plug)
 		if err != nil {
 			return fmt.Errorf("csi_plugins insert error: %v", err)
 		}
@@ -1446,7 +1450,7 @@ func upsertCSIPluginsForNode(txn *txn, node *structs.Node, index uint64) error {
 
 	// remove the client node from any plugin that's not
 	// running on it.
-	iter, err := txn.Get("csi_plugins", "id")
+	iter, err := txn.Get(TableCSIPlugins, "id")
 	if err != nil {
 		return fmt.Errorf("csi_plugins lookup failed: %v", err)
 	}
@@ -1491,7 +1495,7 @@ func upsertCSIPluginsForNode(txn *txn, node *structs.Node, index uint64) error {
 		}
 	}
 
-	if err := txn.Insert("index", &IndexEntry{"csi_plugins", index}); err != nil {
+	if err := txn.Insert("index", &IndexEntry{TableCSIPlugins, index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
@@ -1513,7 +1517,7 @@ func deleteNodeCSIPlugins(txn *txn, node *structs.Node, index uint64) error {
 	}
 
 	for id := range names {
-		raw, err := txn.First("csi_plugins", "id", id)
+		raw, err := txn.First(TableCSIPlugins, "id", id)
 		if err != nil {
 			return fmt.Errorf("csi_plugins lookup error %s: %v", id, err)
 		}
@@ -1534,7 +1538,7 @@ func deleteNodeCSIPlugins(txn *txn, node *structs.Node, index uint64) error {
 		}
 	}
 
-	if err := txn.Insert("index", &IndexEntry{"csi_plugins", index}); err != nil {
+	if err := txn.Insert("index", &IndexEntry{TableCSIPlugins, index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
@@ -1544,13 +1548,13 @@ func deleteNodeCSIPlugins(txn *txn, node *structs.Node, index uint64) error {
 // updateOrGCPlugin updates a plugin but will delete it if the plugin is empty
 func updateOrGCPlugin(index uint64, txn Txn, plug *structs.CSIPlugin) error {
 	if plug.IsEmpty() {
-		err := txn.Delete("csi_plugins", plug)
+		err := txn.Delete(TableCSIPlugins, plug)
 		if err != nil {
 			return fmt.Errorf("csi_plugins delete error: %v", err)
 		}
 	} else {
 		plug.ModifyIndex = index
-		err := txn.Insert("csi_plugins", plug)
+		err := txn.Insert(TableCSIPlugins, plug)
 		if err != nil {
 			return fmt.Errorf("csi_plugins update error %s: %v", plug.ID, err)
 		}
@@ -1649,7 +1653,7 @@ func (s *StateStore) deleteJobFromPlugins(index uint64, txn Txn, job *structs.Jo
 	}
 
 	if len(plugins) > 0 {
-		if err = txn.Insert("index", &IndexEntry{"csi_plugins", index}); err != nil {
+		if err = txn.Insert("index", &IndexEntry{TableCSIPlugins, index}); err != nil {
 			return fmt.Errorf("index update failed: %v", err)
 		}
 	}
@@ -2022,6 +2026,12 @@ func (s *StateStore) DeleteJobTxn(index uint64, namespace, jobID string, txn Txn
 	if _, err = txn.DeleteAll("scaling_event", "id", namespace, jobID); err != nil {
 		return fmt.Errorf("deleting job scaling events failed: %v", err)
 	}
+
+	// Delete task group volume claims
+	if err = s.deleteTaskGroupHostVolumeClaimByNamespaceAndJob(index, txn, namespace, jobID); err != nil {
+		return fmt.Errorf("deleting job volume claims failed: %v", err)
+	}
+
 	if err := txn.Insert("index", &IndexEntry{"scaling_event", index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
@@ -2549,7 +2559,7 @@ func (s *StateStore) JobSummaryByPrefix(ws memdb.WatchSet, namespace, id string)
 
 // UpsertCSIVolume inserts a volume in the state store.
 func (s *StateStore) UpsertCSIVolume(index uint64, volumes []*structs.CSIVolume) error {
-	txn := s.db.WriteTxn(index)
+	txn := s.db.WriteTxnMsgT(structs.CSIVolumeRegisterRequestType, index)
 	defer txn.Abort()
 
 	for _, v := range volumes {
@@ -2559,7 +2569,7 @@ func (s *StateStore) UpsertCSIVolume(index uint64, volumes []*structs.CSIVolume)
 			return fmt.Errorf("volume %s is in nonexistent namespace %s", v.ID, v.Namespace)
 		}
 
-		obj, err := txn.First("csi_volumes", "id", v.Namespace, v.ID)
+		obj, err := txn.First(TableCSIVolumes, "id", v.Namespace, v.ID)
 		if err != nil {
 			return fmt.Errorf("volume existence check error: %v", err)
 		}
@@ -2588,13 +2598,13 @@ func (s *StateStore) UpsertCSIVolume(index uint64, volumes []*structs.CSIVolume)
 			v.WriteAllocs[allocID] = nil
 		}
 
-		err = txn.Insert("csi_volumes", v)
+		err = txn.Insert(TableCSIVolumes, v)
 		if err != nil {
 			return fmt.Errorf("volume insert: %v", err)
 		}
 	}
 
-	if err := txn.Insert("index", &IndexEntry{"csi_volumes", index}); err != nil {
+	if err := txn.Insert("index", &IndexEntry{TableCSIVolumes, index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
@@ -2607,7 +2617,7 @@ func (s *StateStore) CSIVolumes(ws memdb.WatchSet) (memdb.ResultIterator, error)
 	txn := s.db.ReadTxn()
 	defer txn.Abort()
 
-	iter, err := txn.Get("csi_volumes", "id")
+	iter, err := txn.Get(TableCSIVolumes, "id")
 	if err != nil {
 		return nil, fmt.Errorf("csi_volumes lookup failed: %v", err)
 	}
@@ -2623,7 +2633,7 @@ func (s *StateStore) CSIVolumes(ws memdb.WatchSet) (memdb.ResultIterator, error)
 func (s *StateStore) CSIVolumeByID(ws memdb.WatchSet, namespace, id string) (*structs.CSIVolume, error) {
 	txn := s.db.ReadTxn()
 
-	watchCh, obj, err := txn.FirstWatch("csi_volumes", "id", namespace, id)
+	watchCh, obj, err := txn.FirstWatch(TableCSIVolumes, "id", namespace, id)
 	if err != nil {
 		return nil, fmt.Errorf("volume lookup failed for %s: %v", id, err)
 	}
@@ -2644,7 +2654,7 @@ func (s *StateStore) CSIVolumeByID(ws memdb.WatchSet, namespace, id string) (*st
 func (s *StateStore) CSIVolumesByPluginID(ws memdb.WatchSet, namespace, prefix, pluginID string) (memdb.ResultIterator, error) {
 	txn := s.db.ReadTxn()
 
-	iter, err := txn.Get("csi_volumes", "plugin_id", pluginID)
+	iter, err := txn.Get(TableCSIVolumes, "plugin_id", pluginID)
 	if err != nil {
 		return nil, fmt.Errorf("volume lookup failed: %v", err)
 	}
@@ -2672,7 +2682,7 @@ func (s *StateStore) CSIVolumesByIDPrefix(ws memdb.WatchSet, namespace, volumeID
 
 	txn := s.db.ReadTxn()
 
-	iter, err := txn.Get("csi_volumes", "id_prefix", namespace, volumeID)
+	iter, err := txn.Get(TableCSIVolumes, "id_prefix", namespace, volumeID)
 	if err != nil {
 		return nil, err
 	}
@@ -2686,7 +2696,7 @@ func (s *StateStore) csiVolumeByIDPrefixAllNamespaces(ws memdb.WatchSet, prefix 
 	txn := s.db.ReadTxn()
 
 	// Walk the entire csi_volumes table
-	iter, err := txn.Get("csi_volumes", "id")
+	iter, err := txn.Get(TableCSIVolumes, "id")
 
 	if err != nil {
 		return nil, err
@@ -2738,7 +2748,7 @@ func (s *StateStore) CSIVolumesByNodeID(ws memdb.WatchSet, prefix, nodeID string
 	txn := s.db.ReadTxn()
 	for id, namespace := range ids {
 		if strings.HasPrefix(id, prefix) {
-			watchCh, raw, err := txn.FirstWatch("csi_volumes", "id", namespace, id)
+			watchCh, raw, err := txn.FirstWatch(TableCSIVolumes, "id", namespace, id)
 			if err != nil {
 				return nil, fmt.Errorf("volume lookup failed: %s %v", id, err)
 			}
@@ -2759,7 +2769,7 @@ func (s *StateStore) CSIVolumesByNamespace(ws memdb.WatchSet, namespace, prefix 
 
 func (s *StateStore) csiVolumesByNamespaceImpl(txn *txn, ws memdb.WatchSet, namespace, prefix string) (memdb.ResultIterator, error) {
 
-	iter, err := txn.Get("csi_volumes", "id_prefix", namespace, prefix)
+	iter, err := txn.Get(TableCSIVolumes, "id_prefix", namespace, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("volume lookup failed: %v", err)
 	}
@@ -2771,10 +2781,10 @@ func (s *StateStore) csiVolumesByNamespaceImpl(txn *txn, ws memdb.WatchSet, name
 
 // CSIVolumeClaim updates the volume's claim count and allocation list
 func (s *StateStore) CSIVolumeClaim(index uint64, now int64, namespace, id string, claim *structs.CSIVolumeClaim) error {
-	txn := s.db.WriteTxn(index)
+	txn := s.db.WriteTxnMsgT(structs.CSIVolumeClaimRequestType, index)
 	defer txn.Abort()
 
-	row, err := txn.First("csi_volumes", "id", namespace, id)
+	row, err := txn.First(TableCSIVolumes, "id", namespace, id)
 	if err != nil {
 		return fmt.Errorf("volume lookup failed: %s: %v", id, err)
 	}
@@ -2832,11 +2842,11 @@ func (s *StateStore) CSIVolumeClaim(index uint64, now int64, namespace, id strin
 		volume.WriteAllocs[allocID] = nil
 	}
 
-	if err = txn.Insert("csi_volumes", volume); err != nil {
+	if err = txn.Insert(TableCSIVolumes, volume); err != nil {
 		return fmt.Errorf("volume update failed: %s: %v", id, err)
 	}
 
-	if err = txn.Insert("index", &IndexEntry{"csi_volumes", index}); err != nil {
+	if err = txn.Insert("index", &IndexEntry{TableCSIVolumes, index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
@@ -2845,11 +2855,11 @@ func (s *StateStore) CSIVolumeClaim(index uint64, now int64, namespace, id strin
 
 // CSIVolumeDeregister removes the volume from the server
 func (s *StateStore) CSIVolumeDeregister(index uint64, namespace string, ids []string, force bool) error {
-	txn := s.db.WriteTxn(index)
+	txn := s.db.WriteTxnMsgT(structs.CSIVolumeDeregisterRequestType, index)
 	defer txn.Abort()
 
 	for _, id := range ids {
-		existing, err := txn.First("csi_volumes", "id", namespace, id)
+		existing, err := txn.First(TableCSIVolumes, "id", namespace, id)
 		if err != nil {
 			return fmt.Errorf("volume lookup failed: %s: %v", id, err)
 		}
@@ -2873,12 +2883,12 @@ func (s *StateStore) CSIVolumeDeregister(index uint64, namespace string, ids []s
 			}
 		}
 
-		if err = txn.Delete("csi_volumes", existing); err != nil {
+		if err = txn.Delete(TableCSIVolumes, existing); err != nil {
 			return fmt.Errorf("volume delete failed: %s: %v", id, err)
 		}
 	}
 
-	if err := txn.Insert("index", &IndexEntry{"csi_volumes", index}); err != nil {
+	if err := txn.Insert("index", &IndexEntry{TableCSIVolumes, index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
@@ -3011,6 +3021,7 @@ func (s *StateStore) csiVolumeDenormalizeTxn(txn Txn, ws memdb.WatchSet, vol *st
 				// so create one now
 				pastClaim = &structs.CSIVolumeClaim{
 					AllocationID:   id,
+					ExternalNodeID: currentClaim.ExternalNodeID,
 					NodeID:         currentClaim.NodeID,
 					Mode:           currentClaim.Mode,
 					State:          structs.CSIVolumeClaimStateUnpublishing,
@@ -3060,7 +3071,7 @@ func (s *StateStore) CSIPlugins(ws memdb.WatchSet) (memdb.ResultIterator, error)
 	txn := s.db.ReadTxn()
 	defer txn.Abort()
 
-	iter, err := txn.Get("csi_plugins", "id")
+	iter, err := txn.Get(TableCSIPlugins, "id")
 	if err != nil {
 		return nil, fmt.Errorf("csi_plugins lookup failed: %v", err)
 	}
@@ -3074,7 +3085,7 @@ func (s *StateStore) CSIPlugins(ws memdb.WatchSet) (memdb.ResultIterator, error)
 func (s *StateStore) CSIPluginsByIDPrefix(ws memdb.WatchSet, pluginID string) (memdb.ResultIterator, error) {
 	txn := s.db.ReadTxn()
 
-	iter, err := txn.Get("csi_plugins", "id_prefix", pluginID)
+	iter, err := txn.Get(TableCSIPlugins, "id_prefix", pluginID)
 	if err != nil {
 		return nil, err
 	}
@@ -3098,7 +3109,7 @@ func (s *StateStore) CSIPluginByID(ws memdb.WatchSet, id string) (*structs.CSIPl
 // CSIPluginByIDTxn returns a named CSIPlugin
 func (s *StateStore) CSIPluginByIDTxn(txn Txn, ws memdb.WatchSet, id string) (*structs.CSIPlugin, error) {
 
-	watchCh, obj, err := txn.FirstWatch("csi_plugins", "id", id)
+	watchCh, obj, err := txn.FirstWatch(TableCSIPlugins, "id", id)
 	if err != nil {
 		return nil, fmt.Errorf("csi_plugin lookup failed: %s %v", id, err)
 	}
@@ -3155,7 +3166,7 @@ func (s *StateStore) UpsertCSIPlugin(index uint64, plug *structs.CSIPlugin) erro
 	txn := s.db.WriteTxn(index)
 	defer txn.Abort()
 
-	existing, err := txn.First("csi_plugins", "id", plug.ID)
+	existing, err := txn.First(TableCSIPlugins, "id", plug.ID)
 	if err != nil {
 		return fmt.Errorf("csi_plugin lookup error: %s %v", plug.ID, err)
 	}
@@ -3166,11 +3177,11 @@ func (s *StateStore) UpsertCSIPlugin(index uint64, plug *structs.CSIPlugin) erro
 		plug.CreateTime = existing.(*structs.CSIPlugin).CreateTime
 	}
 
-	err = txn.Insert("csi_plugins", plug)
+	err = txn.Insert(TableCSIPlugins, plug)
 	if err != nil {
 		return fmt.Errorf("csi_plugins insert error: %v", err)
 	}
-	if err := txn.Insert("index", &IndexEntry{"csi_plugins", index}); err != nil {
+	if err := txn.Insert("index", &IndexEntry{TableCSIPlugins, index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
 	return txn.Commit()
@@ -3230,7 +3241,7 @@ func (s *StateStore) DeleteCSIPlugin(index uint64, id string) error {
 		return structs.ErrCSIPluginInUse
 	}
 
-	err = txn.Delete("csi_plugins", plug)
+	err = txn.Delete(TableCSIPlugins, plug)
 	if err != nil {
 		return fmt.Errorf("csi_plugins delete error: %v", err)
 	}
@@ -4023,6 +4034,10 @@ func (s *StateStore) nestedUpdateAllocFromClient(txn *txn, index uint64, alloc *
 		return err
 	}
 
+	if err := s.cancelFollowupEvalsForReconnect(txn, index, copyAlloc, alloc); err != nil {
+		return err
+	}
+
 	// Update the allocation
 	if err := txn.Insert("allocs", copyAlloc); err != nil {
 		return fmt.Errorf("alloc insert failed: %v", err)
@@ -4044,12 +4059,57 @@ func (s *StateStore) nestedUpdateAllocFromClient(txn *txn, index uint64, alloc *
 		return fmt.Errorf("setting job status failed: %v", err)
 	}
 
-	if copyAlloc.ClientTerminalStatus() {
-		if err := s.deleteServiceRegistrationByAllocIDTxn(txn, index, copyAlloc.ID); err != nil {
-			return err
+	if err := s.deregisterServicesForTerminalAllocs(txn, index, copyAlloc); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// cancelFollowupEvalsForReconnect cancels any follow-up evals for an allocation
+// that was awaiting reconnect and gets an update from the client that its
+// status is now known
+func (s *StateStore) cancelFollowupEvalsForReconnect(txn *txn, index uint64, copyAlloc, alloc *structs.Allocation) error {
+
+	evalID, ok := copyAlloc.FollowupEvalForReconnect(alloc)
+	if !ok {
+		return nil
+	}
+
+	copyAlloc.FollowupEvalID = ""
+
+	allJobAllocs, err := s.AllocsByJob(nil, alloc.Namespace, alloc.JobID, true)
+	if err != nil {
+		return fmt.Errorf("could not lookup allocs: %w", err)
+	}
+
+	for _, jobAlloc := range allJobAllocs {
+		if jobAlloc.ID != copyAlloc.ID && jobAlloc.FollowupEvalID == evalID && !jobAlloc.TerminalStatus() {
+			// follow-up eval was created for multiple non-terminal allocs in
+			// the job at the same time, so we leave it alone
+			return nil
 		}
 	}
 
+	raw, err := txn.First("evals", "id", evalID)
+	if err != nil {
+		return fmt.Errorf("followup eval lookup failed: %v", err)
+	}
+	if raw == nil {
+		return nil // eval was deleted by user
+	}
+	eval := raw.(*structs.Evaluation)
+	eval = eval.Copy()
+	eval.Status = structs.EvalStatusCancelled
+	eval.StatusDescription = "allocs reconnected"
+	eval.ModifyIndex = index
+	err = txn.Insert("evals", eval)
+	if err != nil {
+		return err
+	}
+	if err := txn.Insert("index", &IndexEntry{"evals", index}); err != nil {
+		return fmt.Errorf("index update failed: %v", err)
+	}
 	return nil
 }
 
@@ -4107,11 +4167,11 @@ func (s *StateStore) upsertAllocsImpl(index uint64, allocs []*structs.Allocation
 			}
 
 			// Issue https://github.com/hashicorp/nomad/issues/2583 uncovered
-			// the a race between a forced garbage collection and the scheduler
+			// a race between a forced garbage collection and the scheduler
 			// marking an allocation as terminal. The issue is that the
 			// allocation from the scheduler has its job normalized and the FSM
-			// will only denormalize if the allocation is not terminal.  However
-			// if the allocation is garbage collected, that will result in a
+			// will only denormalize if the allocation is not terminal. However
+			// if the allocation is garbage collected, that will result in an
 			// allocation being upserted for the first time without a job
 			// attached. By returning an error here, it will cause the FSM to
 			// error, causing the plan_apply to error and thus causing the
@@ -4120,10 +4180,64 @@ func (s *StateStore) upsertAllocsImpl(index uint64, allocs []*structs.Allocation
 			if alloc.Job == nil {
 				return fmt.Errorf("attempting to upsert allocation %q without a job", alloc.ID)
 			}
+
+			// Check if the alloc requires sticky volumes. If yes, find a node
+			// that has the right volume and update the task group volume
+			// claims table
+			for _, tg := range alloc.Job.TaskGroups {
+				for _, v := range tg.Volumes {
+					if !v.Sticky {
+						continue
+					}
+					sv := &structs.TaskGroupHostVolumeClaim{
+						ID:            uuid.Generate(),
+						Namespace:     alloc.Namespace,
+						JobID:         alloc.JobID,
+						TaskGroupName: tg.Name,
+						AllocID:       alloc.ID,
+						VolumeName:    v.Source,
+					}
+
+					allocNode, err := s.NodeByID(nil, alloc.NodeID)
+					if err != nil {
+						return err
+					}
+
+					// since there's no existing claim, find a volume and register a claim
+					for _, v := range allocNode.HostVolumes {
+						if v.Name != sv.VolumeName {
+							continue
+						}
+
+						sv.VolumeID = v.ID
+
+						// has this volume been claimed already?
+						existingClaim, err := s.GetTaskGroupHostVolumeClaim(nil, sv.Namespace, sv.JobID, sv.TaskGroupName, v.ID)
+						if err != nil {
+							return err
+						}
+
+						// if the volume has already been claimed, we don't have to do anything. The
+						// feasibility checker in the scheduler will verify alloc placement.
+						if existingClaim != nil {
+							continue
+						}
+
+						if err := s.upsertTaskGroupHostVolumeClaimImpl(index, sv, txn); err != nil {
+							return err
+						}
+					}
+				}
+			}
 		} else {
 			alloc.CreateIndex = exist.CreateIndex
 			alloc.ModifyIndex = index
 			alloc.AllocModifyIndex = index
+
+			// Carry over NextAllocation from existing
+			if exist.NextAllocation != "" {
+				alloc.NextAllocation = exist.NextAllocation
+			}
 
 			// Keep the clients task states
 			alloc.TaskStates = exist.TaskStates
@@ -4159,6 +4273,10 @@ func (s *StateStore) upsertAllocsImpl(index uint64, allocs []*structs.Allocation
 		}
 
 		if err := s.updatePluginForTerminalAlloc(index, alloc, txn); err != nil {
+			return err
+		}
+
+		if err := s.deregisterServicesForTerminalAllocs(txn, index, alloc); err != nil {
 			return err
 		}
 
@@ -4560,254 +4678,7 @@ func (s *StateStore) allocsByNamespaceImpl(ws memdb.WatchSet, txn *txn, namespac
 	return iter, nil
 }
 
-// UpsertVaultAccessor is used to register a set of Vault Accessors.
-func (s *StateStore) UpsertVaultAccessor(index uint64, accessors []*structs.VaultAccessor) error {
-	txn := s.db.WriteTxn(index)
-	defer txn.Abort()
-
-	for _, accessor := range accessors {
-		// Set the create index
-		accessor.CreateIndex = index
-
-		// Insert the accessor
-		if err := txn.Insert("vault_accessors", accessor); err != nil {
-			return fmt.Errorf("accessor insert failed: %v", err)
-		}
-	}
-
-	if err := txn.Insert("index", &IndexEntry{"vault_accessors", index}); err != nil {
-		return fmt.Errorf("index update failed: %v", err)
-	}
-
-	return txn.Commit()
-}
-
-// DeleteVaultAccessors is used to delete a set of Vault Accessors
-func (s *StateStore) DeleteVaultAccessors(index uint64, accessors []*structs.VaultAccessor) error {
-	txn := s.db.WriteTxn(index)
-	defer txn.Abort()
-
-	// Lookup the accessor
-	for _, accessor := range accessors {
-		// Delete the accessor
-		if err := txn.Delete("vault_accessors", accessor); err != nil {
-			return fmt.Errorf("accessor delete failed: %v", err)
-		}
-	}
-
-	if err := txn.Insert("index", &IndexEntry{"vault_accessors", index}); err != nil {
-		return fmt.Errorf("index update failed: %v", err)
-	}
-
-	return txn.Commit()
-}
-
-// VaultAccessor returns the given Vault accessor
-func (s *StateStore) VaultAccessor(ws memdb.WatchSet, accessor string) (*structs.VaultAccessor, error) {
-	txn := s.db.ReadTxn()
-
-	watchCh, existing, err := txn.FirstWatch("vault_accessors", "id", accessor)
-	if err != nil {
-		return nil, fmt.Errorf("accessor lookup failed: %v", err)
-	}
-
-	ws.Add(watchCh)
-
-	if existing != nil {
-		return existing.(*structs.VaultAccessor), nil
-	}
-
-	return nil, nil
-}
-
-// VaultAccessors returns an iterator of Vault accessors.
-func (s *StateStore) VaultAccessors(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.ReadTxn()
-
-	iter, err := txn.Get("vault_accessors", "id")
-	if err != nil {
-		return nil, err
-	}
-
-	ws.Add(iter.WatchCh())
-
-	return iter, nil
-}
-
-// VaultAccessorsByAlloc returns all the Vault accessors by alloc id
-func (s *StateStore) VaultAccessorsByAlloc(ws memdb.WatchSet, allocID string) ([]*structs.VaultAccessor, error) {
-	txn := s.db.ReadTxn()
-
-	// Get an iterator over the accessors
-	iter, err := txn.Get("vault_accessors", "alloc_id", allocID)
-	if err != nil {
-		return nil, err
-	}
-
-	ws.Add(iter.WatchCh())
-
-	var out []*structs.VaultAccessor
-	for {
-		raw := iter.Next()
-		if raw == nil {
-			break
-		}
-		out = append(out, raw.(*structs.VaultAccessor))
-	}
-	return out, nil
-}
-
-// VaultAccessorsByNode returns all the Vault accessors by node id
-func (s *StateStore) VaultAccessorsByNode(ws memdb.WatchSet, nodeID string) ([]*structs.VaultAccessor, error) {
-	txn := s.db.ReadTxn()
-
-	// Get an iterator over the accessors
-	iter, err := txn.Get("vault_accessors", "node_id", nodeID)
-	if err != nil {
-		return nil, err
-	}
-
-	ws.Add(iter.WatchCh())
-
-	var out []*structs.VaultAccessor
-	for {
-		raw := iter.Next()
-		if raw == nil {
-			break
-		}
-		out = append(out, raw.(*structs.VaultAccessor))
-	}
-	return out, nil
-}
-
-func indexEntry(table string, index uint64) *IndexEntry {
-	return &IndexEntry{
-		Key:   table,
-		Value: index,
-	}
-}
-
 const siTokenAccessorTable = "si_token_accessors"
-
-// UpsertSITokenAccessors is used to register a set of Service Identity token accessors.
-func (s *StateStore) UpsertSITokenAccessors(index uint64, accessors []*structs.SITokenAccessor) error {
-	txn := s.db.WriteTxn(index)
-	defer txn.Abort()
-
-	for _, accessor := range accessors {
-		// set the create index
-		accessor.CreateIndex = index
-
-		// insert the accessor
-		if err := txn.Insert(siTokenAccessorTable, accessor); err != nil {
-			return fmt.Errorf("accessor insert failed: %w", err)
-		}
-	}
-
-	// update the index for this table
-	if err := txn.Insert("index", indexEntry(siTokenAccessorTable, index)); err != nil {
-		return fmt.Errorf("index update failed: %w", err)
-	}
-
-	return txn.Commit()
-}
-
-// DeleteSITokenAccessors is used to delete a set of Service Identity token accessors.
-func (s *StateStore) DeleteSITokenAccessors(index uint64, accessors []*structs.SITokenAccessor) error {
-	txn := s.db.WriteTxn(index)
-	defer txn.Abort()
-
-	// Lookup each accessor
-	for _, accessor := range accessors {
-		// Delete the accessor
-		if err := txn.Delete(siTokenAccessorTable, accessor); err != nil {
-			return fmt.Errorf("accessor delete failed: %w", err)
-		}
-	}
-
-	// update the index for this table
-	if err := txn.Insert("index", indexEntry(siTokenAccessorTable, index)); err != nil {
-		return fmt.Errorf("index update failed: %w", err)
-	}
-
-	return txn.Commit()
-}
-
-// SITokenAccessor returns the given Service Identity token accessor.
-func (s *StateStore) SITokenAccessor(ws memdb.WatchSet, accessorID string) (*structs.SITokenAccessor, error) {
-	txn := s.db.ReadTxn()
-	defer txn.Abort()
-
-	watchCh, existing, err := txn.FirstWatch(siTokenAccessorTable, "id", accessorID)
-	if err != nil {
-		return nil, fmt.Errorf("accessor lookup failed: %w", err)
-	}
-
-	ws.Add(watchCh)
-
-	if existing != nil {
-		return existing.(*structs.SITokenAccessor), nil
-	}
-
-	return nil, nil
-}
-
-// SITokenAccessors returns an iterator of Service Identity token accessors.
-func (s *StateStore) SITokenAccessors(ws memdb.WatchSet) (memdb.ResultIterator, error) {
-	txn := s.db.ReadTxn()
-	defer txn.Abort()
-
-	iter, err := txn.Get(siTokenAccessorTable, "id")
-	if err != nil {
-		return nil, err
-	}
-
-	ws.Add(iter.WatchCh())
-
-	return iter, nil
-}
-
-// SITokenAccessorsByAlloc returns all the Service Identity token accessors by alloc ID.
-func (s *StateStore) SITokenAccessorsByAlloc(ws memdb.WatchSet, allocID string) ([]*structs.SITokenAccessor, error) {
-	txn := s.db.ReadTxn()
-	defer txn.Abort()
-
-	// Get an iterator over the accessors
-	iter, err := txn.Get(siTokenAccessorTable, "alloc_id", allocID)
-	if err != nil {
-		return nil, err
-	}
-
-	ws.Add(iter.WatchCh())
-
-	var result []*structs.SITokenAccessor
-	for raw := iter.Next(); raw != nil; raw = iter.Next() {
-		result = append(result, raw.(*structs.SITokenAccessor))
-	}
-
-	return result, nil
-}
-
-// SITokenAccessorsByNode returns all the Service Identity token accessors by node ID.
-func (s *StateStore) SITokenAccessorsByNode(ws memdb.WatchSet, nodeID string) ([]*structs.SITokenAccessor, error) {
-	txn := s.db.ReadTxn()
-	defer txn.Abort()
-
-	// Get an iterator over the accessors
-	iter, err := txn.Get(siTokenAccessorTable, "node_id", nodeID)
-	if err != nil {
-		return nil, err
-	}
-
-	ws.Add(iter.WatchCh())
-
-	var result []*structs.SITokenAccessor
-	for raw := iter.Next(); raw != nil; raw = iter.Next() {
-		result = append(result, raw.(*structs.SITokenAccessor))
-	}
-
-	return result, nil
-}
 
 // UpdateDeploymentStatus is used to make deployment status updates and
 // potentially make a evaluation
@@ -5889,13 +5760,13 @@ func (s *StateStore) updateJobCSIPlugins(index uint64, job, prev *structs.Job, t
 	}
 
 	for _, plugIn := range plugIns {
-		err = txn.Insert("csi_plugins", plugIn)
+		err = txn.Insert(TableCSIPlugins, plugIn)
 		if err != nil {
 			return fmt.Errorf("csi_plugins insert error: %v", err)
 		}
 	}
 
-	if err := txn.Insert("index", &IndexEntry{"csi_plugins", index}); err != nil {
+	if err := txn.Insert("index", &IndexEntry{TableCSIPlugins, index}); err != nil {
 		return fmt.Errorf("index update failed: %v", err)
 	}
 
@@ -6300,7 +6171,19 @@ func (s *StateStore) ACLPolicyByNamePrefix(ws memdb.WatchSet, prefix string) (me
 func (s *StateStore) ACLPolicyByJob(ws memdb.WatchSet, ns, jobID string) (memdb.ResultIterator, error) {
 	txn := s.db.ReadTxn()
 
-	iter, err := txn.Get("acl_policy", "job_prefix", ns, jobID)
+	iter, err := txn.Get("acl_policy", "job", ns, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("acl policy lookup failed: %v", err)
+	}
+	ws.Add(iter.WatchCh())
+
+	return iter, nil
+}
+
+func (s *StateStore) ACLPolicyByNamespace(ws memdb.WatchSet, ns string) (memdb.ResultIterator, error) {
+	txn := s.db.ReadTxn()
+
+	iter, err := txn.Get("acl_policy", "job", ns)
 	if err != nil {
 		return nil, fmt.Errorf("acl policy lookup failed: %v", err)
 	}

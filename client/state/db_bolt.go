@@ -36,7 +36,8 @@ allocations/
 	 |--> network_status -> networkStatusEntry{*structs.AllocNetworkStatus}
 	 |--> acknowledged_state -> acknowledgedStateEntry{*arstate.State}
 	 |--> alloc_volumes -> allocVolumeStatesEntry{arstate.AllocVolumes}
-     |--> identities -> allocIdentitiesEntry{}
+     |--> alloc_identities -> allocIdentitiesEntry{}
+     |--> alloc_consul_acl_token_identities -> consulACLTokensEntry{}
    |--> task-<name>/
       |--> local_state -> *trstate.LocalState # Local-only state
       |--> task_state  -> *structs.TaskState  # Syncs to servers
@@ -100,6 +101,10 @@ var (
 	// under
 	allocIdentityKey = []byte("alloc_identities")
 
+	// allocConsulACLTokeKey is the key []*structs.ConsulACLTokens is stored
+	// under
+	allocConsulACLTokenKey = []byte("alloc_consul_acl_token_identities")
+
 	// checkResultsBucket is the bucket name in which check query results are stored
 	checkResultsBucket = []byte("check_results")
 
@@ -138,6 +143,8 @@ var (
 
 	// nodeRegistrationKey is the key at which node registration data is stored.
 	nodeRegistrationKey = []byte("node_registration")
+
+	hostVolBucket = []byte("host_volumes_to_create")
 )
 
 // taskBucketName returns the bucket name for the given task name.
@@ -566,6 +573,55 @@ func (s *BoltStateDB) GetAllocIdentities(allocID string) ([]*structs.SignedWorkl
 	}
 
 	return entry.Identities, nil
+}
+
+// allocConsulACLTokenEntry wraps the ACLtokens so we can safely add more
+// state in the future without needing a new entry type
+type allocConsulACLTokenEntry struct {
+	Tokens []*cstructs.ConsulACLToken
+}
+
+// PutAllocConsulACLTokens strores all Consul ACL tokens for an alloc.
+func (s *BoltStateDB) PutAllocConsulACLTokens(allocID string, tokens []*cstructs.ConsulACLToken, opts ...WriteOption) error {
+	return s.updateWithOptions(opts, func(tx *boltdd.Tx) error {
+		allocBkt, err := getAllocationBucket(tx, allocID)
+		if err != nil {
+			return err
+		}
+
+		entry := allocConsulACLTokenEntry{
+			Tokens: tokens,
+		}
+		return allocBkt.Put(allocConsulACLTokenKey, &entry)
+	})
+}
+
+// GetAllocConsulACLTokens returns all Consul ACL tokens for an alloc.
+func (s *BoltStateDB) GetAllocConsulACLTokens(allocID string) ([]*cstructs.ConsulACLToken, error) {
+	var entry allocConsulACLTokenEntry
+
+	err := s.db.View(func(tx *boltdd.Tx) error {
+		allAllocsBkt := tx.Bucket(allocationsBucketName)
+		if allAllocsBkt == nil {
+			return nil // No previous state at all
+		}
+
+		allocBkt := allAllocsBkt.Bucket([]byte(allocID))
+		if allocBkt == nil {
+			return nil // No previous state for this alloc
+		}
+
+		return allocBkt.Get(allocConsulACLTokenKey, &entry)
+	})
+
+	if boltdd.IsErrNotFound(err) {
+		return nil, nil // There may not be any previously created tokens
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return entry.Tokens, nil
 }
 
 // GetTaskRunnerState returns the LocalState and TaskState for a
@@ -1046,6 +1102,45 @@ func (s *BoltStateDB) GetNodeRegistration() (*cstructs.NodeRegistration, error) 
 	}
 
 	return &reg, err
+}
+
+func (s *BoltStateDB) PutDynamicHostVolume(vol *cstructs.HostVolumeState) error {
+	return s.db.Update(func(tx *boltdd.Tx) error {
+		b, err := tx.CreateBucketIfNotExists(hostVolBucket)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(vol.ID), vol)
+	})
+}
+
+func (s *BoltStateDB) GetDynamicHostVolumes() ([]*cstructs.HostVolumeState, error) {
+	var vols []*cstructs.HostVolumeState
+	err := s.db.View(func(tx *boltdd.Tx) error {
+		b := tx.Bucket(hostVolBucket)
+		if b == nil {
+			return nil
+		}
+		return b.BoltBucket().ForEach(func(k, v []byte) error {
+			var vol cstructs.HostVolumeState
+			err := b.Get(k, &vol)
+			if err != nil {
+				return err
+			}
+			vols = append(vols, &vol)
+			return nil
+		})
+	})
+	if boltdd.IsErrNotFound(err) {
+		return nil, nil
+	}
+	return vols, err
+}
+
+func (s *BoltStateDB) DeleteDynamicHostVolume(id string) error {
+	return s.db.Update(func(tx *boltdd.Tx) error {
+		return tx.Bucket(hostVolBucket).Delete([]byte(id))
+	})
 }
 
 // init initializes metadata entries in a newly created state database.

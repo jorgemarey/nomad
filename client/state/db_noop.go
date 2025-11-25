@@ -14,6 +14,8 @@ import (
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
+var _ StateDB = &NoopDB{}
+
 // NoopDB implements a StateDB that does not persist any data.
 type NoopDB struct{}
 
@@ -142,6 +144,24 @@ func (n NoopDB) PutNodeRegistration(reg *cstructs.NodeRegistration) error {
 }
 
 func (n NoopDB) GetNodeRegistration() (*cstructs.NodeRegistration, error) {
+	return nil, nil
+}
+
+func (n NoopDB) PutDynamicHostVolume(_ *cstructs.HostVolumeState) error {
+	return nil
+}
+func (n NoopDB) GetDynamicHostVolumes() ([]*cstructs.HostVolumeState, error) {
+	return nil, nil
+}
+func (n NoopDB) DeleteDynamicHostVolume(_ string) error {
+	return nil
+}
+
+func (n NoopDB) PutAllocConsulACLTokens(allocID string, tokens []*cstructs.ConsulACLToken, opts ...WriteOption) error {
+	return nil
+}
+
+func (n NoopDB) GetAllocConsulACLTokens(allocID string) ([]*cstructs.ConsulACLToken, error) {
 	return nil, nil
 }
 

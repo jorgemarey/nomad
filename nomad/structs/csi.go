@@ -117,33 +117,25 @@ func (t *TaskCSIPluginConfig) Copy() *TaskCSIPluginConfig {
 // CSIVolumeCapability is the requested attachment and access mode for a
 // volume
 type CSIVolumeCapability struct {
-	AttachmentMode CSIVolumeAttachmentMode
-	AccessMode     CSIVolumeAccessMode
+	AttachmentMode VolumeAttachmentMode
+	AccessMode     VolumeAccessMode
 }
 
-// CSIVolumeAttachmentMode chooses the type of storage api that will be used to
-// interact with the device.
-type CSIVolumeAttachmentMode string
-
 const (
-	CSIVolumeAttachmentModeUnknown     CSIVolumeAttachmentMode = ""
-	CSIVolumeAttachmentModeBlockDevice CSIVolumeAttachmentMode = "block-device"
-	CSIVolumeAttachmentModeFilesystem  CSIVolumeAttachmentMode = "file-system"
+	CSIVolumeAttachmentModeUnknown     VolumeAttachmentMode = ""
+	CSIVolumeAttachmentModeBlockDevice VolumeAttachmentMode = "block-device"
+	CSIVolumeAttachmentModeFilesystem  VolumeAttachmentMode = "file-system"
 )
 
-// CSIVolumeAccessMode indicates how a volume should be used in a storage topology
-// e.g whether the provider should make the volume available concurrently.
-type CSIVolumeAccessMode string
-
 const (
-	CSIVolumeAccessModeUnknown CSIVolumeAccessMode = ""
+	CSIVolumeAccessModeUnknown VolumeAccessMode = ""
 
-	CSIVolumeAccessModeSingleNodeReader CSIVolumeAccessMode = "single-node-reader-only"
-	CSIVolumeAccessModeSingleNodeWriter CSIVolumeAccessMode = "single-node-writer"
+	CSIVolumeAccessModeSingleNodeReader VolumeAccessMode = "single-node-reader-only"
+	CSIVolumeAccessModeSingleNodeWriter VolumeAccessMode = "single-node-writer"
 
-	CSIVolumeAccessModeMultiNodeReader       CSIVolumeAccessMode = "multi-node-reader-only"
-	CSIVolumeAccessModeMultiNodeSingleWriter CSIVolumeAccessMode = "multi-node-single-writer"
-	CSIVolumeAccessModeMultiNodeMultiWriter  CSIVolumeAccessMode = "multi-node-multi-writer"
+	CSIVolumeAccessModeMultiNodeReader       VolumeAccessMode = "multi-node-reader-only"
+	CSIVolumeAccessModeMultiNodeSingleWriter VolumeAccessMode = "multi-node-single-writer"
+	CSIVolumeAccessModeMultiNodeMultiWriter  VolumeAccessMode = "multi-node-multi-writer"
 )
 
 // CSIMountOptions contain optional additional configuration that can be used
@@ -212,6 +204,15 @@ func (o *CSIMountOptions) GoString() string {
 	return o.String()
 }
 
+// Sanitize returns a copy of the CSIMountOptions with sensitive data redacted
+func (o *CSIMountOptions) Sanitize() *CSIMountOptions {
+	redacted := *o
+	if len(o.MountFlags) != 0 {
+		redacted.MountFlags = []string{"[REDACTED]"}
+	}
+	return &redacted
+}
+
 // CSISecrets contain optional additional configuration that can be used
 // when specifying that a Volume should be used with VolumeAccessTypeMount.
 type CSISecrets map[string]string
@@ -233,13 +234,22 @@ func (s *CSISecrets) GoString() string {
 	return s.String()
 }
 
+// Sanitize returns a copy of the CSISecrets with sensitive data redacted
+func (s *CSISecrets) Sanitize() *CSISecrets {
+	redacted := CSISecrets{}
+	for k := range *s {
+		redacted[k] = "[REDACTED]"
+	}
+	return &redacted
+}
+
 type CSIVolumeClaim struct {
 	AllocationID   string
 	NodeID         string
 	ExternalNodeID string
 	Mode           CSIVolumeClaimMode
-	AccessMode     CSIVolumeAccessMode
-	AttachmentMode CSIVolumeAttachmentMode
+	AccessMode     VolumeAccessMode
+	AttachmentMode VolumeAttachmentMode
 	State          CSIVolumeClaimState
 }
 
@@ -273,8 +283,8 @@ type CSIVolume struct {
 	// could support. This value cannot be set by the user.
 	Topologies []*CSITopology
 
-	AccessMode     CSIVolumeAccessMode     // *current* access mode
-	AttachmentMode CSIVolumeAttachmentMode // *current* attachment mode
+	AccessMode     VolumeAccessMode     // *current* access mode
+	AttachmentMode VolumeAttachmentMode // *current* attachment mode
 	MountOptions   *CSIMountOptions
 
 	Secrets    CSISecrets
@@ -352,8 +362,8 @@ type CSIVolListStub struct {
 	Name                string
 	ExternalID          string
 	Topologies          []*CSITopology
-	AccessMode          CSIVolumeAccessMode
-	AttachmentMode      CSIVolumeAttachmentMode
+	AccessMode          VolumeAccessMode
+	AttachmentMode      VolumeAttachmentMode
 	CurrentReaders      int
 	CurrentWriters      int
 	Schedulable         bool
@@ -860,10 +870,19 @@ func (v *CSIVolume) Merge(other *CSIVolume) error {
 type CSIVolumeRegisterRequest struct {
 	Volumes   []*CSIVolume
 	Timestamp int64 // UnixNano
+
+	// PolicyOverride is set when the user is attempting to override any
+	// Enterprise policy enforcement
+	PolicyOverride bool
+
 	WriteRequest
 }
 
 type CSIVolumeRegisterResponse struct {
+	Volumes []*CSIVolume
+
+	// Warnings are non-fatal messages from Enterprise policy enforcement
+	Warnings string
 	QueryMeta
 }
 
@@ -880,11 +899,19 @@ type CSIVolumeDeregisterResponse struct {
 type CSIVolumeCreateRequest struct {
 	Volumes   []*CSIVolume
 	Timestamp int64 // UnixNano
+
+	// PolicyOverride is set when the user is attempting to override any
+	// Enterprise policy enforcement
+	PolicyOverride bool
+
 	WriteRequest
 }
 
 type CSIVolumeCreateResponse struct {
 	Volumes []*CSIVolume
+
+	// Warnings are non-fatal messages from Enterprise policy enforcement
+	Warnings string
 	QueryMeta
 }
 
@@ -933,8 +960,8 @@ type CSIVolumeClaimRequest struct {
 	NodeID         string
 	ExternalNodeID string
 	Claim          CSIVolumeClaimMode
-	AccessMode     CSIVolumeAccessMode
-	AttachmentMode CSIVolumeAttachmentMode
+	AccessMode     VolumeAccessMode
+	AttachmentMode VolumeAttachmentMode
 	State          CSIVolumeClaimState
 	Timestamp      int64 // UnixNano
 	WriteRequest

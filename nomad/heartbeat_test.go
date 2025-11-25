@@ -12,7 +12,6 @@ import (
 	memdb "github.com/hashicorp/go-memdb"
 	msgpackrpc "github.com/hashicorp/net-rpc-msgpackrpc/v2"
 	"github.com/hashicorp/nomad/ci"
-	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
@@ -97,15 +96,19 @@ func TestHeartbeat_ResetHeartbeatTimerLocked(t *testing.T) {
 
 	s1.heartbeatTimersLock.Lock()
 	s1.resetHeartbeatTimerLocked("foo", 5*time.Millisecond)
+	_, ok := s1.heartbeatTimers["foo"]
 	s1.heartbeatTimersLock.Unlock()
 
-	if _, ok := s1.heartbeatTimers["foo"]; !ok {
+	if !ok {
 		t.Fatalf("missing timer")
 	}
 
 	time.Sleep(time.Duration(testutil.TestMultiplier()*10) * time.Millisecond)
 
-	if _, ok := s1.heartbeatTimers["foo"]; ok {
+	s1.heartbeatTimersLock.Lock()
+	_, ok = s1.heartbeatTimers["foo"]
+	s1.heartbeatTimersLock.Unlock()
+	if ok {
 		t.Fatalf("timer should be gone")
 	}
 }
@@ -119,9 +122,10 @@ func TestHeartbeat_ResetHeartbeatTimerLocked_Renew(t *testing.T) {
 
 	s1.heartbeatTimersLock.Lock()
 	s1.resetHeartbeatTimerLocked("foo", 30*time.Millisecond)
+	_, ok := s1.heartbeatTimers["foo"]
 	s1.heartbeatTimersLock.Unlock()
 
-	if _, ok := s1.heartbeatTimers["foo"]; !ok {
+	if !ok {
 		t.Fatalf("missing timer")
 	}
 
@@ -283,7 +287,11 @@ func TestHeartbeat_Server_HeartbeatTTL_Failover(t *testing.T) {
 		}
 
 		// Ensure heartbeat timer is restored
-		if _, ok := leader.heartbeatTimers[node.ID]; !ok {
+		leader.heartbeatTimersLock.Lock()
+		_, ok := leader.heartbeatTimers[node.ID]
+		leader.heartbeatTimersLock.Unlock()
+
+		if !ok {
 			return false, fmt.Errorf("missing heartbeat timer")
 		}
 
@@ -356,74 +364,40 @@ func TestHeartbeat_InvalidateHeartbeat_DisconnectedClient(t *testing.T) {
 	}
 }
 
-// Test using max_client_disconnect, remove after its deprecated  in favor
-// of Disconnect.LostAfter introduced in 1.8.0.
-func TestHeartbeat_InvalidateHeartbeatDisconnectedClient(t *testing.T) {
+func Test_nodeHeartbeater_getHeartbeatTimerNum(t *testing.T) {
 	ci.Parallel(t)
 
-	type testCase struct {
-		name                string
-		now                 time.Time
-		maxClientDisconnect *time.Duration
-		expectedNodeStatus  string
+	nodeHeartbeat := &nodeHeartbeater{logger: hclog.NewNullLogger()}
+
+	// Generate 5 initial node IDs that will be added to the heartbeater as
+	// active.
+	nodeIDs := []string{
+		uuid.Generate(),
+		uuid.Generate(),
+		uuid.Generate(),
+		uuid.Generate(),
+		uuid.Generate(),
 	}
 
-	testCases := []testCase{
-		{
-			name:                "has-pending-reconnects",
-			now:                 time.Now().UTC(),
-			maxClientDisconnect: pointer.Of(5 * time.Second),
-			expectedNodeStatus:  structs.NodeStatusDisconnected,
-		},
-		{
-			name:                "has-expired-reconnects",
-			maxClientDisconnect: pointer.Of(5 * time.Second),
-			now:                 time.Now().UTC().Add(-10 * time.Second),
-			expectedNodeStatus:  structs.NodeStatusDown,
-		},
-		{
-			name:                "has-expired-reconnects-equal-timestamp",
-			maxClientDisconnect: pointer.Of(5 * time.Second),
-			now:                 time.Now().UTC().Add(-5 * time.Second),
-			expectedNodeStatus:  structs.NodeStatusDown,
-		},
-		{
-			name:                "has-no-reconnects",
-			now:                 time.Now().UTC(),
-			maxClientDisconnect: nil,
-			expectedNodeStatus:  structs.NodeStatusDown,
-		},
+	// Use the locked insert function, so we can avoid setting up an entire
+	// server for this small test. We don't need the lock as there is no
+	// concurrency.
+	for _, nodeID := range nodeIDs {
+		nodeHeartbeat.resetHeartbeatTimerLocked(nodeID, 10*time.Minute)
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			s1, cleanupS1 := TestServer(t, nil)
-			defer cleanupS1()
-			testutil.WaitForLeader(t, s1.RPC)
+	must.Eq(t, 5, nodeHeartbeat.getHeartbeatTimerNum())
 
-			// Create a node
-			node := mock.Node()
-			state := s1.fsm.State()
-			must.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, 1, node))
+	// Remove a couple of nodes from the heartbeater and check that the number
+	// reports correctly.
+	must.NoError(t, nodeHeartbeat.clearHeartbeatTimer(nodeIDs[0]))
+	must.NoError(t, nodeHeartbeat.clearHeartbeatTimer(nodeIDs[2]))
 
-			alloc := mock.Alloc()
-			alloc.NodeID = node.ID
-			alloc.Job.TaskGroups[0].MaxClientDisconnect = tc.maxClientDisconnect
-			alloc.ClientStatus = structs.AllocClientStatusUnknown
-			alloc.AllocStates = []*structs.AllocState{{
-				Field: structs.AllocStateFieldClientStatus,
-				Value: structs.AllocClientStatusUnknown,
-				Time:  tc.now,
-			}}
-			must.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 2, []*structs.Allocation{alloc}))
+	must.Eq(t, 3, nodeHeartbeat.getHeartbeatTimerNum())
 
-			// Trigger status update
-			s1.invalidateHeartbeat(node.ID)
-			out, err := state.NodeByID(nil, node.ID)
-			must.NoError(t, err)
-			must.Eq(t, tc.expectedNodeStatus, out.Status)
-		})
-	}
+	// Clear all the timers and test.
+	must.NoError(t, nodeHeartbeat.clearAllHeartbeatTimers())
+	must.Eq(t, 0, nodeHeartbeat.getHeartbeatTimerNum())
 }
 
 func Test_nodeHeartbeater_getHeartbeatTimerNum(t *testing.T) {

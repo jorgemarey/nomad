@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
+	"github.com/shoenig/test"
 	"github.com/shoenig/test/must"
 	"github.com/stretchr/testify/require"
 )
@@ -47,6 +48,7 @@ func TestConfig_Merge(t *testing.T) {
 		AdvertiseAddrs: &AdvertiseAddrs{},
 		Sentinel:       &config.SentinelConfig{},
 		Autopilot:      &config.AutopilotConfig{},
+		Eventlog:       &Eventlog{},
 	}
 
 	c2 := &Config{
@@ -160,7 +162,8 @@ func TestConfig_Merge(t *testing.T) {
 				NodeThreshold: 100,
 				NodeWindow:    11 * time.Minute,
 			},
-			OIDCIssuer: "https://oidc.test.nomadproject.io",
+			OIDCIssuer:   "https://oidc.test.nomadproject.io",
+			StartTimeout: "45s",
 		},
 		ACL: &ACLConfig{
 			Enabled:               true,
@@ -189,35 +192,31 @@ func TestConfig_Merge(t *testing.T) {
 			"Access-Control-Allow-Origin": "*",
 		},
 		Vaults: []*config.VaultConfig{{
-			Name:                 structs.VaultDefaultCluster,
-			Token:                "1",
-			AllowUnauthenticated: &falseValue,
-			TaskTokenTTL:         "1",
-			Addr:                 "1",
-			TLSCaFile:            "1",
-			TLSCaPath:            "1",
-			TLSCertFile:          "1",
-			TLSKeyFile:           "1",
-			TLSSkipVerify:        &falseValue,
-			TLSServerName:        "1",
+			Name:          structs.VaultDefaultCluster,
+			Addr:          "1",
+			TLSCaFile:     "1",
+			TLSCaPath:     "1",
+			TLSCertFile:   "1",
+			TLSKeyFile:    "1",
+			TLSSkipVerify: &falseValue,
+			TLSServerName: "1",
 		}},
 		Consuls: []*config.ConsulConfig{{
-			ServerServiceName:    "1",
-			ClientServiceName:    "1",
-			AutoAdvertise:        &falseValue,
-			Addr:                 "1",
-			AllowUnauthenticated: &falseValue,
-			Timeout:              1 * time.Second,
-			Token:                "1",
-			Auth:                 "1",
-			EnableSSL:            &falseValue,
-			VerifySSL:            &falseValue,
-			CAFile:               "1",
-			CertFile:             "1",
-			KeyFile:              "1",
-			ServerAutoJoin:       &falseValue,
-			ClientAutoJoin:       &falseValue,
-			ChecksUseAdvertise:   &falseValue,
+			ServerServiceName:  "1",
+			ClientServiceName:  "1",
+			AutoAdvertise:      &falseValue,
+			Addr:               "1",
+			Timeout:            1 * time.Second,
+			Token:              "1",
+			Auth:               "1",
+			EnableSSL:          &falseValue,
+			VerifySSL:          &falseValue,
+			CAFile:             "1",
+			CertFile:           "1",
+			KeyFile:            "1",
+			ServerAutoJoin:     &falseValue,
+			ClientAutoJoin:     &falseValue,
+			ChecksUseAdvertise: &falseValue,
 		}},
 		Autopilot: &config.AutopilotConfig{
 			CleanupDeadServers:      &falseValue,
@@ -237,6 +236,10 @@ func TestConfig_Merge(t *testing.T) {
 					"bar": 1,
 				},
 			},
+		},
+		Eventlog: &Eventlog{
+			Enabled: true,
+			Level:   "INFO",
 		},
 	}
 
@@ -386,6 +389,7 @@ func TestConfig_Merge(t *testing.T) {
 			JobMaxPriority:     pointer.Of(200),
 			JobDefaultPriority: pointer.Of(100),
 			OIDCIssuer:         "https://oidc.test.nomadproject.io",
+			StartTimeout:       "1m",
 		},
 		ACL: &ACLConfig{
 			Enabled:               true,
@@ -415,19 +419,16 @@ func TestConfig_Merge(t *testing.T) {
 			"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 		},
 		Vaults: []*config.VaultConfig{{
-			Name:                 structs.VaultDefaultCluster,
-			Token:                "2",
-			AllowUnauthenticated: &trueValue,
-			TaskTokenTTL:         "2",
-			Addr:                 "2",
-			TLSCaFile:            "2",
-			TLSCaPath:            "2",
-			TLSCertFile:          "2",
-			TLSKeyFile:           "2",
-			TLSSkipVerify:        &trueValue,
-			TLSServerName:        "2",
-			ConnectionRetryIntv:  time.Duration(30000000000),
-			JWTAuthBackendPath:   "jwt",
+			Name:                structs.VaultDefaultCluster,
+			Addr:                "2",
+			TLSCaFile:           "2",
+			TLSCaPath:           "2",
+			TLSCertFile:         "2",
+			TLSKeyFile:          "2",
+			TLSSkipVerify:       &trueValue,
+			TLSServerName:       "2",
+			ConnectionRetryIntv: time.Duration(30000000000),
+			JWTAuthBackendPath:  "jwt",
 		}},
 		Consuls: []*config.ConsulConfig{{
 			Name:                      "default",
@@ -435,7 +436,6 @@ func TestConfig_Merge(t *testing.T) {
 			ClientServiceName:         "2",
 			AutoAdvertise:             &trueValue,
 			Addr:                      "2",
-			AllowUnauthenticated:      &trueValue,
 			Timeout:                   2 * time.Second,
 			Token:                     "2",
 			Auth:                      "2",
@@ -493,6 +493,10 @@ func TestConfig_Merge(t *testing.T) {
 			License: &config.LicenseReportingConfig{
 				Enabled: pointer.Of(true),
 			},
+		},
+		Eventlog: &Eventlog{
+			Enabled: true,
+			Level:   "ERROR",
 		},
 	}
 
@@ -960,6 +964,33 @@ func TestConfig_normalizeAddrs_IPv6Loopback(t *testing.T) {
 	if c.AdvertiseAddrs.RPC != "[::1]:4647" {
 		t.Errorf("expected [::1] RPC advertise address, got %s", c.AdvertiseAddrs.RPC)
 	}
+}
+
+// TestConfig_normalizeAddrs_IPv6 asserts that bind and advertise addrs conform
+// to RFC 5942 §4: https://www.rfc-editor.org/rfc/rfc5942.html#section-4
+// Full coverage is provided by tests for ipaddr.NormalizeAddr
+func TestConfig_normalizeAddrs_IPv6(t *testing.T) {
+	c := &Config{
+		Addresses: &Addresses{},
+
+		BindAddr: "0:0::1F",
+		Ports: &Ports{
+			HTTP: 4646,
+			RPC:  4647,
+		},
+		AdvertiseAddrs: &AdvertiseAddrs{
+			HTTP: "[A110::0:0:C8]:8080",
+			RPC:  "0:00FA:0:0:0::CE",
+		},
+		DevMode: false,
+	}
+	must.NoError(t, c.normalizeAddrs())
+	test.Eq(t, "::1f", c.Addresses.HTTP, test.Sprint("bind HTTP"))
+	test.Eq(t, "::1f", c.Addresses.RPC, test.Sprint("bind RPC"))
+	test.Eq(t, []string{"[::1f]:4646"}, c.normalizedAddrs.HTTP, test.Sprint("normalized HTTP"))
+	test.Eq(t, "[::1f]:4647", c.normalizedAddrs.RPC, test.Sprint("normalized RPC"))
+	test.Eq(t, "[a110::c8]:8080", c.AdvertiseAddrs.HTTP, test.Sprint("advertise HTTP"))
+	test.Eq(t, "[0:fa::ce]:4647", c.AdvertiseAddrs.RPC, test.Sprint("advertise RPC"))
 }
 
 // TestConfig_normalizeAddrs_MultipleInterface asserts that normalizeAddrs will
@@ -1753,8 +1784,7 @@ func Test_mergeConsulConfigs(t *testing.T) {
 	c0 := &Config{
 		Consuls: []*config.ConsulConfig{
 			{
-				Token:                "foo",
-				AllowUnauthenticated: pointer.Of(true),
+				Token: "foo",
 			},
 		},
 	}
@@ -1779,7 +1809,6 @@ func Test_mergeConsulConfigs(t *testing.T) {
 	must.Eq(t, c1.Consuls[0].ServiceIdentity, result.Consuls[0].ServiceIdentity)
 	must.Eq(t, c1.Consuls[0].TaskIdentity, result.Consuls[0].TaskIdentity)
 	must.Eq(t, c0.Consuls[0].Token, result.Consuls[0].Token)
-	must.Eq(t, c0.Consuls[0].AllowUnauthenticated, result.Consuls[0].AllowUnauthenticated)
 }
 
 func Test_mergeKEKProviderConfigs(t *testing.T) {
@@ -1851,4 +1880,111 @@ func Test_mergeKEKProviderConfigs(t *testing.T) {
 			},
 		},
 	}, result)
+}
+
+func TestConfig_LoadClientNodeMaxAllocs(t *testing.T) {
+	ci.Parallel(t)
+	testCases := []struct {
+		fileName string
+	}{
+		{
+			fileName: "test-resources/client_with_maxallocs.hcl",
+		},
+		{
+			fileName: "test-resources/client_with_maxallocs.json",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run("minimal client expect defaults", func(t *testing.T) {
+			defaultConfig := DefaultConfig()
+			agentConfig, err := LoadConfig(tc.fileName)
+			must.NoError(t, err)
+			agentConfig = defaultConfig.Merge(agentConfig)
+			must.Eq(t, 5, agentConfig.Client.NodeMaxAllocs)
+		})
+	}
+
+}
+
+func TestEventlog_Merge(t *testing.T) {
+	t.Run("nil rhs merge", func(t *testing.T) {
+		var c1, c2 *Eventlog
+		c1 = &Eventlog{
+			Enabled: true,
+			Level:   "info",
+		}
+		result := c1.Merge(c2)
+		must.Eq(t, result, c1)
+	})
+
+	t.Run("nil lhs merge", func(t *testing.T) {
+		var c1, c2 *Eventlog
+		c2 = &Eventlog{
+			Enabled: true,
+			Level:   "info",
+		}
+		result := c1.Merge(c2)
+		must.Eq(t, result, c2)
+	})
+
+	t.Run("full merge", func(t *testing.T) {
+		c1 := &Eventlog{
+			Enabled: false,
+			Level:   "info",
+		}
+		c2 := &Eventlog{
+			Enabled: true,
+			Level:   "error",
+		}
+		result := c1.Merge(c2)
+		must.True(t, result.Enabled)
+		must.Eq(t, result.Level, "error")
+	})
+
+	t.Run("enabled merge", func(t *testing.T) {
+		// NOTE: Can only be enabled, not disabled
+		c1 := &Eventlog{
+			Enabled: true,
+		}
+		c2 := &Eventlog{
+			Enabled: false,
+		}
+		result := c1.Merge(c2)
+		must.True(t, result.Enabled)
+
+	})
+}
+
+func TestEventlog_Validate(t *testing.T) {
+	ci.Parallel(t)
+	testCases := []struct {
+		desc      string
+		eventlog  *Eventlog
+		shouldErr bool
+	}{
+		{
+			desc:     "valid level",
+			eventlog: &Eventlog{Level: "info"},
+		},
+		{
+			desc:      "invalid level",
+			eventlog:  &Eventlog{Level: "debug"},
+			shouldErr: true,
+		},
+		{
+			desc: "nil eventlog",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			ci.Parallel(t)
+
+			if tc.shouldErr {
+				must.Error(t, tc.eventlog.Validate())
+			} else {
+				must.NoError(t, tc.eventlog.Validate())
+			}
+		})
+	}
 }

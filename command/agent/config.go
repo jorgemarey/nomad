@@ -26,8 +26,10 @@ import (
 	client "github.com/hashicorp/nomad/client/config"
 	"github.com/hashicorp/nomad/client/fingerprint"
 	"github.com/hashicorp/nomad/helper"
+	"github.com/hashicorp/nomad/helper/ipaddr"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/users"
+	"github.com/hashicorp/nomad/helper/winsvc"
 	"github.com/hashicorp/nomad/nomad"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
@@ -108,6 +110,9 @@ type Config struct {
 
 	// Server has our server related settings
 	Server *ServerConfig `hcl:"server"`
+
+	// RPC has yamux multiplex settings
+	RPC *RPCConfig `hcl:"rpc"`
 
 	// ACL has our acl related settings
 	ACL *ACLConfig `hcl:"acl"`
@@ -195,6 +200,9 @@ type Config struct {
 
 	// ExtraKeysHCL is used by hcl to surface unexpected keys
 	ExtraKeysHCL []string `hcl:",unusedKeys" json:"-"`
+
+	// Configure logging to Windows eventlog
+	Eventlog *Eventlog `hcl:"eventlog"`
 }
 
 func (c *Config) defaultConsul() *config.ConsulConfig {
@@ -228,6 +236,13 @@ type ClientConfig struct {
 
 	// AllocMountsDir is the directory for storing mounts into allocation data
 	AllocMountsDir string `hcl:"alloc_mounts_dir"`
+
+	// HostVolumesDir is the suggested directory for plugins to put volumes.
+	// Volume plugins may ignore this suggestion, but we provide this default.
+	HostVolumesDir string `hcl:"host_volumes_dir"`
+
+	// HostVolumePluginDir directory contains dynamic host volume plugins
+	HostVolumePluginDir string `hcl:"host_volume_plugin_dir"`
 
 	// Servers is a list of known server addresses. These are as "host:port"
 	Servers []string `hcl:"servers"`
@@ -331,6 +346,11 @@ type ClientConfig struct {
 	// before garbage collection is triggered.
 	GCMaxAllocs int `hcl:"gc_max_allocs"`
 
+	// GCVolumesOnNodeGC indicates that the server should GC any dynamic host
+	// volumes on this node when the node is GC'd. This should only be set if
+	// you know that a GC'd node can never come back
+	GCVolumesOnNodeGC bool `hcl:"gc_volumes_on_node_gc"`
+
 	// NoHostUUID disables using the host's UUID and will force generation of a
 	// random UUID.
 	NoHostUUID *bool `hcl:"no_host_uuid"`
@@ -404,6 +424,13 @@ type ClientConfig struct {
 
 	// ExtraKeysHCL is used by hcl to surface unexpected keys
 	ExtraKeysHCL []string `hcl:",unusedKeys" json:"-"`
+
+	// NodeMaxAllocs sets the maximum number of allocations per node
+	// Defaults to 0 and ignored if unset.
+	NodeMaxAllocs int `hcl:"node_max_allocs"`
+
+	// LogFile is used by MonitorExport to stream a client's log file
+	LogFile string `hcl:"log_file"`
 }
 
 func (c *ClientConfig) Copy() *ClientConfig {
@@ -728,8 +755,17 @@ type ServerConfig struct {
 
 	// OIDCIssuer if set enables OIDC Discovery and uses this value as the
 	// issuer. Third parties such as AWS IAM OIDC Provider expect the issuer to
-	// be a publically accessible HTTPS URL signed by a trusted well-known CA.
+	// be a publicly accessible HTTPS URL signed by a trusted well-known CA.
 	OIDCIssuer string `hcl:"oidc_issuer"`
+
+	// StartTimeout is a time duration such as "30s" or "1h". It is provided to
+	// the server so that it can time out setup and startup process that are
+	// expected to complete before the server is considered healthy. Without
+	// this, the server can hang indefinitely waiting for these.
+	StartTimeout string `hcl:"start_timeout"`
+
+	// LogFile is used by MonitorExport to stream a server's log file
+	LogFile string `hcl:"log_file"`
 }
 
 func (s *ServerConfig) Copy() *ServerConfig {
@@ -760,6 +796,112 @@ func (s *ServerConfig) Copy() *ServerConfig {
 	ns.JobMaxPriority = pointer.Copy(s.JobMaxPriority)
 	ns.JobTrackedVersions = pointer.Copy(s.JobTrackedVersions)
 	return &ns
+}
+
+// RPCConfig allows for tunable yamux multiplex configuration
+type RPCConfig struct {
+	// AcceptBacklog is used to limit how many streams may be
+	// waiting an accept.
+	AcceptBacklog int `hcl:"accept_backlog,optional"`
+
+	// KeepAliveInterval is how often to perform the keep alive
+	KeepAliveInterval    time.Duration
+	KeepAliveIntervalHCL string `hcl:"keep_alive_interval,optional"`
+
+	// ConnectionWriteTimeout is meant to be a "safety valve" timeout after
+	// we which will suspect a problem with the underlying connection and
+	// close it. This is only applied to writes, where's there's generally
+	// an expectation that things will move along quickly.
+	ConnectionWriteTimeout    time.Duration
+	ConnectionWriteTimeoutHCL string `hcl:"connection_write_timeout,optional"`
+
+	// StreamOpenTimeout is the maximum amount of time that a stream will
+	// be allowed to remain in pending state while waiting for an ack from the peer.
+	// Once the timeout is reached the session will be gracefully closed.
+	// A zero value disables the StreamOpenTimeout allowing unbounded
+	// blocking on OpenStream calls.
+	StreamOpenTimeout    time.Duration
+	StreamOpenTimeoutHCL string `hcl:"stream_open_timeout,optional"`
+
+	// StreamCloseTimeout is the maximum time that a stream will allowed to
+	// be in a half-closed state when `Close` is called before forcibly
+	// closing the connection. Forcibly closed connections will empty the
+	// receive buffer, drop any future packets received for that stream,
+	// and send a RST to the remote side.
+	StreamCloseTimeout    time.Duration
+	StreamCloseTimeoutHCL string `hcl:"stream_close_timeout,optional"`
+}
+
+func (r *RPCConfig) Copy() *RPCConfig {
+	if r == nil {
+		return nil
+	}
+
+	nr := *r
+	return &nr
+}
+
+func (r *RPCConfig) Merge(rpc *RPCConfig) *RPCConfig {
+	if r == nil {
+		return rpc
+	}
+
+	result := *r
+
+	if rpc == nil {
+		return &result
+	}
+
+	if rpc.AcceptBacklog > 0 {
+		result.AcceptBacklog = rpc.AcceptBacklog
+	}
+	if rpc.KeepAliveIntervalHCL != "" {
+		result.KeepAliveIntervalHCL = rpc.KeepAliveIntervalHCL
+	}
+	if rpc.KeepAliveInterval > 0 {
+		result.KeepAliveInterval = rpc.KeepAliveInterval
+	}
+	if rpc.ConnectionWriteTimeoutHCL != "" {
+		result.ConnectionWriteTimeoutHCL = rpc.ConnectionWriteTimeoutHCL
+	}
+	if rpc.ConnectionWriteTimeout > 0 {
+		result.ConnectionWriteTimeout = rpc.ConnectionWriteTimeout
+	}
+	if rpc.StreamOpenTimeoutHCL != "" {
+		result.StreamOpenTimeoutHCL = rpc.StreamOpenTimeoutHCL
+	}
+	if rpc.StreamOpenTimeout > 0 {
+		result.StreamOpenTimeout = rpc.StreamOpenTimeout
+	}
+	if rpc.StreamCloseTimeoutHCL != "" {
+		result.StreamCloseTimeoutHCL = rpc.StreamCloseTimeoutHCL
+	}
+	if rpc.StreamCloseTimeout > 0 {
+		result.StreamCloseTimeout = rpc.StreamCloseTimeout
+	}
+	return &result
+}
+
+func (r *RPCConfig) Validate() error {
+	if r != nil {
+		if r.AcceptBacklog < 0 {
+			return errors.New("rcp.accept_backlog interval must be greater than zero")
+		}
+		if r.KeepAliveInterval < 0 {
+			return errors.New("rcp.keep_alive_interval must be greater than zero")
+		}
+		if r.ConnectionWriteTimeout < 0 {
+			return errors.New("rcp.connection_write_timeout must be greater than zero")
+		}
+		if r.StreamCloseTimeout < 0 {
+			return errors.New("rcp.stream_close_timeout must be greater than zero")
+		}
+		if r.StreamOpenTimeout < 0 {
+			return errors.New("rcp.stream_open_timeout must be greater than zero")
+		}
+	}
+
+	return nil
 }
 
 // RaftBoltConfig is used in servers to configure parameters of the boltdb
@@ -1143,6 +1285,60 @@ func (t *Telemetry) Validate() error {
 	return nil
 }
 
+// Eventlog is the configuration for the Windows Eventlog
+type Eventlog struct {
+	// Enabled controls if Nomad agent logs are sent to the
+	// Windows eventlog.
+	Enabled bool `hcl:"enabled"`
+	// Level of logs to send to eventlog. May be set to higher
+	// severity than LogLevel but lower level will be ignored.
+	Level string `hcl:"level"`
+}
+
+// Copy is used to copy the Eventlog configuration
+func (e *Eventlog) Copy() *Eventlog {
+	return &Eventlog{
+		Enabled: e.Enabled,
+		Level:   e.Level,
+	}
+}
+
+// Merge is used to merge Eventlog configurations
+func (e *Eventlog) Merge(b *Eventlog) *Eventlog {
+	if e == nil {
+		return b
+	}
+
+	result := *e
+
+	if b == nil {
+		return &result
+	}
+
+	if b.Enabled {
+		result.Enabled = b.Enabled
+	}
+
+	if b.Level != "" {
+		result.Level = b.Level
+	}
+
+	return &result
+}
+
+// Validate validates the eventlog configuration
+func (e *Eventlog) Validate() error {
+	if e == nil {
+		return nil
+	}
+
+	if winsvc.EventlogLevelFromString(e.Level) == winsvc.EVENTLOG_LEVEL_UNKNOWN {
+		return errors.New("eventlog.level must be one of INFO, WARN, or ERROR")
+	}
+
+	return nil
+}
+
 // Ports encapsulates the various ports we bind to for network services. If any
 // are not specified then the defaults are used instead.
 type Ports struct {
@@ -1394,6 +1590,17 @@ func DefaultConfig() *Config {
 		Consuls:        []*config.ConsulConfig{config.DefaultConsulConfig()},
 		Vaults:         []*config.VaultConfig{config.DefaultVaultConfig()},
 		UI:             config.DefaultUIConfig(),
+		RPC: &RPCConfig{
+			AcceptBacklog:             256,
+			KeepAliveInterval:         30 * time.Second,
+			KeepAliveIntervalHCL:      "30s",
+			ConnectionWriteTimeout:    10 * time.Second,
+			ConnectionWriteTimeoutHCL: "10s",
+			StreamOpenTimeout:         75 * time.Second,
+			StreamOpenTimeoutHCL:      "75s",
+			StreamCloseTimeout:        5 * time.Minute,
+			StreamCloseTimeoutHCL:     "5m",
+		},
 		Client: &ClientConfig{
 			Enabled:               false,
 			NodePool:              structs.NodePoolDefault,
@@ -1464,6 +1671,10 @@ func DefaultConfig() *Config {
 			CollectionInterval:           "1s",
 			collectionInterval:           1 * time.Second,
 			DisableAllocationHookMetrics: pointer.Of(false),
+		},
+		Eventlog: &Eventlog{
+			Enabled: false,
+			Level:   "error",
 		},
 		TLSConfig:          &config.TLSConfig{},
 		Sentinel:           &config.SentinelConfig{},
@@ -1577,6 +1788,13 @@ func (c *Config) Merge(b *Config) *Config {
 		result.Telemetry = result.Telemetry.Merge(b.Telemetry)
 	}
 
+	// Apply the eventlog config
+	if result.Eventlog == nil && b.Eventlog != nil {
+		result.Eventlog = b.Eventlog.Copy()
+	} else if b.Eventlog != nil {
+		result.Eventlog = result.Eventlog.Merge(b.Eventlog)
+	}
+
 	// Apply the Reporting Config
 	if result.Reporting == nil && b.Reporting != nil {
 		result.Reporting = b.Reporting.Copy()
@@ -1605,6 +1823,14 @@ func (c *Config) Merge(b *Config) *Config {
 		result.Server = &server
 	} else if b.Server != nil {
 		result.Server = result.Server.Merge(b.Server)
+	}
+
+	// Apply the rpc mux config
+	if result.RPC == nil && b.RPC != nil {
+		rpcMux := *b.RPC
+		result.RPC = &rpcMux
+	} else if b.RPC != nil {
+		result.RPC = result.RPC.Merge(b.RPC)
 	}
 
 	// Apply the acl config
@@ -1854,6 +2080,7 @@ func (c *Config) normalizeAddrs() error {
 		}
 		c.BindAddr = ipStr
 	}
+	c.BindAddr = ipaddr.NormalizeAddr(c.BindAddr)
 
 	httpAddrs, err := normalizeMultipleBind(c.Addresses.HTTP, c.BindAddr)
 	if err != nil {
@@ -1874,9 +2101,12 @@ func (c *Config) normalizeAddrs() error {
 	c.Addresses.Serf = addr
 
 	c.normalizedAddrs = &NormalizedAddrs{
-		HTTP: joinHostPorts(httpAddrs, strconv.Itoa(c.Ports.HTTP)),
-		RPC:  net.JoinHostPort(c.Addresses.RPC, strconv.Itoa(c.Ports.RPC)),
-		Serf: net.JoinHostPort(c.Addresses.Serf, strconv.Itoa(c.Ports.Serf)),
+		RPC:  normalizeAddrWithPort(c.Addresses.RPC, c.Ports.RPC),
+		Serf: normalizeAddrWithPort(c.Addresses.Serf, c.Ports.Serf),
+	}
+	c.normalizedAddrs.HTTP = make([]string, len(httpAddrs))
+	for i, addr := range httpAddrs {
+		c.normalizedAddrs.HTTP[i] = normalizeAddrWithPort(addr, c.Ports.HTTP)
 	}
 
 	addr, err = normalizeAdvertise(c.AdvertiseAddrs.HTTP, httpAddrs[0], c.Ports.HTTP, c.DevMode)
@@ -1959,6 +2189,12 @@ func parseMultipleIPTemplate(ipTmpl string) ([]string, error) {
 	return deduplicateAddrs(ips), nil
 }
 
+// normalizeAddrWithPort assumes that addr does not contain a port,
+// noramlizes it per ipv6 RFC-5942 §4, and appends ":{port}".
+func normalizeAddrWithPort(addr string, port int) string {
+	return ipaddr.NormalizeAddr(net.JoinHostPort(addr, strconv.Itoa(port)))
+}
+
 // normalizeBind returns a normalized bind address.
 //
 // If addr is set it is used, if not the default bind address is used.
@@ -1966,7 +2202,8 @@ func normalizeBind(addr, bind string) (string, error) {
 	if addr == "" {
 		return bind, nil
 	}
-	return listenerutil.ParseSingleIPTemplate(addr)
+	addr, err := listenerutil.ParseSingleIPTemplate(addr)
+	return ipaddr.NormalizeAddr(addr), err
 }
 
 // normalizeMultipleBind returns normalized bind addresses.
@@ -1976,7 +2213,11 @@ func normalizeMultipleBind(addr, bind string) ([]string, error) {
 	if addr == "" {
 		return []string{bind}, nil
 	}
-	return parseMultipleIPTemplate(addr)
+	addrs, err := parseMultipleIPTemplate(addr)
+	for i, addr := range addrs {
+		addrs[i] = ipaddr.NormalizeAddr(addr)
+	}
+	return addrs, err
 }
 
 // normalizeAdvertise returns a normalized advertise address.
@@ -2006,10 +2247,10 @@ func normalizeAdvertise(addr string, bind string, defport int, dev bool) (string
 			}
 
 			// missing port, append the default
-			return net.JoinHostPort(addr, strconv.Itoa(defport)), nil
+			return normalizeAddrWithPort(addr, defport), nil
 		}
 
-		return addr, nil
+		return ipaddr.NormalizeAddr(addr), nil
 	}
 
 	// Fallback to bind address first, and then try resolving the local hostname
@@ -2021,12 +2262,12 @@ func normalizeAdvertise(addr string, bind string, defport int, dev bool) (string
 	// Return the first non-localhost unicast address
 	for _, ip := range ips {
 		if ip.IsLinkLocalUnicast() || ip.IsGlobalUnicast() {
-			return net.JoinHostPort(ip.String(), strconv.Itoa(defport)), nil
+			return normalizeAddrWithPort(ip.String(), defport), nil
 		}
 		if ip.IsLoopback() {
 			if dev {
 				// loopback is fine for dev mode
-				return net.JoinHostPort(ip.String(), strconv.Itoa(defport)), nil
+				return normalizeAddrWithPort(ip.String(), defport), nil
 			}
 			return "", fmt.Errorf("Defaulting advertise to localhost is unsafe, please set advertise manually")
 		}
@@ -2037,7 +2278,7 @@ func normalizeAdvertise(addr string, bind string, defport int, dev bool) (string
 	if err != nil {
 		return "", fmt.Errorf("Unable to parse default advertise address: %v", err)
 	}
-	return net.JoinHostPort(addr, strconv.Itoa(defport)), nil
+	return normalizeAddrWithPort(addr, defport), nil
 }
 
 // isMissingPort returns true if an error is a "missing port" error from
@@ -2286,6 +2527,9 @@ func (s *ServerConfig) Merge(b *ServerConfig) *ServerConfig {
 	if b.OIDCIssuer != "" {
 		result.OIDCIssuer = b.OIDCIssuer
 	}
+	if b.StartTimeout != "" {
+		result.StartTimeout = b.StartTimeout
+	}
 
 	// Add the schedulers
 	result.EnabledSchedulers = append(result.EnabledSchedulers, b.EnabledSchedulers...)
@@ -2304,8 +2548,8 @@ func (s *ServerConfig) Merge(b *ServerConfig) *ServerConfig {
 }
 
 // Merge is used to merge two client configs together
-func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
-	result := *a
+func (c *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
+	result := *c
 
 	if b.Enabled {
 		result.Enabled = true
@@ -2318,6 +2562,12 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 	}
 	if b.AllocMountsDir != "" {
 		result.AllocMountsDir = b.AllocMountsDir
+	}
+	if b.HostVolumesDir != "" {
+		result.HostVolumesDir = b.HostVolumesDir
+	}
+	if b.HostVolumePluginDir != "" {
+		result.HostVolumePluginDir = b.HostVolumePluginDir
 	}
 	if b.NodeClass != "" {
 		result.NodeClass = b.NodeClass
@@ -2393,6 +2643,9 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 	if b.GCMaxAllocs != 0 {
 		result.GCMaxAllocs = b.GCMaxAllocs
 	}
+	if b.GCVolumesOnNodeGC {
+		result.GCVolumesOnNodeGC = b.GCVolumesOnNodeGC
+	}
 	// NoHostUUID defaults to true, merge if false
 	if b.NoHostUUID != nil {
 		result.NoHostUUID = b.NoHostUUID
@@ -2437,10 +2690,10 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 		result.ServerJoin = result.ServerJoin.Merge(b.ServerJoin)
 	}
 
-	if len(a.HostVolumes) == 0 && len(b.HostVolumes) != 0 {
+	if len(c.HostVolumes) == 0 && len(b.HostVolumes) != 0 {
 		result.HostVolumes = structs.CopySliceClientHostVolumeConfig(b.HostVolumes)
 	} else if len(b.HostVolumes) != 0 {
-		result.HostVolumes = structs.HostVolumeSliceMerge(a.HostVolumes, b.HostVolumes)
+		result.HostVolumes = structs.HostVolumeSliceMerge(c.HostVolumes, b.HostVolumes)
 	}
 
 	if b.CNIPath != "" {
@@ -2462,7 +2715,7 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 		result.BridgeNetworkHairpinMode = true
 	}
 
-	result.HostNetworks = a.HostNetworks
+	result.HostNetworks = c.HostNetworks
 
 	if len(b.HostNetworks) != 0 {
 		result.HostNetworks = append(result.HostNetworks, b.HostNetworks...)
@@ -2482,10 +2735,13 @@ func (a *ClientConfig) Merge(b *ClientConfig) *ClientConfig {
 		result.CgroupParent = b.CgroupParent
 	}
 
-	result.Artifact = a.Artifact.Merge(b.Artifact)
-	result.Drain = a.Drain.Merge(b.Drain)
-	result.Users = a.Users.Merge(b.Users)
+	result.Artifact = c.Artifact.Merge(b.Artifact)
+	result.Drain = c.Drain.Merge(b.Drain)
+	result.Users = c.Users.Merge(b.Users)
 
+	if b.NodeMaxAllocs != 0 {
+		result.NodeMaxAllocs = b.NodeMaxAllocs
+	}
 	return &result
 }
 
@@ -2608,8 +2864,8 @@ func (t *Telemetry) Merge(b *Telemetry) *Telemetry {
 }
 
 // Merge is used to merge two port configurations.
-func (a *Ports) Merge(b *Ports) *Ports {
-	result := *a
+func (p *Ports) Merge(b *Ports) *Ports {
+	result := *p
 
 	if b.HTTP != 0 {
 		result.HTTP = b.HTTP
@@ -2771,17 +3027,6 @@ func LoadConfigDir(dir string) (*Config, error) {
 	}
 
 	return result, nil
-}
-
-// joinHostPorts joins every addr in addrs with the specified port
-func joinHostPorts(addrs []string, port string) []string {
-	localAddrs := make([]string, len(addrs))
-	for i, k := range addrs {
-		localAddrs[i] = net.JoinHostPort(k, port)
-
-	}
-
-	return localAddrs
 }
 
 // isTemporaryFile returns true or false depending on whether the

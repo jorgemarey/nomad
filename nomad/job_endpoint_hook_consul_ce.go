@@ -7,27 +7,12 @@
 package nomad
 
 import (
-	"context"
-	"errors"
 	"fmt"
 
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
 func (h jobConsulHook) Validate(job *structs.Job) ([]error, error) {
-
-	requiresToken := false
-
-	clusterNeedsToken := func(name string, identity *structs.WorkloadIdentity) bool {
-		if identity != nil {
-			return false
-		}
-		config := h.srv.config.ConsulConfigs[name]
-		if config != nil {
-			return !config.AllowsUnauthenticated()
-		}
-		return false
-	}
 
 	for _, group := range job.TaskGroups {
 
@@ -45,8 +30,6 @@ func (h jobConsulHook) Validate(job *structs.Job) ([]error, error) {
 				if err := h.validateCluster(service.Cluster); err != nil {
 					return nil, err
 				}
-				requiresToken = clusterNeedsToken(
-					service.Cluster, service.Identity) || requiresToken
 			}
 		}
 
@@ -56,8 +39,6 @@ func (h jobConsulHook) Validate(job *structs.Job) ([]error, error) {
 					if err := h.validateCluster(service.Cluster); err != nil {
 						return nil, err
 					}
-					requiresToken = clusterNeedsToken(
-						service.Cluster, service.Identity) || requiresToken
 				}
 			}
 
@@ -89,34 +70,7 @@ func (h jobConsulHook) Validate(job *structs.Job) ([]error, error) {
 		}
 	}
 
-	if !requiresToken {
-		return nil, nil
-	}
-
-	warnings := []error{
-		errors.New("Setting a Consul token when submitting a job is deprecated and will be removed in Nomad 1.9. Migrate your Consul configuration to use workload identity"),
-	}
-
-	// helper function that checks if the Consul token supplied with the job has
-	// sufficient ACL permissions for:
-	//   - registering services into namespace of each group
-	//   - reading kv store of each group
-	//   - establishing consul connect services
-	checkConsulToken := func(usages map[string]*structs.ConsulUsage) error {
-		ctx := context.Background()
-		for namespace, usage := range usages {
-			if err := h.srv.consulACLs.CheckPermissions(ctx, namespace, usage, job.ConsulToken); err != nil {
-				return fmt.Errorf("job-submitter consul token denied: %w", err)
-			}
-		}
-		return nil
-	}
-
-	// Enforce the job-submitter has a Consul token with necessary ACL permissions.
-	if err := checkConsulToken(job.ConsulUsages()); err != nil {
-		return warnings, err
-	}
-	return warnings, nil
+	return nil, nil
 }
 
 func (h jobConsulHook) validateCluster(name string) error {

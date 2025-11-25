@@ -5,8 +5,10 @@ package command
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
+	"github.com/hashicorp/nomad/helper"
 	"github.com/posener/complete"
 )
 
@@ -51,7 +53,7 @@ func (c *ACLTokenSelfCommand) Run(args []string) int {
 	// Check that we have no arguments
 	args = flags.Args()
 	if l := len(args); l != 0 {
-		c.Ui.Error("This command takes no arguments")
+		c.Ui.Error(uiMessageNoArguments)
 		c.Ui.Error(commandErrorText(c))
 		return 1
 	}
@@ -63,14 +65,41 @@ func (c *ACLTokenSelfCommand) Run(args []string) int {
 		return 1
 	}
 
-	// Get the specified token information
-	token, _, err := client.ACLTokens().Self(nil)
-	if err != nil {
-		c.Ui.Error(fmt.Sprintf("Error fetching self token: %s", err))
+	// To get the authentication token, we must perform the same steps as the
+	// command meta and API client perform. This is because the token may be set
+	// as an environment variable or as a CLI flag.
+	//
+	// The environment variable is grabbed first. If this is not set, the
+	// resulting string is empty.
+	authToken := os.Getenv("NOMAD_TOKEN")
+
+	// If the CLI flag is set, it will override the environment variable.
+	if c.token != "" {
+		authToken = c.token
+	}
+
+	if authToken == "" {
+		c.Ui.Error("No token present in the environment or set via the CLI flag")
 		return 1
 	}
 
-	// Format the output
-	outputACLToken(c.Ui, token)
-	return 0
+	// Does this look like a Nomad ACL token?
+	if helper.IsUUID(authToken) {
+		token, _, err := client.ACLTokens().Self(nil)
+		if err != nil {
+			c.Ui.Error(fmt.Sprintf("Error fetching self token: %s", err))
+			return 1
+		}
+		// Format the output
+		outputACLToken(c.Ui, token)
+		return 0
+	}
+
+	policies, _, err := client.ACLPolicies().Self(nil)
+	if err == nil && len(policies) > 0 {
+		c.Ui.Info("No ACL token found but there are ACL policies attached to this workload identity. You can query them with acl policy self command.")
+		return 0
+	}
+	c.Ui.Error("No ACL tokens, nor ACL policies attached to a workload identity found.")
+	return 1
 }

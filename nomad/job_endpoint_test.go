@@ -1385,7 +1385,6 @@ func TestJobEndpoint_Register_ParameterizedJob(t *testing.T) {
 
 func TestJobEndpoint_Register_Dispatched(t *testing.T) {
 	ci.Parallel(t)
-	require := require.New(t)
 
 	s1, cleanupS1 := TestServer(t, func(c *Config) {
 		c.NumSchedulers = 0 // Prevent automatic dequeue
@@ -1409,8 +1408,7 @@ func TestJobEndpoint_Register_Dispatched(t *testing.T) {
 	// Fetch the response
 	var resp structs.JobRegisterResponse
 	err := msgpackrpc.CallWithCodec(codec, "Job.Register", req, &resp)
-	require.Error(err)
-	require.Contains(err.Error(), "job can't be submitted with 'Dispatched'")
+	must.EqError(t, err, "job can't be submitted with 'Dispatched' set")
 }
 
 func TestJobEndpoint_Register_EnforceIndex(t *testing.T) {
@@ -1557,10 +1555,9 @@ func TestJobEndpoint_Register_Vault_Disabled(t *testing.T) {
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
 
-	// Create the register request with a job asking for a vault policy
+	// Create the register request with a job using Vault.
 	job := mock.Job()
 	job.TaskGroups[0].Tasks[0].Vault = &structs.Vault{
-		Policies:   []string{"foo"},
 		ChangeMode: structs.VaultChangeModeRestart,
 	}
 	req := &structs.JobRegisterRequest{
@@ -1576,63 +1573,6 @@ func TestJobEndpoint_Register_Vault_Disabled(t *testing.T) {
 	err := msgpackrpc.CallWithCodec(codec, "Job.Register", req, &resp)
 	if err == nil || !strings.Contains(err.Error(), `Vault "default" not enabled`) {
 		t.Fatalf("expected Vault not enabled error: %v", err)
-	}
-}
-
-// TestJobEndpoint_Register_Vault_AllowUnauthenticated asserts submitting a job
-// with a Vault policy but without a Vault token is *succeeds* if
-// allow_unauthenticated=true.
-func TestJobEndpoint_Register_Vault_AllowUnauthenticated(t *testing.T) {
-	ci.Parallel(t)
-
-	s1, cleanupS1 := TestServer(t, func(c *Config) {
-		c.NumSchedulers = 0 // Prevent automatic dequeue
-	})
-	defer cleanupS1()
-	codec := rpcClient(t, s1)
-	testutil.WaitForLeader(t, s1.RPC)
-
-	// Enable vault and allow authenticated
-	tr := true
-	s1.config.GetDefaultVault().Enabled = &tr
-	s1.config.GetDefaultVault().AllowUnauthenticated = &tr
-
-	// Replace the Vault Client on the server
-	s1.vault = &TestVaultClient{}
-
-	// Create the register request with a job asking for a vault policy
-	job := mock.Job()
-	job.TaskGroups[0].Tasks[0].Vault = &structs.Vault{
-		Policies:   []string{"foo"},
-		ChangeMode: structs.VaultChangeModeRestart,
-	}
-	req := &structs.JobRegisterRequest{
-		Job: job,
-		WriteRequest: structs.WriteRequest{
-			Region:    "global",
-			Namespace: job.Namespace,
-		},
-	}
-
-	// Fetch the response
-	var resp structs.JobRegisterResponse
-	err := msgpackrpc.CallWithCodec(codec, "Job.Register", req, &resp)
-	if err != nil {
-		t.Fatalf("bad: %v", err)
-	}
-
-	// Check for the job in the FSM
-	state := s1.fsm.State()
-	ws := memdb.NewWatchSet()
-	out, err := state.JobByID(ws, job.Namespace, job.ID)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if out == nil {
-		t.Fatalf("expected job")
-	}
-	if out.CreateIndex != resp.JobModifyIndex {
-		t.Fatalf("index mis-match")
 	}
 }
 
@@ -1652,15 +1592,10 @@ func TestJobEndpoint_Register_Vault_OverrideConstraint(t *testing.T) {
 	// Enable vault and allow authenticated
 	tr := true
 	s1.config.GetDefaultVault().Enabled = &tr
-	s1.config.GetDefaultVault().AllowUnauthenticated = &tr
-
-	// Replace the Vault Client on the server
-	s1.vault = &TestVaultClient{}
 
 	// Create the register request with a job asking for a vault policy
 	job := mock.Job()
 	job.TaskGroups[0].Tasks[0].Vault = &structs.Vault{
-		Policies:   []string{"foo"},
 		ChangeMode: structs.VaultChangeModeRestart,
 	}
 
@@ -1701,187 +1636,6 @@ func TestJobEndpoint_Register_Vault_OverrideConstraint(t *testing.T) {
 	must.True(t, job.TaskGroups[0].Tasks[0].Constraints[0].Equal(outConstraints[0]))
 }
 
-func TestJobEndpoint_Register_Vault_NoToken(t *testing.T) {
-	ci.Parallel(t)
-
-	s1, cleanupS1 := TestServer(t, func(c *Config) {
-		c.NumSchedulers = 0 // Prevent automatic dequeue
-	})
-	defer cleanupS1()
-	codec := rpcClient(t, s1)
-	testutil.WaitForLeader(t, s1.RPC)
-
-	// Enable vault
-	tr, f := true, false
-	s1.config.GetDefaultVault().Enabled = &tr
-	s1.config.GetDefaultVault().AllowUnauthenticated = &f
-
-	// Replace the Vault Client on the server
-	s1.vault = &TestVaultClient{}
-
-	// Create the register request with a job asking for a vault policy but
-	// don't send a Vault token
-	job := mock.Job()
-	job.TaskGroups[0].Tasks[0].Vault = &structs.Vault{
-		Policies:   []string{"foo"},
-		ChangeMode: structs.VaultChangeModeRestart,
-	}
-	req := &structs.JobRegisterRequest{
-		Job: job,
-		WriteRequest: structs.WriteRequest{
-			Region:    "global",
-			Namespace: job.Namespace,
-		},
-	}
-
-	// Fetch the response
-	var resp structs.JobRegisterResponse
-	err := msgpackrpc.CallWithCodec(codec, "Job.Register", req, &resp)
-	if err == nil || !strings.Contains(err.Error(), "missing Vault token") {
-		t.Fatalf("expected Vault not enabled error: %v", err)
-	}
-}
-
-func TestJobEndpoint_Register_Vault_Policies(t *testing.T) {
-	ci.Parallel(t)
-
-	s1, cleanupS1 := TestServer(t, func(c *Config) {
-		c.NumSchedulers = 0 // Prevent automatic dequeue
-	})
-	defer cleanupS1()
-	codec := rpcClient(t, s1)
-	testutil.WaitForLeader(t, s1.RPC)
-
-	// Enable vault
-	tr, f := true, false
-	s1.config.GetDefaultVault().Enabled = &tr
-	s1.config.GetDefaultVault().AllowUnauthenticated = &f
-
-	// Replace the Vault Client on the server
-	tvc := &TestVaultClient{}
-	s1.vault = tvc
-
-	// Add three tokens: one that allows the requesting policy, one that does
-	// not and one that returns an error
-	policy := "foo"
-
-	badToken := uuid.Generate()
-	badPolicies := []string{"a", "b", "c"}
-	tvc.SetLookupTokenAllowedPolicies(badToken, badPolicies)
-
-	goodToken := uuid.Generate()
-	goodPolicies := []string{"foo", "bar", "baz"}
-	tvc.SetLookupTokenAllowedPolicies(goodToken, goodPolicies)
-
-	rootToken := uuid.Generate()
-	rootPolicies := []string{"root"}
-	tvc.SetLookupTokenAllowedPolicies(rootToken, rootPolicies)
-
-	errToken := uuid.Generate()
-	expectedErr := fmt.Errorf("return errors from vault")
-	tvc.SetLookupTokenError(errToken, expectedErr)
-
-	// Create the register request with a job asking for a vault policy but
-	// send the bad Vault token
-	job := mock.Job()
-	job.VaultToken = badToken
-	job.TaskGroups[0].Tasks[0].Vault = &structs.Vault{
-		Policies:   []string{policy},
-		ChangeMode: structs.VaultChangeModeRestart,
-	}
-	req := &structs.JobRegisterRequest{
-		Job: job,
-		WriteRequest: structs.WriteRequest{
-			Region:    "global",
-			Namespace: job.Namespace,
-		},
-	}
-
-	// Fetch the response
-	var resp structs.JobRegisterResponse
-	err := msgpackrpc.CallWithCodec(codec, "Job.Register", req, &resp)
-	if err == nil || !strings.Contains(err.Error(),
-		"doesn't allow access to the following policies: "+policy) {
-		t.Fatalf("expected permission denied error: %v", err)
-	}
-
-	// Use the err token
-	job.VaultToken = errToken
-	err = msgpackrpc.CallWithCodec(codec, "Job.Register", req, &resp)
-	if err == nil || !strings.Contains(err.Error(), expectedErr.Error()) {
-		t.Fatalf("expected permission denied error: %v", err)
-	}
-
-	// Use the good token
-	job.VaultToken = goodToken
-
-	// Fetch the response
-	if err := msgpackrpc.CallWithCodec(codec, "Job.Register", req, &resp); err != nil {
-		t.Fatalf("bad: %v", err)
-	}
-
-	// Check for the job in the FSM
-	state := s1.fsm.State()
-	ws := memdb.NewWatchSet()
-	out, err := state.JobByID(ws, job.Namespace, job.ID)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if out == nil {
-		t.Fatalf("expected job")
-	}
-	if out.CreateIndex != resp.JobModifyIndex {
-		t.Fatalf("index mis-match")
-	}
-	if out.VaultToken != "" {
-		t.Fatalf("vault token not cleared")
-	}
-
-	// Check that an implicit constraints were created for Vault and Consul.
-	constraints := out.TaskGroups[0].Constraints
-	if l := len(constraints); l != 2 {
-		t.Fatalf("Unexpected number of tests: %v", l)
-	}
-
-	require.ElementsMatch(t, constraints, []*structs.Constraint{consulServiceDiscoveryConstraint, vaultConstraint})
-
-	// Create the register request with another job asking for a vault policy but
-	// send the root Vault token
-	job2 := mock.Job()
-	job2.VaultToken = rootToken
-	job.TaskGroups[0].Tasks[0].Vault = &structs.Vault{
-		Policies:   []string{policy},
-		ChangeMode: structs.VaultChangeModeRestart,
-	}
-	req = &structs.JobRegisterRequest{
-		Job: job2,
-		WriteRequest: structs.WriteRequest{
-			Region:    "global",
-			Namespace: job.Namespace,
-		},
-	}
-
-	// Fetch the response
-	if err := msgpackrpc.CallWithCodec(codec, "Job.Register", req, &resp); err != nil {
-		t.Fatalf("bad: %v", err)
-	}
-
-	// Check for the job in the FSM
-	out, err = state.JobByID(ws, job2.Namespace, job2.ID)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if out == nil {
-		t.Fatalf("expected job")
-	}
-	if out.CreateIndex != resp.JobModifyIndex {
-		t.Fatalf("index mis-match")
-	}
-	if out.VaultToken != "" {
-		t.Fatalf("vault token not cleared")
-	}
-}
-
 func TestJobEndpoint_Register_Vault_MultiNamespaces(t *testing.T) {
 	ci.Parallel(t)
 
@@ -1893,25 +1647,13 @@ func TestJobEndpoint_Register_Vault_MultiNamespaces(t *testing.T) {
 	testutil.WaitForLeader(t, s1.RPC)
 
 	// Enable vault
-	tr, f := true, false
-	s1.config.GetDefaultVault().Enabled = &tr
-	s1.config.GetDefaultVault().AllowUnauthenticated = &f
-
-	// Replace the Vault Client on the server
-	tvc := &TestVaultClient{}
-	s1.vault = tvc
-
-	goodToken := uuid.Generate()
-	goodPolicies := []string{"foo", "bar", "baz"}
-	tvc.SetLookupTokenAllowedPolicies(goodToken, goodPolicies)
+	s1.config.GetDefaultVault().Enabled = pointer.Of(true)
 
 	// Create the register request with a job asking for a vault policy but
 	// don't send a Vault token
 	job := mock.Job()
-	job.VaultToken = goodToken
 	job.TaskGroups[0].Tasks[0].Vault = &structs.Vault{
 		Namespace:  "ns1",
-		Policies:   []string{"foo"},
 		ChangeMode: structs.VaultChangeModeRestart,
 	}
 	req := &structs.JobRegisterRequest{
@@ -2543,7 +2285,7 @@ func TestJobEndpoint_Register_PortCollistion(t *testing.T) {
 			}
 			job.TaskGroups[0].Tasks[0].Services = nil
 
-			testutil.RegisterJob(t, s1.RPC, job)
+			testutil.RegisterJob(t, s1.RPC, job.Copy())
 			testutil.WaitForJobAllocStatus(t, s1.RPC, job, map[string]int{
 				structs.AllocClientStatusPending: 1,
 			})
@@ -2746,219 +2488,6 @@ func TestJobEndpoint_Revert(t *testing.T) {
 	}
 	if len(versions) != 3 {
 		t.Fatalf("got %d versions; want %d", len(versions), 3)
-	}
-}
-
-func TestJobEndpoint_Revert_Vault_NoToken(t *testing.T) {
-	ci.Parallel(t)
-
-	s1, cleanupS1 := TestServer(t, func(c *Config) {
-		c.NumSchedulers = 0 // Prevent automatic dequeue
-	})
-	defer cleanupS1()
-	codec := rpcClient(t, s1)
-	testutil.WaitForLeader(t, s1.RPC)
-
-	// Enable vault
-	tr, f := true, false
-	s1.config.GetDefaultVault().Enabled = &tr
-	s1.config.GetDefaultVault().AllowUnauthenticated = &f
-
-	// Replace the Vault Client on the server
-	tvc := &TestVaultClient{}
-	s1.vault = tvc
-
-	// Add three tokens: one that allows the requesting policy, one that does
-	// not and one that returns an error
-	policy := "foo"
-
-	goodToken := uuid.Generate()
-	goodPolicies := []string{"foo", "bar", "baz"}
-	tvc.SetLookupTokenAllowedPolicies(goodToken, goodPolicies)
-
-	// Create the initial register request
-	job := mock.Job()
-	job.VaultToken = goodToken
-	job.Priority = 100
-	job.TaskGroups[0].Tasks[0].Vault = &structs.Vault{
-		Policies:   []string{policy},
-		ChangeMode: structs.VaultChangeModeRestart,
-	}
-	req := &structs.JobRegisterRequest{
-		Job: job,
-		WriteRequest: structs.WriteRequest{
-			Region:    "global",
-			Namespace: job.Namespace,
-		},
-	}
-
-	// Fetch the response
-	var resp structs.JobRegisterResponse
-	if err := msgpackrpc.CallWithCodec(codec, "Job.Register", req, &resp); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	// Reregister again to get another version
-	job2 := job.Copy()
-	job2.Priority = 1
-	req = &structs.JobRegisterRequest{
-		Job: job2,
-		WriteRequest: structs.WriteRequest{
-			Region:    "global",
-			Namespace: job.Namespace,
-		},
-	}
-
-	// Fetch the response
-	if err := msgpackrpc.CallWithCodec(codec, "Job.Register", req, &resp); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	revertReq := &structs.JobRevertRequest{
-		JobID:      job.ID,
-		JobVersion: 1,
-		WriteRequest: structs.WriteRequest{
-			Region:    "global",
-			Namespace: job.Namespace,
-		},
-	}
-
-	// Fetch the response
-	err := msgpackrpc.CallWithCodec(codec, "Job.Revert", revertReq, &resp)
-	if err == nil || !strings.Contains(err.Error(), "current version") {
-		t.Fatalf("expected current version err: %v", err)
-	}
-
-	// Create revert request and enforcing it be at version 1
-	revertReq = &structs.JobRevertRequest{
-		JobID:               job.ID,
-		JobVersion:          0,
-		EnforcePriorVersion: pointer.Of(uint64(1)),
-		WriteRequest: structs.WriteRequest{
-			Region:    "global",
-			Namespace: job.Namespace,
-		},
-	}
-
-	// Fetch the response
-	err = msgpackrpc.CallWithCodec(codec, "Job.Revert", revertReq, &resp)
-	if err == nil || !strings.Contains(err.Error(), "missing Vault token") {
-		t.Fatalf("expected Vault not enabled error: %v", err)
-	}
-}
-
-// TestJobEndpoint_Revert_Vault_Policies asserts that job revert uses the
-// revert request's Vault token when authorizing policies.
-func TestJobEndpoint_Revert_Vault_Policies(t *testing.T) {
-	ci.Parallel(t)
-
-	s1, cleanupS1 := TestServer(t, func(c *Config) {
-		c.NumSchedulers = 0 // Prevent automatic dequeue
-	})
-	defer cleanupS1()
-	codec := rpcClient(t, s1)
-	testutil.WaitForLeader(t, s1.RPC)
-
-	// Enable vault
-	tr, f := true, false
-	s1.config.GetDefaultVault().Enabled = &tr
-	s1.config.GetDefaultVault().AllowUnauthenticated = &f
-
-	// Replace the Vault Client on the server
-	tvc := &TestVaultClient{}
-	s1.vault = tvc
-
-	// Add three tokens: one that allows the requesting policy, one that does
-	// not and one that returns an error
-	policy := "foo"
-
-	badToken := uuid.Generate()
-	badPolicies := []string{"a", "b", "c"}
-	tvc.SetLookupTokenAllowedPolicies(badToken, badPolicies)
-
-	registerGoodToken := uuid.Generate()
-	goodPolicies := []string{"foo", "bar", "baz"}
-	tvc.SetLookupTokenAllowedPolicies(registerGoodToken, goodPolicies)
-
-	revertGoodToken := uuid.Generate()
-	revertGoodPolicies := []string{"foo", "bar_revert", "baz_revert"}
-	tvc.SetLookupTokenAllowedPolicies(revertGoodToken, revertGoodPolicies)
-
-	rootToken := uuid.Generate()
-	rootPolicies := []string{"root"}
-	tvc.SetLookupTokenAllowedPolicies(rootToken, rootPolicies)
-
-	errToken := uuid.Generate()
-	expectedErr := fmt.Errorf("return errors from vault")
-	tvc.SetLookupTokenError(errToken, expectedErr)
-
-	// Create the initial register request
-	job := mock.Job()
-	job.VaultToken = registerGoodToken
-	job.Priority = 100
-	job.TaskGroups[0].Tasks[0].Vault = &structs.Vault{
-		Policies:   []string{policy},
-		ChangeMode: structs.VaultChangeModeRestart,
-	}
-	req := &structs.JobRegisterRequest{
-		Job: job,
-		WriteRequest: structs.WriteRequest{
-			Region:    "global",
-			Namespace: job.Namespace,
-		},
-	}
-
-	// Fetch the response
-	var resp structs.JobRegisterResponse
-	if err := msgpackrpc.CallWithCodec(codec, "Job.Register", req, &resp); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	// Reregister again to get another version
-	job2 := job.Copy()
-	job2.Priority = 1
-	req = &structs.JobRegisterRequest{
-		Job: job2,
-		WriteRequest: structs.WriteRequest{
-			Region:    "global",
-			Namespace: job.Namespace,
-		},
-	}
-
-	// Fetch the response
-	if err := msgpackrpc.CallWithCodec(codec, "Job.Register", req, &resp); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	// Create the revert request with the bad Vault token
-	revertReq := &structs.JobRevertRequest{
-		JobID:      job.ID,
-		JobVersion: 0,
-		WriteRequest: structs.WriteRequest{
-			Region:    "global",
-			Namespace: job.Namespace,
-		},
-		VaultToken: badToken,
-	}
-
-	// Fetch the response
-	err := msgpackrpc.CallWithCodec(codec, "Job.Revert", revertReq, &resp)
-	if err == nil || !strings.Contains(err.Error(),
-		"doesn't allow access to the following policies: "+policy) {
-		t.Fatalf("expected permission denied error: %v", err)
-	}
-
-	// Use the err token
-	revertReq.VaultToken = errToken
-	err = msgpackrpc.CallWithCodec(codec, "Job.Revert", revertReq, &resp)
-	if err == nil || !strings.Contains(err.Error(), expectedErr.Error()) {
-		t.Fatalf("expected permission denied error: %v", err)
-	}
-
-	// Use a good token
-	revertReq.VaultToken = revertGoodToken
-	if err := msgpackrpc.CallWithCodec(codec, "Job.Revert", revertReq, &resp); err != nil {
-		t.Fatalf("bad: %v", err)
 	}
 }
 
@@ -6659,24 +6188,11 @@ func TestJobEndpoint_ImplicitConstraints_Vault(t *testing.T) {
 	testutil.WaitForLeader(t, s1.RPC)
 
 	// Enable vault
-	tr, f := true, false
-	s1.config.GetDefaultVault().Enabled = &tr
-	s1.config.GetDefaultVault().AllowUnauthenticated = &f
+	s1.config.GetDefaultVault().Enabled = pointer.Of(true)
 
-	// Replace the Vault Client on the server
-	tvc := &TestVaultClient{}
-	s1.vault = tvc
-
-	policy := "foo"
-	goodToken := uuid.Generate()
-	goodPolicies := []string{"foo", "bar", "baz"}
-	tvc.SetLookupTokenAllowedPolicies(goodToken, goodPolicies)
-
-	// Create the register request with a job asking for a vault policy
+	// Create the register request with a job using Vault.
 	job := mock.Job()
-	job.VaultToken = goodToken
 	job.TaskGroups[0].Tasks[0].Vault = &structs.Vault{
-		Policies:   []string{policy},
 		ChangeMode: structs.VaultChangeModeRestart,
 	}
 	req := &structs.JobRegisterRequest{
@@ -7005,7 +6521,6 @@ func TestJobEndpoint_ValidateJob_PriorityNotOk(t *testing.T) {
 
 func TestJobEndpoint_Dispatch_ACL(t *testing.T) {
 	ci.Parallel(t)
-	require := require.New(t)
 
 	s1, root, cleanupS1 := TestACLServer(t, func(c *Config) {
 		c.NumSchedulers = 0 // Prevent automatic dequeue
@@ -7013,13 +6528,13 @@ func TestJobEndpoint_Dispatch_ACL(t *testing.T) {
 	defer cleanupS1()
 	codec := rpcClient(t, s1)
 	testutil.WaitForLeader(t, s1.RPC)
-	state := s1.fsm.State()
+	store := s1.fsm.State()
 
 	// Create a parameterized job
 	job := mock.BatchJob()
 	job.ParameterizedJob = &structs.ParameterizedJobConfig{}
-	err := state.UpsertJob(structs.MsgTypeTestSetup, 400, nil, job)
-	require.Nil(err)
+	err := store.UpsertJob(structs.MsgTypeTestSetup, 400, nil, job)
+	must.NoError(t, err)
 
 	req := &structs.JobDispatchRequest{
 		JobID: job.ID,
@@ -7032,52 +6547,49 @@ func TestJobEndpoint_Dispatch_ACL(t *testing.T) {
 	// Attempt to fetch the response without a token should fail
 	var resp structs.JobDispatchResponse
 	err = msgpackrpc.CallWithCodec(codec, "Job.Dispatch", req, &resp)
-	require.NotNil(err)
-	require.Contains(err.Error(), "Permission denied")
+	must.EqError(t, err, "Permission denied")
 
 	// Attempt to fetch the response with an invalid token should fail
-	invalidToken := mock.CreatePolicyAndToken(t, state, 1001, "test-invalid",
+	invalidToken := mock.CreatePolicyAndToken(t, store, 1001, "test-invalid",
 		mock.NamespacePolicy(structs.DefaultNamespace, "", []string{acl.NamespaceCapabilityListJobs}))
 	req.AuthToken = invalidToken.SecretID
 
 	var invalidResp structs.JobDispatchResponse
 	err = msgpackrpc.CallWithCodec(codec, "Job.Dispatch", req, &invalidResp)
-	require.NotNil(err)
-	require.Contains(err.Error(), "Permission denied")
+	must.EqError(t, err, "Permission denied")
 
 	// Dispatch with a valid management token should succeed
 	req.AuthToken = root.SecretID
 
 	var validResp structs.JobDispatchResponse
 	err = msgpackrpc.CallWithCodec(codec, "Job.Dispatch", req, &validResp)
-	require.Nil(err)
-	require.NotNil(validResp.EvalID)
-	require.NotNil(validResp.DispatchedJobID)
-	require.NotEqual(validResp.DispatchedJobID, "")
+	must.NoError(t, err)
+	must.NotEq(t, "", validResp.EvalID)
+	must.NotEq(t, "", validResp.DispatchedJobID)
 
 	// Dispatch with a valid token should succeed
-	validToken := mock.CreatePolicyAndToken(t, state, 1003, "test-valid",
+	validToken := mock.CreatePolicyAndToken(t, store, 1003, "test-valid",
 		mock.NamespacePolicy(structs.DefaultNamespace, "", []string{acl.NamespaceCapabilityDispatchJob}))
 	req.AuthToken = validToken.SecretID
 
 	var validResp2 structs.JobDispatchResponse
 	err = msgpackrpc.CallWithCodec(codec, "Job.Dispatch", req, &validResp2)
-	require.Nil(err)
-	require.NotNil(validResp2.EvalID)
-	require.NotNil(validResp2.DispatchedJobID)
-	require.NotEqual(validResp2.DispatchedJobID, "")
+	must.NoError(t, err)
+	must.NotEq(t, "", validResp2.EvalID)
+	must.NotEq(t, "", validResp2.DispatchedJobID)
 
 	ws := memdb.NewWatchSet()
-	out, err := state.JobByID(ws, job.Namespace, validResp2.DispatchedJobID)
-	require.Nil(err)
-	require.NotNil(out)
-	require.Equal(out.ParentID, job.ID)
+	out, err := store.JobByID(ws, job.Namespace, validResp2.DispatchedJobID)
+	must.NoError(t, err)
+	must.NotNil(t, out)
+	must.Eq(t, job.ID, out.ParentID)
 
-	// Look up the evaluation
-	eval, err := state.EvalByID(ws, validResp2.EvalID)
-	require.Nil(err)
-	require.NotNil(eval)
-	require.Equal(eval.CreateIndex, validResp2.EvalCreateIndex)
+	// Evaluation should be created atomically with job
+	eval, err := store.EvalByID(ws, validResp2.EvalID)
+	must.NoError(t, err)
+	must.NotNil(t, eval)
+	must.Eq(t, validResp2.EvalCreateIndex, eval.CreateIndex)
+	must.Eq(t, validResp2.JobCreateIndex, eval.CreateIndex)
 }
 
 func TestJobEndpoint_Dispatch(t *testing.T) {
@@ -7147,7 +6659,8 @@ func TestJobEndpoint_Dispatch(t *testing.T) {
 	reqInputDataTooLarge := &structs.JobDispatchRequest{
 		Payload: make([]byte, DispatchPayloadSizeLimit+100),
 	}
-
+	reqNoInputValidPriority := &structs.JobDispatchRequest{Priority: 55}
+	reqNoInputInvalidPriority := &structs.JobDispatchRequest{Priority: -1}
 	type existingIdempotentChildJob struct {
 		isTerminal bool
 	}
@@ -7157,131 +6670,164 @@ func TestJobEndpoint_Dispatch(t *testing.T) {
 		parameterizedJob      *structs.Job
 		dispatchReq           *structs.JobDispatchRequest
 		noEval                bool
-		err                   bool
+		expectError           bool
 		errStr                string
 		idempotencyToken      string
 		existingIdempotentJob *existingIdempotentChildJob
+		expectedPriority      int
 	}
 	cases := []testCase{
 		{
 			name:             "optional input data w/ data",
 			parameterizedJob: d1,
 			dispatchReq:      reqInputDataNoMeta,
-			err:              false,
+			expectError:      false,
+			expectedPriority: 50,
 		},
 		{
 			name:             "optional input data w/o data",
 			parameterizedJob: d1,
 			dispatchReq:      reqNoInputNoMeta,
-			err:              false,
+			expectError:      false,
+			expectedPriority: 50,
 		},
 		{
 			name:             "require input data w/ data",
 			parameterizedJob: d2,
 			dispatchReq:      reqInputDataNoMeta,
-			err:              false,
+			expectError:      false,
+			expectedPriority: 50,
 		},
 		{
 			name:             "require input data w/o data",
 			parameterizedJob: d2,
 			dispatchReq:      reqNoInputNoMeta,
-			err:              true,
+			expectError:      true,
 			errStr:           "not provided but required",
+			expectedPriority: 50,
 		},
 		{
 			name:             "disallow input data w/o data",
 			parameterizedJob: d3,
 			dispatchReq:      reqNoInputNoMeta,
-			err:              false,
+			expectError:      false,
+			expectedPriority: 50,
 		},
 		{
 			name:             "disallow input data w/ data",
 			parameterizedJob: d3,
 			dispatchReq:      reqInputDataNoMeta,
-			err:              true,
+			expectError:      true,
 			errStr:           "provided but forbidden",
+			expectedPriority: 50,
 		},
 		{
 			name:             "require meta w/ meta",
 			parameterizedJob: d4,
 			dispatchReq:      reqInputDataMeta,
-			err:              false,
+			expectError:      false,
+			expectedPriority: 50,
 		},
 		{
 			name:             "require meta w/o meta",
 			parameterizedJob: d4,
 			dispatchReq:      reqNoInputNoMeta,
-			err:              true,
+			expectError:      true,
 			errStr:           "did not provide required meta keys",
+			expectedPriority: 50,
 		},
 		{
 			name:             "optional meta w/ meta",
 			parameterizedJob: d5,
 			dispatchReq:      reqNoInputDataMeta,
-			err:              false,
+			expectError:      false,
+			expectedPriority: 50,
 		},
 		{
 			name:             "optional meta w/o meta",
 			parameterizedJob: d5,
 			dispatchReq:      reqNoInputNoMeta,
-			err:              false,
+			expectError:      false,
+			expectedPriority: 50,
 		},
 		{
 			name:             "optional meta w/ bad meta",
 			parameterizedJob: d5,
 			dispatchReq:      reqBadMeta,
-			err:              true,
+			expectError:      true,
 			errStr:           "unpermitted metadata keys",
+			expectedPriority: 50,
 		},
 		{
 			name:             "optional input w/ too big of input",
 			parameterizedJob: d1,
 			dispatchReq:      reqInputDataTooLarge,
-			err:              true,
+			expectError:      true,
 			errStr:           "Payload exceeds maximum size",
+			expectedPriority: 50,
 		},
 		{
 			name:             "periodic job dispatched, ensure no eval",
 			parameterizedJob: d6,
 			dispatchReq:      reqNoInputNoMeta,
 			noEval:           true,
+			expectedPriority: 50,
 		},
 		{
 			name:             "periodic job stopped, ensure error",
 			parameterizedJob: d7,
 			dispatchReq:      reqNoInputNoMeta,
-			err:              true,
+			expectError:      true,
 			errStr:           "stopped",
+			expectedPriority: 50,
 		},
 		{
 			name:                  "idempotency token, no existing child job",
 			parameterizedJob:      d1,
 			dispatchReq:           reqInputDataNoMeta,
-			err:                   false,
+			expectError:           false,
 			idempotencyToken:      "foo",
 			existingIdempotentJob: nil,
+			expectedPriority:      50,
 		},
 		{
 			name:             "idempotency token, w/ existing non-terminal child job",
 			parameterizedJob: d1,
 			dispatchReq:      reqInputDataNoMeta,
-			err:              false,
+			expectError:      false,
 			idempotencyToken: "foo",
 			existingIdempotentJob: &existingIdempotentChildJob{
 				isTerminal: false,
 			},
-			noEval: true,
+			noEval:           true,
+			expectedPriority: 50,
 		},
 		{
 			name:             "idempotency token, w/ existing terminal job",
 			parameterizedJob: d1,
 			dispatchReq:      reqInputDataNoMeta,
-			err:              false,
+			expectError:      false,
 			idempotencyToken: "foo",
 			existingIdempotentJob: &existingIdempotentChildJob{
 				isTerminal: true,
 			},
-			noEval: true,
+			noEval:           true,
+			expectedPriority: 50,
+		},
+		{
+			name:             "valid priority",
+			parameterizedJob: d1,
+			dispatchReq:      reqNoInputValidPriority,
+			expectError:      false,
+			expectedPriority: reqNoInputValidPriority.Priority,
+		},
+		{
+			name:             "invalid priority",
+			parameterizedJob: d1,
+			dispatchReq:      reqNoInputInvalidPriority,
+			expectError:      true,
+			errStr:           "priority must be between",
+			expectedPriority: reqNoInputInvalidPriority.Priority,
 		},
 	}
 
@@ -7305,9 +6851,8 @@ func TestJobEndpoint_Dispatch(t *testing.T) {
 
 			// Fetch the response
 			var regResp structs.JobRegisterResponse
-			if err := msgpackrpc.CallWithCodec(codec, "Job.Register", regReq, &regResp); err != nil {
-				t.Fatalf("err: %v", err)
-			}
+			err := msgpackrpc.CallWithCodec(codec, "Job.Register", regReq, &regResp)
+			must.NoError(t, err)
 
 			// Now try to dispatch
 			tc.dispatchReq.JobID = tc.parameterizedJob.ID
@@ -7320,107 +6865,66 @@ func TestJobEndpoint_Dispatch(t *testing.T) {
 			// Dispatch with the same request so a child job w/ the idempotency key exists
 			var initialIdempotentDispatchResp structs.JobDispatchResponse
 			if tc.existingIdempotentJob != nil {
-				if err := msgpackrpc.CallWithCodec(codec, "Job.Dispatch", tc.dispatchReq, &initialIdempotentDispatchResp); err != nil {
-					t.Fatalf("Unexpected error dispatching initial idempotent job: %v", err)
-				}
+				err := msgpackrpc.CallWithCodec(codec, "Job.Dispatch", tc.dispatchReq, &initialIdempotentDispatchResp)
+				must.NoError(t, err)
 
 				if tc.existingIdempotentJob.isTerminal {
 					eval, err := s1.State().EvalByID(nil, initialIdempotentDispatchResp.EvalID)
-					if err != nil {
-						t.Fatalf("Unexpected error fetching eval %v", err)
-					}
+					must.NoError(t, err)
+
 					eval = eval.Copy()
 					eval.Status = structs.EvalStatusComplete
 					err = s1.State().UpsertEvals(structs.MsgTypeTestSetup, initialIdempotentDispatchResp.Index+1, []*structs.Evaluation{eval})
-					if err != nil {
-						t.Fatalf("Unexpected error completing eval %v", err)
-					}
+					must.NoError(t, err)
 				}
 			}
 
 			var dispatchResp structs.JobDispatchResponse
 			dispatchErr := msgpackrpc.CallWithCodec(codec, "Job.Dispatch", tc.dispatchReq, &dispatchResp)
-
-			if dispatchErr == nil {
-				if tc.err {
-					t.Fatalf("Expected error: %v", dispatchErr)
-				}
-
-				// Check that we got an eval and job id back
-				switch dispatchResp.EvalID {
-				case "":
-					if !tc.noEval {
-						t.Fatalf("Bad response")
-					}
-				default:
-					if tc.noEval {
-						t.Fatalf("Got eval %q", dispatchResp.EvalID)
-					}
-				}
-
-				if dispatchResp.DispatchedJobID == "" {
-					t.Fatalf("Bad response")
-				}
-
-				state := s1.fsm.State()
-				ws := memdb.NewWatchSet()
-				out, err := state.JobByID(ws, tc.parameterizedJob.Namespace, dispatchResp.DispatchedJobID)
-				if err != nil {
-					t.Fatalf("err: %v", err)
-				}
-				if out == nil {
-					t.Fatalf("expected job")
-				}
-				if out.CreateIndex != dispatchResp.JobCreateIndex {
-					t.Fatalf("index mis-match")
-				}
-				if out.ParentID != tc.parameterizedJob.ID {
-					t.Fatalf("bad parent ID")
-				}
-				if !out.Dispatched {
-					t.Fatal("expected dispatched job")
-				}
-				if out.IsParameterized() {
-					t.Fatal("dispatched job should not be parameterized")
-				}
-				if out.ParameterizedJob == nil {
-					t.Fatal("parameter job config should exist")
-				}
-
-				// Check that the existing job is returned in the case of a supplied idempotency token
-				if tc.idempotencyToken != "" && tc.existingIdempotentJob != nil {
-					if dispatchResp.DispatchedJobID != initialIdempotentDispatchResp.DispatchedJobID {
-						t.Fatal("dispatched job id should match initial dispatch")
-					}
-
-					if dispatchResp.JobCreateIndex != initialIdempotentDispatchResp.JobCreateIndex {
-						t.Fatal("dispatched job create index should match initial dispatch")
-					}
-				}
-
-				if tc.noEval {
-					return
-				}
-
-				// Lookup the evaluation
-				eval, err := state.EvalByID(ws, dispatchResp.EvalID)
-				if err != nil {
-					t.Fatalf("err: %v", err)
-				}
-
-				if eval == nil {
-					t.Fatalf("expected eval")
-				}
-				if eval.CreateIndex != dispatchResp.EvalCreateIndex {
-					t.Fatalf("index mis-match")
-				}
+			if tc.expectError {
+				must.ErrorContains(t, dispatchErr, tc.errStr)
+				return
 			} else {
-				if !tc.err {
-					t.Fatalf("Got unexpected error: %v", dispatchErr)
-				} else if !strings.Contains(dispatchErr.Error(), tc.errStr) {
-					t.Fatalf("Expected err to include %q; got %v", tc.errStr, dispatchErr)
-				}
+				must.NoError(t, dispatchErr)
 			}
+
+			// Check that we got an eval and job id back
+			must.NotEq(t, dispatchResp.DispatchedJobID, "")
+			if tc.noEval {
+				must.Eq(t, dispatchResp.EvalID, "")
+			} else {
+				must.NotEq(t, dispatchResp.EvalID, "")
+			}
+
+			state := s1.fsm.State()
+			ws := memdb.NewWatchSet()
+			out, err := state.JobByID(ws, tc.parameterizedJob.Namespace, dispatchResp.DispatchedJobID)
+			must.NoError(t, err)
+			must.NotNil(t, out)
+
+			// Check job characteristics
+			must.Eq(t, out.CreateIndex, dispatchResp.JobCreateIndex)
+			must.Eq(t, out.ParentID, tc.parameterizedJob.ID)
+			must.Eq(t, out.Dispatched, true)
+			must.Eq(t, out.IsParameterized(), false)
+			must.NotNil(t, out.ParameterizedJob)
+			must.Eq(t, tc.expectedPriority, out.Priority)
+
+			// Check that the existing job is returned in the case of a supplied idempotency token
+			if tc.idempotencyToken != "" && tc.existingIdempotentJob != nil {
+				must.Eq(t, dispatchResp.DispatchedJobID, initialIdempotentDispatchResp.DispatchedJobID)
+				must.Eq(t, dispatchResp.JobCreateIndex, initialIdempotentDispatchResp.JobCreateIndex)
+			}
+
+			if tc.noEval {
+				return
+			}
+
+			// Lookup the evaluation
+			eval, err := state.EvalByID(ws, dispatchResp.EvalID)
+			must.NoError(t, err)
+			must.NotNil(t, eval)
+			must.Eq(t, eval.CreateIndex, dispatchResp.EvalCreateIndex)
 		})
 	}
 }

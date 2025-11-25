@@ -10,7 +10,7 @@ import (
 
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper/pointer"
-	"github.com/stretchr/testify/require"
+	"github.com/shoenig/test/must"
 )
 
 func TestJobDiff(t *testing.T) {
@@ -1247,104 +1247,6 @@ func TestJobDiff(t *testing.T) {
 			},
 		},
 		{
-			// Task groups edited
-			Old: &Job{
-				TaskGroups: []*TaskGroup{
-					{
-						Name:                    "foo",
-						Count:                   1,
-						PreventRescheduleOnLost: true,
-					},
-					{
-						Name:                    "bar",
-						Count:                   1,
-						PreventRescheduleOnLost: false,
-					},
-					{
-						Name:                    "baz",
-						Count:                   1,
-						PreventRescheduleOnLost: true,
-					},
-				},
-			},
-			New: &Job{
-				TaskGroups: []*TaskGroup{
-					{
-						Name:                    "bar",
-						Count:                   1,
-						PreventRescheduleOnLost: false,
-					},
-					{
-						Name:                    "baz",
-						Count:                   2,
-						PreventRescheduleOnLost: true,
-					},
-					{
-						Name:                    "bam",
-						Count:                   1,
-						PreventRescheduleOnLost: true,
-					},
-				},
-			},
-			Expected: &JobDiff{
-				Type: DiffTypeEdited,
-				TaskGroups: []*TaskGroupDiff{
-					{
-						Type: DiffTypeAdded,
-						Name: "bam",
-						Fields: []*FieldDiff{
-							{
-								Type: DiffTypeAdded,
-								Name: "Count",
-								Old:  "",
-								New:  "1",
-							},
-							{
-								Type: DiffTypeAdded,
-								Name: "PreventRescheduleOnLost",
-								Old:  "",
-								New:  "true",
-							},
-						},
-					},
-					{
-						Type: DiffTypeNone,
-						Name: "bar",
-					},
-					{
-						Type: DiffTypeEdited,
-						Name: "baz",
-						Fields: []*FieldDiff{
-							{
-								Type: DiffTypeEdited,
-								Name: "Count",
-								Old:  "1",
-								New:  "2",
-							},
-						},
-					},
-					{
-						Type: DiffTypeDeleted,
-						Name: "foo",
-						Fields: []*FieldDiff{
-							{
-								Type: DiffTypeDeleted,
-								Name: "Count",
-								Old:  "1",
-								New:  "",
-							},
-							{
-								Type: DiffTypeDeleted,
-								Name: "PreventRescheduleOnLost",
-								Old:  "true",
-								New:  "",
-							},
-						},
-					},
-				},
-			},
-		},
-		{
 			// Parameterized Job added
 			Old: &Job{},
 			New: &Job{
@@ -1729,21 +1631,6 @@ func TestJobDiff(t *testing.T) {
 				},
 			},
 		},
-		{
-			// VaultToken is filtered
-			Old: &Job{
-				ID:         "vault-job",
-				VaultToken: "secret",
-			},
-			New: &Job{
-				ID:         "vault-job",
-				VaultToken: "new-secret",
-			},
-			Expected: &JobDiff{
-				Type: DiffTypeNone,
-				ID:   "vault-job",
-			},
-		},
 
 		// UI block is added
 		{
@@ -1989,31 +1876,6 @@ func TestTaskGroupDiff(t *testing.T) {
 						Name: "Meta[foo]",
 						Old:  "bar",
 						New:  "baz",
-					},
-				},
-			},
-		},
-		{
-			TestCase: "Reschedule on lost diff",
-			Old: &TaskGroup{
-				Name:                    "foo",
-				Count:                   100,
-				PreventRescheduleOnLost: true,
-			},
-			New: &TaskGroup{
-				Name:                    "foo",
-				Count:                   100,
-				PreventRescheduleOnLost: false,
-			},
-			Expected: &TaskGroupDiff{
-				Type: DiffTypeEdited,
-				Name: "foo",
-				Fields: []*FieldDiff{
-					{
-						Type: DiffTypeEdited,
-						Name: "PreventRescheduleOnLost",
-						Old:  "true",
-						New:  "false",
 					},
 				},
 			},
@@ -3726,6 +3588,12 @@ func TestTaskGroupDiff(t *testing.T) {
 							},
 							{
 								Type: DiffTypeNone,
+								Name: "Kind",
+								Old:  "",
+								New:  "",
+							},
+							{
+								Type: DiffTypeNone,
 								Name: "Name",
 								Old:  "foo",
 								New:  "foo",
@@ -4221,6 +4089,17 @@ func TestTaskGroupDiff(t *testing.T) {
 														Old:  "baz",
 														New:  "",
 													},
+												},
+											},
+											{
+												Type: DiffTypeDeleted,
+												Name: "VolumeMount",
+												Fields: []*FieldDiff{
+													{Type: DiffTypeDeleted, Name: "Destination", Old: "/path"},
+													{Type: DiffTypeDeleted, Name: "PropagationMode", Old: "private"},
+													{Type: DiffTypeDeleted, Name: "ReadOnly", Old: "false"},
+													{Type: DiffTypeDeleted, Name: "SELinuxLabel", Old: "Z"},
+													{Type: DiffTypeDeleted, Name: "Volume", Old: "vol0"},
 												},
 											},
 										},
@@ -4866,6 +4745,12 @@ func TestTaskGroupDiff(t *testing.T) {
 							},
 							{
 								Type: DiffTypeAdded,
+								Name: "Sticky",
+								Old:  "",
+								New:  "false",
+							},
+							{
+								Type: DiffTypeAdded,
 								Name: "Type",
 								Old:  "",
 								New:  "host",
@@ -4959,75 +4844,6 @@ func TestTaskGroupDiff(t *testing.T) {
 								},
 							},
 						},
-					},
-				},
-			},
-		},
-		{
-			TestCase: "MaxClientDisconnect added",
-			Old: &TaskGroup{
-				Name:                "foo",
-				MaxClientDisconnect: nil,
-			},
-			New: &TaskGroup{
-				Name:                "foo",
-				MaxClientDisconnect: pointer.Of(20 * time.Second),
-			},
-			Expected: &TaskGroupDiff{
-				Type: DiffTypeEdited,
-				Name: "foo",
-				Fields: []*FieldDiff{
-					{
-						Type: DiffTypeAdded,
-						Name: "MaxClientDisconnect",
-						Old:  "",
-						New:  "20000000000",
-					},
-				},
-			},
-		},
-		{
-			TestCase: "MaxClientDisconnect updated",
-			Old: &TaskGroup{
-				Name:                "foo",
-				MaxClientDisconnect: pointer.Of(10 * time.Second),
-			},
-			New: &TaskGroup{
-				Name:                "foo",
-				MaxClientDisconnect: pointer.Of(20 * time.Second),
-			},
-			Expected: &TaskGroupDiff{
-				Type: DiffTypeEdited,
-				Name: "foo",
-				Fields: []*FieldDiff{
-					{
-						Type: DiffTypeEdited,
-						Name: "MaxClientDisconnect",
-						Old:  "10000000000",
-						New:  "20000000000",
-					},
-				},
-			},
-		},
-		{
-			TestCase: "MaxClientDisconnect deleted",
-			Old: &TaskGroup{
-				Name:                "foo",
-				MaxClientDisconnect: pointer.Of(10 * time.Second),
-			},
-			New: &TaskGroup{
-				Name:                "foo",
-				MaxClientDisconnect: nil,
-			},
-			Expected: &TaskGroupDiff{
-				Type: DiffTypeEdited,
-				Name: "foo",
-				Fields: []*FieldDiff{
-					{
-						Type: DiffTypeDeleted,
-						Name: "MaxClientDisconnect",
-						Old:  "10000000000",
-						New:  "",
 					},
 				},
 			},
@@ -5472,20 +5288,75 @@ func TestTaskGroupDiff(t *testing.T) {
 				},
 			},
 		},
+		{
+			TestCase:   "edited migrate",
+			Contextual: false,
+			Old: &TaskGroup{
+				Migrate: &MigrateStrategy{
+					MaxParallel:     1,
+					HealthCheck:     "checks",
+					MinHealthyTime:  1 * time.Second,
+					HealthyDeadline: 1 * time.Minute,
+				},
+			},
+			New: &TaskGroup{
+				Migrate: &MigrateStrategy{
+					MaxParallel:     5,
+					HealthCheck:     "task_states",
+					MinHealthyTime:  5 * time.Second,
+					HealthyDeadline: 5 * time.Minute,
+				},
+			},
+			Expected: &TaskGroupDiff{
+				Type: DiffTypeEdited,
+				Objects: []*ObjectDiff{
+					{
+						Type: DiffTypeEdited,
+						Name: "Migrate",
+						Fields: []*FieldDiff{
+							{
+								Type: "Edited",
+								Name: "HealthCheck",
+								Old:  "checks",
+								New:  "task_states",
+							},
+							{
+								Type: "Edited",
+								Name: "HealthyDeadline",
+								Old:  "60000000000",
+								New:  "300000000000",
+							},
+							{
+								Type: "Edited",
+								Name: "MaxParallel",
+								Old:  "1",
+								New:  "5",
+							},
+							{
+								Type: "Edited",
+								Name: "MinHealthyTime",
+								Old:  "1000000000",
+								New:  "5000000000",
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for i, c := range cases {
-		require.NotEmpty(t, c.TestCase, "case #%d needs a name", i+1)
+		must.NotEq(t, c.TestCase, "", must.Sprintf("case #%d needs a name", i+1))
 
 		t.Run(c.TestCase, func(t *testing.T) {
 
 			result, err := c.Old.Diff(c.New, c.Contextual)
 			switch c.ExpErr {
 			case true:
-				require.Error(t, err, "case %q expected error", c.TestCase)
+				must.Error(t, err, must.Sprintf("case %q expected error", c.TestCase))
 			case false:
-				require.NoError(t, err, "case %q expected no error", c.TestCase)
-				require.Equal(t, c.Expected, result)
+				must.NoError(t, err, must.Sprintf("case %q expected no error", c.TestCase))
+				must.Eq(t, c.Expected, result)
 			}
 		})
 	}
@@ -7215,6 +7086,10 @@ func TestTaskDiff(t *testing.T) {
 							},
 							{
 								Type: DiffTypeNone,
+								Name: "Kind",
+							},
+							{
+								Type: DiffTypeNone,
 								Name: "Name",
 								Old:  "foo",
 								New:  "foo",
@@ -7378,6 +7253,10 @@ func TestTaskDiff(t *testing.T) {
 								Name: "EnableTagOverride",
 								Old:  "false",
 								New:  "false",
+							},
+							{
+								Type: DiffTypeNone,
+								Name: "Kind",
 							},
 							{
 								Type: DiffTypeNone,
@@ -7931,6 +7810,10 @@ func TestTaskDiff(t *testing.T) {
 							},
 							{
 								Type: DiffTypeNone,
+								Name: "Kind",
+							},
+							{
+								Type: DiffTypeNone,
 								Name: "Name",
 								Old:  "foo",
 								New:  "foo",
@@ -8448,169 +8331,12 @@ func TestTaskDiff(t *testing.T) {
 				},
 			},
 		},
-
-		{
-			Name: "Vault added",
-			Old:  &Task{},
-			New: &Task{
-				Vault: &Vault{
-					Role:         "nomad-task",
-					Policies:     []string{"foo", "bar"},
-					Env:          true,
-					DisableFile:  true,
-					ChangeMode:   "signal",
-					ChangeSignal: "SIGUSR1",
-				},
-			},
-			Expected: &TaskDiff{
-				Type: DiffTypeEdited,
-				Objects: []*ObjectDiff{
-					{
-						Type: DiffTypeAdded,
-						Name: "Vault",
-						Fields: []*FieldDiff{
-							{
-								Type: DiffTypeAdded,
-								Name: "AllowTokenExpiration",
-								Old:  "",
-								New:  "false",
-							},
-							{
-								Type: DiffTypeAdded,
-								Name: "ChangeMode",
-								Old:  "",
-								New:  "signal",
-							},
-							{
-								Type: DiffTypeAdded,
-								Name: "ChangeSignal",
-								Old:  "",
-								New:  "SIGUSR1",
-							},
-							{
-								Type: DiffTypeAdded,
-								Name: "DisableFile",
-								Old:  "",
-								New:  "true",
-							},
-							{
-								Type: DiffTypeAdded,
-								Name: "Env",
-								Old:  "",
-								New:  "true",
-							},
-							{
-								Type: DiffTypeAdded,
-								Name: "Role",
-								Old:  "",
-								New:  "nomad-task",
-							},
-						},
-						Objects: []*ObjectDiff{
-							{
-								Type: DiffTypeAdded,
-								Name: "Policies",
-								Fields: []*FieldDiff{
-									{
-										Type: DiffTypeAdded,
-										Name: "Policies",
-										Old:  "",
-										New:  "bar",
-									},
-									{
-										Type: DiffTypeAdded,
-										Name: "Policies",
-										Old:  "",
-										New:  "foo",
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		{
-			Name: "Vault deleted",
-			Old: &Task{
-				Vault: &Vault{
-					Policies:     []string{"foo", "bar"},
-					Env:          true,
-					DisableFile:  true,
-					ChangeMode:   "signal",
-					ChangeSignal: "SIGUSR1",
-				},
-			},
-			New: &Task{},
-			Expected: &TaskDiff{
-				Type: DiffTypeEdited,
-				Objects: []*ObjectDiff{
-					{
-						Type: DiffTypeDeleted,
-						Name: "Vault",
-						Fields: []*FieldDiff{
-							{
-								Type: DiffTypeDeleted,
-								Name: "AllowTokenExpiration",
-								Old:  "false",
-								New:  "",
-							},
-							{
-								Type: DiffTypeDeleted,
-								Name: "ChangeMode",
-								Old:  "signal",
-								New:  "",
-							},
-							{
-								Type: DiffTypeDeleted,
-								Name: "ChangeSignal",
-								Old:  "SIGUSR1",
-								New:  "",
-							},
-							{
-								Type: DiffTypeDeleted,
-								Name: "DisableFile",
-								Old:  "true",
-								New:  "",
-							},
-							{
-								Type: DiffTypeDeleted,
-								Name: "Env",
-								Old:  "true",
-								New:  "",
-							},
-						},
-						Objects: []*ObjectDiff{
-							{
-								Type: DiffTypeDeleted,
-								Name: "Policies",
-								Fields: []*FieldDiff{
-									{
-										Type: DiffTypeDeleted,
-										Name: "Policies",
-										Old:  "bar",
-										New:  "",
-									},
-									{
-										Type: DiffTypeDeleted,
-										Name: "Policies",
-										Old:  "foo",
-										New:  "",
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
 		{
 			Name: "Vault edited",
 			Old: &Task{
 				Vault: &Vault{
 					Role:                 "nomad-task",
 					Namespace:            "ns1",
-					Policies:             []string{"foo", "bar"},
 					Env:                  true,
 					DisableFile:          true,
 					ChangeMode:           "signal",
@@ -8622,7 +8348,6 @@ func TestTaskDiff(t *testing.T) {
 				Vault: &Vault{
 					Role:                 "nomad-task-2",
 					Namespace:            "ns2",
-					Policies:             []string{"bar", "baz"},
 					Env:                  false,
 					DisableFile:          false,
 					ChangeMode:           "restart",
@@ -8678,141 +8403,6 @@ func TestTaskDiff(t *testing.T) {
 								Name: "Role",
 								Old:  "nomad-task",
 								New:  "nomad-task-2",
-							},
-						},
-						Objects: []*ObjectDiff{
-							{
-								Type: DiffTypeEdited,
-								Name: "Policies",
-								Fields: []*FieldDiff{
-									{
-										Type: DiffTypeAdded,
-										Name: "Policies",
-										Old:  "",
-										New:  "baz",
-									},
-									{
-										Type: DiffTypeDeleted,
-										Name: "Policies",
-										Old:  "foo",
-										New:  "",
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		{
-			Name:       "Vault edited with context",
-			Contextual: true,
-			Old: &Task{
-				Vault: &Vault{
-					Role:                 "nomad-task",
-					Namespace:            "ns1",
-					Cluster:              VaultDefaultCluster,
-					Policies:             []string{"foo", "bar"},
-					Env:                  true,
-					DisableFile:          true,
-					ChangeMode:           "signal",
-					ChangeSignal:         "SIGUSR1",
-					AllowTokenExpiration: true,
-				},
-			},
-			New: &Task{
-				Vault: &Vault{
-					Role:                 "nomad-task",
-					Namespace:            "ns1",
-					Cluster:              VaultDefaultCluster,
-					Policies:             []string{"bar", "baz"},
-					Env:                  true,
-					DisableFile:          true,
-					ChangeMode:           "signal",
-					ChangeSignal:         "SIGUSR1",
-					AllowTokenExpiration: true,
-				},
-			},
-			Expected: &TaskDiff{
-				Type: DiffTypeEdited,
-				Objects: []*ObjectDiff{
-					{
-						Type: DiffTypeEdited,
-						Name: "Vault",
-						Fields: []*FieldDiff{
-							{
-								Type: DiffTypeNone,
-								Name: "AllowTokenExpiration",
-								Old:  "true",
-								New:  "true",
-							},
-							{
-								Type: DiffTypeNone,
-								Name: "ChangeMode",
-								Old:  "signal",
-								New:  "signal",
-							},
-							{
-								Type: DiffTypeNone,
-								Name: "ChangeSignal",
-								Old:  "SIGUSR1",
-								New:  "SIGUSR1",
-							},
-							{
-								Type: DiffTypeNone,
-								Name: "Cluster",
-								Old:  VaultDefaultCluster,
-								New:  VaultDefaultCluster,
-							},
-							{
-								Type: DiffTypeNone,
-								Name: "DisableFile",
-								Old:  "true",
-								New:  "true",
-							},
-							{
-								Type: DiffTypeNone,
-								Name: "Env",
-								Old:  "true",
-								New:  "true",
-							},
-							{
-								Type: DiffTypeNone,
-								Name: "Namespace",
-								Old:  "ns1",
-								New:  "ns1",
-							},
-							{
-								Type: DiffTypeNone,
-								Name: "Role",
-								Old:  "nomad-task",
-								New:  "nomad-task",
-							},
-						},
-						Objects: []*ObjectDiff{
-							{
-								Type: DiffTypeEdited,
-								Name: "Policies",
-								Fields: []*FieldDiff{
-									{
-										Type: DiffTypeAdded,
-										Name: "Policies",
-										Old:  "",
-										New:  "baz",
-									},
-									{
-										Type: DiffTypeNone,
-										Name: "Policies",
-										Old:  "bar",
-										New:  "bar",
-									},
-									{
-										Type: DiffTypeDeleted,
-										Name: "Policies",
-										Old:  "foo",
-										New:  "",
-									},
-								},
 							},
 						},
 					},
@@ -8996,6 +8586,12 @@ func TestTaskDiff(t *testing.T) {
 							},
 							{
 								Type: DiffTypeAdded,
+								Name: "Once",
+								Old:  "",
+								New:  "false",
+							},
+							{
+								Type: DiffTypeAdded,
 								Name: "Perms",
 								Old:  "",
 								New:  "0776",
@@ -9128,6 +8724,12 @@ func TestTaskDiff(t *testing.T) {
 								Type: DiffTypeDeleted,
 								Name: "Gid",
 								Old:  "20",
+								New:  "",
+							},
+							{
+								Type: DiffTypeDeleted,
+								Name: "Once",
+								Old:  "false",
 								New:  "",
 							},
 							{
@@ -9870,10 +9472,10 @@ func TestTaskDiff(t *testing.T) {
 		t.Run(c.Name, func(t *testing.T) {
 			actual, err := c.Old.Diff(c.New, c.Contextual)
 			if c.Error {
-				require.Error(t, err)
+				must.Error(t, err)
 			} else {
-				require.NoError(t, err)
-				require.Equal(t, c.Expected, actual)
+				must.NoError(t, err)
+				must.Eq(t, c.Expected, actual)
 			}
 		})
 	}
@@ -9973,6 +9575,10 @@ func TestServicesDiff(t *testing.T) {
 							Name: "EnableTagOverride",
 							Old:  "true",
 							New:  "false",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Kind",
 						},
 						{
 							Type: DiffTypeEdited,
@@ -10094,6 +9700,10 @@ func TestServicesDiff(t *testing.T) {
 							New:  "false",
 						},
 						{
+							Type: DiffTypeNone,
+							Name: "Kind",
+						},
+						{
 							Type: DiffTypeAdded,
 							Name: "Name",
 							New:  "webapp",
@@ -10165,6 +9775,10 @@ func TestServicesDiff(t *testing.T) {
 							Type: DiffTypeAdded,
 							Name: "EnableTagOverride",
 							New:  "false",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Kind",
 						},
 						{
 							Type: DiffTypeAdded,
@@ -10246,6 +9860,10 @@ func TestServicesDiff(t *testing.T) {
 						},
 						{
 							Type: DiffTypeNone,
+							Name: "Kind",
+						},
+						{
+							Type: DiffTypeNone,
 							Name: "Name",
 							Old:  "webapp",
 							New:  "webapp",
@@ -10264,6 +9882,82 @@ func TestServicesDiff(t *testing.T) {
 							Old:  "http",
 							New:  "https-redirect",
 						}, {
+							Type: DiffTypeNone,
+							Name: "Provider",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "TaskName",
+						},
+					},
+				},
+			},
+		},
+		{
+			Name:       "Modify service kind field",
+			Contextual: true,
+			Old: []*Service{
+				{
+					Name: "webapp",
+					Kind: "api-gateway",
+				},
+			},
+			New: []*Service{
+				{
+					Name: "webapp",
+					Kind: "mesh-gateway",
+				},
+			},
+			Expected: []*ObjectDiff{
+				{
+					Type: DiffTypeEdited,
+					Name: "Service",
+					Fields: []*FieldDiff{
+						{
+							Type: DiffTypeNone,
+							Name: "Address",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "AddressMode",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Cluster",
+							Old:  "",
+							New:  "",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "EnableTagOverride",
+							Old:  "false",
+							New:  "false",
+						},
+						{
+							Type: DiffTypeEdited,
+							Name: "Kind",
+							Old:  "api-gateway",
+							New:  "mesh-gateway",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Name",
+							Old:  "webapp",
+							New:  "webapp",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Namespace",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "OnUpdate",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "PortLabel",
+						},
+						{
 							Type: DiffTypeNone,
 							Name: "Provider",
 						},
@@ -10326,6 +10020,10 @@ func TestServicesDiff(t *testing.T) {
 							Name: "EnableTagOverride",
 							Old:  "false",
 							New:  "false",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Kind",
 						},
 						{
 							Type: DiffTypeNone,
@@ -10421,6 +10119,10 @@ func TestServicesDiff(t *testing.T) {
 							Name: "EnableTagOverride",
 							Old:  "false",
 							New:  "false",
+						},
+						{
+							Type: DiffTypeNone,
+							Name: "Kind",
 						},
 						{
 							Type: DiffTypeNone,
@@ -10848,7 +10550,250 @@ func TestServicesDiff(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {
 			actual := serviceDiffs(c.Old, c.New, c.Contextual)
-			require.Equal(t, c.Expected, actual)
+			must.Eq(t, c.Expected, actual)
 		})
 	}
+}
+
+// TestDiff_SidecarVolumes asserts changes to sidecar task volumes are
+// detected. See #25878
+func TestDiff_SidecarVolumes(t *testing.T) {
+	oldTask := &SidecarTask{
+		Name:   "old",
+		Driver: "docker",
+		User:   "sidecar",
+		Config: map[string]any{"foo": "bar"},
+		Env:    map[string]string{"FOO": "BAR"},
+		Resources: &Resources{
+			Cores: 2,
+			NUMA: &NUMA{
+				Affinity: "none",
+			},
+		},
+		Meta:        map[string]string{"meta": "val"},
+		KillTimeout: pointer.Of(10 * time.Second),
+		LogConfig: &LogConfig{
+			MaxFiles:      3,
+			MaxFileSizeMB: 100,
+		},
+		ShutdownDelay: pointer.Of(20 * time.Second),
+		KillSignal:    "SIGUSR1",
+		VolumeMounts: []*VolumeMount{
+			{
+				Volume:   "foo",
+				ReadOnly: true,
+			},
+		},
+	}
+	newTask := &SidecarTask{
+		Name:   "new",
+		Driver: "podman",
+		User:   "proxy",
+		Config: map[string]any{"eggs": "spam"},
+		Env:    map[string]string{"EGGS": "SPAM"},
+		Resources: &Resources{
+			Cores: 4,
+			NUMA: &NUMA{
+				Affinity: "prefer",
+			},
+		},
+		Meta:        map[string]string{"meta": "val"},
+		KillTimeout: pointer.Of(10 * time.Second),
+		LogConfig: &LogConfig{
+			MaxFiles:      3,
+			MaxFileSizeMB: 100,
+		},
+		ShutdownDelay: pointer.Of(20 * time.Second),
+		KillSignal:    "SIGUSR1",
+		VolumeMounts: []*VolumeMount{
+			{
+				Volume:   "foo",
+				ReadOnly: false,
+			},
+			{
+				Volume:   "bar",
+				ReadOnly: true,
+			},
+		},
+	}
+	expected := &ObjectDiff{
+		Type: DiffTypeEdited,
+		Name: "SidecarTask",
+		Fields: []*FieldDiff{
+			{
+				Type: DiffTypeEdited,
+				Name: "Driver",
+				Old:  "docker",
+				New:  "podman",
+			},
+			{
+				Type: DiffTypeAdded,
+				Name: "Env[EGGS]",
+				Old:  "",
+				New:  "SPAM",
+			},
+			{
+				Type: DiffTypeDeleted,
+				Name: "Env[FOO]",
+				Old:  "BAR",
+				New:  "",
+			},
+			{
+				Type: DiffTypeEdited,
+				Name: "Name",
+				Old:  "old",
+				New:  "new",
+			},
+			{
+				Type: DiffTypeEdited,
+				Name: "User",
+				Old:  "sidecar",
+				New:  "proxy",
+			},
+		},
+		Objects: []*ObjectDiff{
+			{
+				Type: DiffTypeEdited,
+				Name: "Config",
+				Fields: []*FieldDiff{
+					{
+						Type: DiffTypeAdded,
+						Name: "eggs",
+						Old:  "",
+						New:  "spam",
+					},
+					{
+						Type: DiffTypeDeleted,
+						Name: "foo",
+						Old:  "bar",
+						New:  "",
+					},
+				},
+			},
+			{
+				Type: DiffTypeEdited,
+				Name: "Resources",
+				Fields: []*FieldDiff{
+					{
+						Type: DiffTypeNone,
+						Name: "CPU",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeEdited,
+						Name: "Cores",
+						Old:  "2",
+						New:  "4",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "DiskMB",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "IOPS",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "MemoryMB",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "MemoryMaxMB",
+						Old:  "0",
+						New:  "0",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "SecretsMB",
+						Old:  "0",
+						New:  "0",
+					},
+				},
+				Objects: []*ObjectDiff{
+					{
+						Type: DiffTypeEdited,
+						Name: "NUMA",
+						Fields: []*FieldDiff{
+							{
+								Type: DiffTypeEdited,
+								Name: "Affinity",
+								Old:  "none",
+								New:  "prefer",
+							},
+						},
+					},
+				},
+			},
+			{
+				Type: DiffTypeEdited,
+				Name: "VolumeMount",
+				Fields: []*FieldDiff{
+					{
+						Type: DiffTypeNone,
+						Name: "Destination",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "PropagationMode",
+					},
+					{
+						Type: DiffTypeEdited,
+						Name: "ReadOnly",
+						Old:  "true",
+						New:  "false",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "SELinuxLabel",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "Volume",
+						Old:  "foo",
+						New:  "foo",
+					},
+				},
+			},
+			{
+				Type: DiffTypeAdded,
+				Name: "VolumeMount",
+				Fields: []*FieldDiff{
+					{
+						Type: DiffTypeNone,
+						Name: "Destination",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "PropagationMode",
+					},
+					{
+						Type: DiffTypeAdded,
+						Name: "ReadOnly",
+						New:  "true",
+					},
+					{
+						Type: DiffTypeNone,
+						Name: "SELinuxLabel",
+					},
+					{
+						Type: DiffTypeAdded,
+						Name: "Volume",
+						Old:  "",
+						New:  "bar",
+					},
+				},
+			},
+		},
+	}
+
+	actual := sidecarTaskDiff(oldTask, newTask, true)
+	must.Eq(t, expected, actual)
 }

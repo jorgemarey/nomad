@@ -46,6 +46,9 @@ type MemDB struct {
 	// alloc_id -> []identities
 	identities map[string][]*structs.SignedWorkloadIdentity
 
+	// alloc_id -> []consulAclTokens
+	consulACLTokens map[string][]*cstructs.ConsulACLToken
+
 	// devicemanager -> plugin-state
 	devManagerPs *dmstate.PluginState
 
@@ -60,6 +63,8 @@ type MemDB struct {
 
 	nodeRegistration *cstructs.NodeRegistration
 
+	dynamicHostVolumes map[string]*cstructs.HostVolumeState
+
 	logger hclog.Logger
 
 	mu sync.RWMutex
@@ -68,15 +73,17 @@ type MemDB struct {
 func NewMemDB(logger hclog.Logger) *MemDB {
 	logger = logger.Named("memdb")
 	return &MemDB{
-		allocs:            make(map[string]*structs.Allocation),
-		deployStatus:      make(map[string]*structs.AllocDeploymentStatus),
-		networkStatus:     make(map[string]*structs.AllocNetworkStatus),
-		acknowledgedState: make(map[string]*arstate.State),
-		localTaskState:    make(map[string]map[string]*state.LocalState),
-		taskState:         make(map[string]map[string]*structs.TaskState),
-		checks:            make(checks.ClientResults),
-		identities:        make(map[string][]*structs.SignedWorkloadIdentity),
-		logger:            logger,
+		allocs:             make(map[string]*structs.Allocation),
+		deployStatus:       make(map[string]*structs.AllocDeploymentStatus),
+		networkStatus:      make(map[string]*structs.AllocNetworkStatus),
+		acknowledgedState:  make(map[string]*arstate.State),
+		localTaskState:     make(map[string]map[string]*state.LocalState),
+		taskState:          make(map[string]map[string]*structs.TaskState),
+		checks:             make(checks.ClientResults),
+		identities:         make(map[string][]*structs.SignedWorkloadIdentity),
+		consulACLTokens:    make(map[string][]*cstructs.ConsulACLToken),
+		dynamicHostVolumes: make(map[string]*cstructs.HostVolumeState),
+		logger:             logger,
 	}
 }
 
@@ -170,6 +177,20 @@ func (m *MemDB) GetAllocIdentities(allocID string) ([]*structs.SignedWorkloadIde
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.identities[allocID], nil
+}
+
+func (m *MemDB) PutAllocConsulACLTokens(allocID string, tokens []*cstructs.ConsulACLToken, opts ...WriteOption) error {
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.consulACLTokens[allocID] = tokens
+	return nil
+}
+
+func (m *MemDB) GetAllocConsulACLTokens(allocID string) ([]*cstructs.ConsulACLToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.consulACLTokens[allocID], nil
 }
 
 func (m *MemDB) GetTaskRunnerState(allocID string, taskName string) (*state.LocalState, *structs.TaskState, error) {
@@ -352,6 +373,28 @@ func (m *MemDB) GetNodeRegistration() (*cstructs.NodeRegistration, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.nodeRegistration, nil
+}
+
+func (m *MemDB) PutDynamicHostVolume(vol *cstructs.HostVolumeState) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.dynamicHostVolumes[vol.ID] = vol
+	return nil
+}
+func (m *MemDB) GetDynamicHostVolumes() ([]*cstructs.HostVolumeState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var vols []*cstructs.HostVolumeState
+	for _, vol := range m.dynamicHostVolumes {
+		vols = append(vols, vol)
+	}
+	return vols, nil
+}
+func (m *MemDB) DeleteDynamicHostVolume(s string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.dynamicHostVolumes, s)
+	return nil
 }
 
 func (m *MemDB) Close() error {

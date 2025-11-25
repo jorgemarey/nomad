@@ -302,9 +302,6 @@ func (sub *Submission) run() {
 	if job.Type == nil {
 		job.Type = pointer.Of("service")
 	}
-	if sub.legacyConsulToken != "" {
-		job.ConsulToken = pointer.Of(sub.legacyConsulToken)
-	}
 
 	registerOpts := &nomadapi.RegisterOptions{
 		Submission: &nomadapi.JobSubmission{
@@ -582,7 +579,7 @@ func Verbose(on bool) Option {
 	}
 }
 
-// Set an HCL variable.
+// Var sets a HCL variable.
 func Var(key, value string) Option {
 	return func(sub *Submission) {
 		sub.vars[key] = value

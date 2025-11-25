@@ -77,6 +77,10 @@ func TestCommand_Args(t *testing.T) {
 			[]string{"-client", "-node-pool=not@valid"},
 			"Invalid node pool",
 		},
+		{
+			[]string{"-client", "-eventlog-level", "DEBUG"},
+			"eventlog.level must be one of INFO, WARN, or ERROR",
+		},
 	}
 	for _, tc := range tcases {
 		// Make a new command. We preemptively close the shutdownCh
@@ -485,6 +489,50 @@ func TestIsValidConfig(t *testing.T) {
 			},
 			err: "missing protocol scheme",
 		},
+		{
+			name: "invalidate keyring provider",
+			conf: Config{
+				DataDir: "/tmp",
+				Server: &ServerConfig{
+					BootstrapExpect: 1,
+					Enabled:         true,
+				},
+				KEKProviders: []*structs.KEKProviderConfig{
+					{
+						Name:     "invalid",
+						Provider: "foo",
+					},
+				},
+			},
+			err: "unknown keyring provider",
+		},
+		{
+			name: "ValidEventlog",
+			conf: Config{
+				DataDir: "/tmp",
+				Client: &ClientConfig{
+					Enabled: true,
+				},
+				Eventlog: &Eventlog{
+					Enabled: true,
+					Level:   "INFO",
+				},
+			},
+		},
+		{
+			name: "InvalidEventlog",
+			conf: Config{
+				DataDir: "/tmp",
+				Client: &ClientConfig{
+					Enabled: true,
+				},
+				Eventlog: &Eventlog{
+					Enabled: true,
+					Level:   "DEBUG",
+				},
+			},
+			err: "eventlog.level must be one of INFO, WARN, or ERROR",
+		},
 	}
 
 	for _, tc := range cases {
@@ -536,7 +584,6 @@ client {
 }
 
 vault {
-  token     = "token-from-config"
   namespace = "ns-from-config"
 }
 `,
@@ -555,46 +602,39 @@ vault {
 		checkFn func(*testing.T, *Config)
 	}{
 		{
-			name: "vault token and namespace from env var",
+			name: "namespace from env var",
 			args: []string{
 				"-config", path.Join(configDir, "base.hcl"),
 			},
 			env: map[string]string{
-				"VAULT_TOKEN":     "token-from-env",
 				"VAULT_NAMESPACE": "ns-from-env",
 			},
 			checkFn: func(t *testing.T, c *Config) {
-				must.Eq(t, "token-from-env", c.Vaults[0].Token)
 				must.Eq(t, "ns-from-env", c.Vaults[0].Namespace)
 			},
 		},
 		{
-			name: "vault token and namespace from config takes precedence over env var",
+			name: "namespace from config takes precedence over env var",
 			args: []string{
 				"-config", path.Join(configDir, "vault.hcl"),
 			},
 			env: map[string]string{
-				"VAULT_TOKEN":     "token-from-env",
 				"VAULT_NAMESPACE": "ns-from-env",
 			},
 			checkFn: func(t *testing.T, c *Config) {
-				must.Eq(t, "token-from-config", c.Vaults[0].Token)
 				must.Eq(t, "ns-from-config", c.Vaults[0].Namespace)
 			},
 		},
 		{
-			name: "vault token and namespace from flag takes precedence over env var and config",
+			name: "namespace from flag takes precedence over env var and config",
 			args: []string{
 				"-config", path.Join(configDir, "vault.hcl"),
-				"-vault-token", "secret-from-cli",
 				"-vault-namespace", "ns-from-cli",
 			},
 			env: map[string]string{
-				"VAULT_TOKEN":     "secret-from-env",
 				"VAULT_NAMESPACE": "ns-from-env",
 			},
 			checkFn: func(t *testing.T, c *Config) {
-				must.Eq(t, "secret-from-cli", c.Vaults[0].Token)
 				must.Eq(t, "ns-from-cli", c.Vaults[0].Namespace)
 			},
 		},

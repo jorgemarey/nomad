@@ -70,7 +70,7 @@ func (tr *TaskRunner) initHooks() {
 		newDispatchHook(alloc, hookLogger),
 		newVolumeHook(tr, hookLogger),
 		newArtifactHook(tr, tr.getter, hookLogger),
-		newStatsHook(tr, tr.clientConfig.StatsCollectionInterval, hookLogger),
+		newStatsHook(tr, tr.clientConfig.StatsCollectionInterval, tr.clientConfig.PublishAllocationMetrics, hookLogger),
 		newDeviceHook(tr.devicemanager, hookLogger),
 		newAPIHook(tr.shutdownCtx, tr.clientConfig.APIListenerRegistrar, hookLogger),
 		newWranglerHook(tr.wranglers, task.Name, alloc.ID, task.UsesCores(), hookLogger),
@@ -153,7 +153,6 @@ func (tr *TaskRunner) initHooks() {
 			tr.runnerHooks = append(tr.runnerHooks, newSIDSHook(sidsHookConfig{
 				alloc:              tr.Alloc(),
 				task:               tr.Task(),
-				sidsClient:         tr.siClient,
 				lifecycle:          tr,
 				logger:             hookLogger,
 				allocHookResources: tr.allocHookResources,
@@ -186,12 +185,6 @@ func (tr *TaskRunner) initHooks() {
 		consul: tr.consulServiceClient,
 		logger: hookLogger,
 	}))
-
-	// If this task driver has remote capabilities, add the remote task
-	// hook.
-	if tr.driverCapabilities.RemoteTasks {
-		tr.runnerHooks = append(tr.runnerHooks, newRemoteTaskHook(tr, hookLogger))
-	}
 
 	// If this task has a pause schedule, initialize the pause (Enterprise)
 	if task.Schedule != nil {

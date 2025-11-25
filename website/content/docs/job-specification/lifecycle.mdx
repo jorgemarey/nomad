@@ -1,12 +1,11 @@
 ---
 layout: docs
-page_title: lifecycle Block - Job Specification
+page_title: lifecycle block in the job specification
 description: |-
-  The "lifecycle" block configures when a task is run within the lifecycle of a
-  task group
+  Configure when Nomad runs a task in the `lifecycle` block of the Nomad job configuration. Specify a lifecycle hook of prestart, poststart, or poststop. Define a task as ephemeral or as a long-lived sidecar. Review examples of initialization, cleanup, and auxiliary tasks.
 ---
 
-# `lifecycle` Block
+# `lifecycle` block in the job specification
 
 <Placement groups={['job', 'group', 'task', 'lifecycle']} />
 
@@ -26,9 +25,14 @@ tasks or "sidecar" tasks that are expected to run for the duration of the main t
 The absence of the sidecar flag indicates that the task is ephemeral
 and should not be restarted if it completes successfully.
 
+The `lifecycle` block also controls the order Nomad stops tasks in an
+allocation. Nomad first waits for the group's [shutdown_delay][]. It then stops
+the [leader][] task, if present. Then Nomad stops any non-sidecar and
+non-poststop tasks, and finally any sidecar tasks.
+
 Learn more about [Nomad's task dependencies][learn-taskdeps].
 
-## `lifecycle` Parameters
+## Parameters
 
 - `hook` `(string: <required>)` - Specifies when a task should be run within
   the lifecycle of a group. The following hooks are available:
@@ -45,13 +49,15 @@ Learn more about [Nomad's task dependencies][learn-taskdeps].
   lifecycle task is long-lived (`sidecar = true`) and terminates, it will be
   restarted as long as the allocation is running.
 
-[learn-taskdeps]: /nomad/tutorials/task-deps
+[learn-taskdeps]: /nomad/docs/job-declare/task-dependencies
+[shutdown_delay]: /nomad/docs/job-specification/group#shutdown_delay
+[leader]: /nomad/docs/job-specification/task#leader
 
-## Lifecycle Examples
+## Examples
 
 The following include examples of archetypal lifecycle patterns.
 
-### Init Task Pattern
+### Init task pattern
 
 Init tasks are useful for performing initialization steps that can't be more easily
 accomplished using [`template`](/nomad/docs/job-specification/template) or
@@ -80,7 +86,7 @@ until the upstream database service is listening on the expected port:
   }
 ```
 
-### Companion Sidecar Pattern
+### Companion sidecar pattern
 
 Companion or sidecar tasks run alongside the main task to perform an auxiliary
 task. Common examples include proxies and log shippers. These tasks benefit from
@@ -110,7 +116,7 @@ coupling.
   }
 ```
 
-### Cleanup Task Pattern
+### Cleanup task pattern
 
 Poststop tasks run after the main tasks have stopped. They are useful for performing
 post-processing that isn't available in the main tasks or for recovering from

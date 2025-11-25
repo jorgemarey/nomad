@@ -296,10 +296,10 @@ func (s *GenericScheduler) process() (bool, error) {
 	// current evaluation is already a blocked eval, we reuse it. If not, submit
 	// a new eval to the planner in createBlockedEval. If rescheduling should
 	// be delayed, do that instead.
-	delayInstead := len(s.followUpEvals) > 0 && s.eval.WaitUntil.IsZero()
-
-	if s.eval.Status != structs.EvalStatusBlocked && len(s.failedTGAllocs) != 0 && s.blocked == nil &&
-		!delayInstead {
+	if s.eval.Status != structs.EvalStatusBlocked &&
+		len(s.failedTGAllocs) != 0 &&
+		s.blocked == nil &&
+		(len(s.followUpEvals) == 0 || time.Now().After(s.eval.WaitUntil)) {
 		if err := s.createBlockedEval(false); err != nil {
 			s.logger.Error("failed to make blocked eval", "error", err)
 			return false, err
@@ -315,7 +315,7 @@ func (s *GenericScheduler) process() (bool, error) {
 
 	// Create follow up evals for any delayed reschedule eligible allocations, except in
 	// the case that this evaluation was already delayed.
-	if delayInstead {
+	if len(s.followUpEvals) > 0 && s.eval.WaitUntil.IsZero() {
 		for _, eval := range s.followUpEvals {
 			eval.PreviousEval = s.eval.ID
 			// TODO(preetha) this should be batching evals before inserting them
@@ -605,6 +605,7 @@ func (s *GenericScheduler) computePlacements(destructive, place []placementResul
 			// Store the available nodes by datacenter
 			s.ctx.Metrics().NodesAvailable = byDC
 			s.ctx.Metrics().NodesInPool = len(nodes)
+			s.ctx.Metrics().NodePool = s.job.NodePool
 
 			// Compute top K scoring node metadata
 			s.ctx.Metrics().PopulateScoreMetaData()
@@ -687,12 +688,12 @@ func (s *GenericScheduler) computePlacements(destructive, place []placementResul
 				if prevAllocation != nil {
 					alloc.PreviousAllocation = prevAllocation.ID
 					if missing.IsRescheduling() {
+						original := prevAllocation
+						prevAllocation = prevAllocation.Copy()
+						missing.SetPreviousAllocation(prevAllocation)
 						updateRescheduleTracker(alloc, prevAllocation, now)
+						swapAllocInPlan(s.plan, original, prevAllocation)
 					}
-
-					// If the allocation has task handles,
-					// copy them to the new allocation
-					propagateTaskState(alloc, prevAllocation, missing.PreviousLost())
 				}
 
 				// If we are placing a canary and we found a match, add the canary
@@ -731,7 +732,10 @@ func (s *GenericScheduler) computePlacements(destructive, place []placementResul
 				// blocked eval without dropping the reschedule tracker
 				if prevAllocation != nil {
 					if missing.IsRescheduling() {
-						annotateRescheduleTracker(prevAllocation, structs.LastRescheduleFailedToPlace)
+						updatedPrevAllocation := prevAllocation.Copy()
+						missing.SetPreviousAllocation(prevAllocation)
+						annotateRescheduleTracker(updatedPrevAllocation, structs.LastRescheduleFailedToPlace)
+						swapAllocInPlan(s.plan, prevAllocation, updatedPrevAllocation)
 					}
 				}
 
@@ -741,6 +745,24 @@ func (s *GenericScheduler) computePlacements(destructive, place []placementResul
 	}
 
 	return nil
+}
+
+// swapAllocInPlan updates a plan to swap out an allocation that's already in
+// the plan with an updated definition of that allocation. The updated
+// definition should be a deep copy.
+func swapAllocInPlan(plan *structs.Plan, original, updated *structs.Allocation) {
+	for i, stoppingAlloc := range plan.NodeUpdate[original.NodeID] {
+		if stoppingAlloc.ID == original.ID {
+			plan.NodeUpdate[original.NodeID][i] = updated
+			return
+		}
+	}
+	for i, alloc := range plan.NodeAllocation[original.NodeID] {
+		if alloc.ID == original.ID {
+			plan.NodeAllocation[original.NodeID][i] = updated
+			return
+		}
+	}
 }
 
 // setJob updates the stack with the given job and job's node pool scheduler
@@ -782,46 +804,6 @@ func needsToSetNodes(a, b *structs.Job) bool {
 		a.NodePool != b.NodePool
 }
 
-// propagateTaskState copies task handles from previous allocations to
-// replacement allocations when the previous allocation is being drained or was
-// lost. Remote task drivers rely on this to reconnect to remote tasks when the
-// allocation managing them changes due to a down or draining node.
-//
-// The previous allocation will be marked as lost after task state has been
-// propagated (when the plan is applied), so its ClientStatus is not yet marked
-// as lost. Instead, we use the `prevLost` flag to track whether the previous
-// allocation will be marked lost.
-func propagateTaskState(newAlloc, prev *structs.Allocation, prevLost bool) {
-	// Don't transfer state from client terminal allocs
-	if prev.ClientTerminalStatus() {
-		return
-	}
-
-	// If previous allocation is not lost and not draining, do not copy
-	// task handles.
-	if !prevLost && !prev.DesiredTransition.ShouldMigrate() {
-		return
-	}
-
-	newAlloc.TaskStates = make(map[string]*structs.TaskState, len(newAlloc.AllocatedResources.Tasks))
-	for taskName, prevState := range prev.TaskStates {
-		if prevState.TaskHandle == nil {
-			// No task handle, skip
-			continue
-		}
-
-		if _, ok := newAlloc.AllocatedResources.Tasks[taskName]; !ok {
-			// Task dropped in update, skip
-			continue
-		}
-
-		// Copy state
-		newState := structs.NewTaskState()
-		newState.TaskHandle = prevState.TaskHandle.Copy()
-		newAlloc.TaskStates[taskName] = newState
-	}
-}
-
 // getSelectOptions sets up preferred nodes and penalty nodes
 func getSelectOptions(prevAllocation *structs.Allocation, preferredNode *structs.Node) *SelectOptions {
 	selectOptions := &SelectOptions{}
@@ -846,6 +828,8 @@ func getSelectOptions(prevAllocation *structs.Allocation, preferredNode *structs
 	return selectOptions
 }
 
+// annotateRescheduleTracker adds a note about the last reschedule attempt. This
+// mutates the allocation, which should be a copy.
 func annotateRescheduleTracker(prev *structs.Allocation, note structs.RescheduleTrackerAnnotation) {
 	if prev.RescheduleTracker == nil {
 		prev.RescheduleTracker = &structs.RescheduleTracker{}
@@ -853,7 +837,10 @@ func annotateRescheduleTracker(prev *structs.Allocation, note structs.Reschedule
 	prev.RescheduleTracker.LastReschedule = note
 }
 
-// updateRescheduleTracker carries over previous restart attempts and adds the most recent restart
+// updateRescheduleTracker carries over previous restart attempts and adds the
+// most recent restart. This mutates both allocations; "alloc" is a new
+// allocation so this is safe, but "prev" is coming from the state store and
+// must be copied first.
 func updateRescheduleTracker(alloc *structs.Allocation, prev *structs.Allocation, now time.Time) {
 	reschedPolicy := prev.ReschedulePolicy()
 	var rescheduleEvents []*structs.RescheduleEvent
@@ -911,6 +898,7 @@ func (s *GenericScheduler) findPreferredNode(place placementResult) (*structs.No
 			return preferredNode, nil
 		}
 	}
+
 	return nil, nil
 }
 

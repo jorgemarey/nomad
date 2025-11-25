@@ -7,14 +7,15 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/client/lib/idset"
 	"github.com/hashicorp/nomad/client/lib/numalib"
 	"github.com/hashicorp/nomad/client/lib/numalib/hw"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
+	"github.com/shoenig/test"
 	"github.com/shoenig/test/must"
-	"github.com/stretchr/testify/require"
 )
 
 var testSchedulerConfig = &structs.SchedulerConfiguration{
@@ -253,15 +254,15 @@ func TestBinPackIterator_NoExistingAlloc_MixedReserve(t *testing.T) {
 	}
 
 	// 3 nodes should be feasible
-	require.Len(t, out, 3)
+	must.Len(t, 3, out)
 
 	// Node without reservations is the best fit
-	require.Equal(t, nodes[0].Node.Name, out[0].Node.Name)
+	must.Eq(t, nodes[0].Node.Name, out[0].Node.Name)
 
 	// Node with smallest remaining resources ("best fit") should get a
 	// higher score than node with more remaining resources ("worse fit")
-	require.Equal(t, nodes[1].Node.Name, out[1].Node.Name)
-	require.Equal(t, nodes[2].Node.Name, out[2].Node.Name)
+	must.Eq(t, nodes[1].Node.Name, out[1].Node.Name)
+	must.Eq(t, nodes[2].Node.Name, out[2].Node.Name)
 }
 
 // Tests bin packing iterator with network resources at task and task group level
@@ -365,27 +366,26 @@ func TestBinPackIterator_Network_Success(t *testing.T) {
 	scoreNorm := NewScoreNormalizationIterator(ctx, binp)
 
 	out := collectRanked(scoreNorm)
-	require := require.New(t)
 
 	// We expect both nodes to be eligible to place
-	require.Len(out, 2)
-	require.Equal(out[0], nodes[0])
-	require.Equal(out[1], nodes[1])
+	must.Len(t, 2, out)
+	must.Eq(t, nodes[0], out[0])
+	must.Eq(t, nodes[1], out[1])
 
 	// First node should have a perfect score
-	require.Equal(1.0, out[0].FinalScore)
+	must.Eq(t, 1.0, out[0].FinalScore)
 
 	if out[1].FinalScore < 0.50 || out[1].FinalScore > 0.60 {
 		t.Fatalf("Bad Score: %v", out[1].FinalScore)
 	}
 
 	// Verify network information at taskgroup level
-	require.Equal(500, out[0].AllocResources.Networks[0].MBits)
-	require.Equal(500, out[1].AllocResources.Networks[0].MBits)
+	must.Eq(t, 500, out[0].AllocResources.Networks[0].MBits)
+	must.Eq(t, 500, out[1].AllocResources.Networks[0].MBits)
 
 	// Verify network information at task level
-	require.Equal(300, out[0].TaskResources["web"].Networks[0].MBits)
-	require.Equal(300, out[1].TaskResources["web"].Networks[0].MBits)
+	must.Eq(t, 300, out[0].TaskResources["web"].Networks[0].MBits)
+	must.Eq(t, 300, out[1].TaskResources["web"].Networks[0].MBits)
 }
 
 // Tests that bin packing iterator fails due to overprovisioning of network
@@ -497,12 +497,11 @@ func TestBinPackIterator_Network_Failure(t *testing.T) {
 	scoreNorm := NewScoreNormalizationIterator(ctx, binp)
 
 	out := collectRanked(scoreNorm)
-	require := require.New(t)
 
 	// We expect a placement failure because we need 800 mbits of network
 	// and only 300 is free
-	require.Len(out, 0)
-	require.Equal(1, ctx.metrics.DimensionExhausted["network: bandwidth exceeded"])
+	must.Len(t, 0, out)
+	must.Eq(t, 1, ctx.metrics.DimensionExhausted["network: bandwidth exceeded"])
 }
 
 func TestBinPackIterator_Network_NoCollision_Node(t *testing.T) {
@@ -593,7 +592,7 @@ func TestBinPackIterator_Network_NoCollision_Node(t *testing.T) {
 
 	// Placement should succeed since reserved ports are merged instead of
 	// treating them as a collision
-	require.Len(t, out, 1)
+	must.Len(t, 1, out)
 }
 
 // TestBinPackIterator_Network_NodeError asserts that NetworkIndex.SetNode can
@@ -692,9 +691,9 @@ func TestBinPackIterator_Network_NodeError(t *testing.T) {
 
 	// We expect a placement failure because the node has invalid reserved
 	// ports
-	require.Len(t, out, 0)
-	require.Equal(t, 1, ctx.metrics.DimensionExhausted["network: invalid node"],
-		ctx.metrics.DimensionExhausted)
+	must.Len(t, 0, out)
+	must.Eq(t, 1, ctx.metrics.DimensionExhausted["network: invalid node"],
+		must.Sprint(ctx.metrics.DimensionExhausted))
 }
 
 func TestBinPackIterator_Network_PortCollision_Alloc(t *testing.T) {
@@ -784,9 +783,9 @@ func TestBinPackIterator_Network_PortCollision_Alloc(t *testing.T) {
 		ClientStatus:  structs.AllocClientStatusPending,
 		TaskGroup:     "web",
 	}
-	require.NoError(t, state.UpsertJobSummary(998, mock.JobSummary(alloc1.JobID)))
-	require.NoError(t, state.UpsertJobSummary(999, mock.JobSummary(alloc2.JobID)))
-	require.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc1, alloc2}))
+	must.NoError(t, state.UpsertJobSummary(998, mock.JobSummary(alloc1.JobID)))
+	must.NoError(t, state.UpsertJobSummary(999, mock.JobSummary(alloc2.JobID)))
+	must.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc1, alloc2}))
 
 	taskGroup := &structs.TaskGroup{
 		EphemeralDisk: &structs.EphemeralDisk{},
@@ -818,8 +817,8 @@ func TestBinPackIterator_Network_PortCollision_Alloc(t *testing.T) {
 	out := collectRanked(scoreNorm)
 
 	// We expect a placement failure due to  port collision.
-	require.Len(t, out, 0)
-	require.Equal(t, 1, ctx.metrics.DimensionExhausted["network: port collision"])
+	must.Len(t, 0, out)
+	must.Eq(t, 1, ctx.metrics.DimensionExhausted["network: port collision"])
 }
 
 // Tests bin packing iterator with host network interpolation of task group level ports configuration
@@ -959,18 +958,17 @@ func TestBinPackIterator_Network_Interpolation_Success(t *testing.T) {
 	scoreNorm := NewScoreNormalizationIterator(ctx, binp)
 
 	out := collectRanked(scoreNorm)
-	require := require.New(t)
 
 	// We expect both nodes to be eligible to place
-	require.Len(out, 2)
-	require.Equal(out[0], nodes[0])
-	require.Equal(out[1], nodes[1])
+	must.Len(t, 2, out)
+	must.Eq(t, out[0], nodes[0])
+	must.Eq(t, out[1], nodes[1])
 
 	// Verify network information at taskgroup level
-	require.Contains([]string{"public", "private"}, out[0].AllocResources.Networks[0].DynamicPorts[0].HostNetwork)
-	require.Contains([]string{"public", "private"}, out[0].AllocResources.Networks[0].DynamicPorts[1].HostNetwork)
-	require.Contains([]string{"first", "second"}, out[1].AllocResources.Networks[0].DynamicPorts[0].HostNetwork)
-	require.Contains([]string{"first", "second"}, out[1].AllocResources.Networks[0].DynamicPorts[1].HostNetwork)
+	must.SliceContains(t, []string{"public", "private"}, out[0].AllocResources.Networks[0].DynamicPorts[0].HostNetwork)
+	must.SliceContains(t, []string{"public", "private"}, out[0].AllocResources.Networks[0].DynamicPorts[1].HostNetwork)
+	must.SliceContains(t, []string{"first", "second"}, out[1].AllocResources.Networks[0].DynamicPorts[0].HostNetwork)
+	must.SliceContains(t, []string{"first", "second"}, out[1].AllocResources.Networks[0].DynamicPorts[1].HostNetwork)
 }
 
 // Tests that bin packing iterator fails due to absence of meta value
@@ -1070,8 +1068,7 @@ func TestBinPackIterator_Host_Network_Interpolation_Absent_Value(t *testing.T) {
 	scoreNorm := NewScoreNormalizationIterator(ctx, binp)
 
 	out := collectRanked(scoreNorm)
-	require := require.New(t)
-	require.Len(out, 0)
+	must.Len(t, 0, out)
 }
 
 // Tests that bin packing iterator fails due to absence of meta value
@@ -1171,8 +1168,7 @@ func TestBinPackIterator_Host_Network_Interpolation_Interface_Not_Exists(t *test
 	scoreNorm := NewScoreNormalizationIterator(ctx, binp)
 
 	out := collectRanked(scoreNorm)
-	require := require.New(t)
-	require.Len(out, 0)
+	must.Len(t, 0, out)
 }
 
 func TestBinPackIterator_PlannedAlloc(t *testing.T) {
@@ -1375,9 +1371,9 @@ func TestBinPackIterator_ReservedCores(t *testing.T) {
 		ClientStatus:  structs.AllocClientStatusPending,
 		TaskGroup:     "web",
 	}
-	require.NoError(t, state.UpsertJobSummary(998, mock.JobSummary(alloc1.JobID)))
-	require.NoError(t, state.UpsertJobSummary(999, mock.JobSummary(alloc2.JobID)))
-	require.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc1, alloc2}))
+	must.NoError(t, state.UpsertJobSummary(998, mock.JobSummary(alloc1.JobID)))
+	must.NoError(t, state.UpsertJobSummary(999, mock.JobSummary(alloc2.JobID)))
+	must.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc1, alloc2}))
 
 	taskGroup := &structs.TaskGroup{
 		EphemeralDisk: &structs.EphemeralDisk{},
@@ -1401,10 +1397,9 @@ func TestBinPackIterator_ReservedCores(t *testing.T) {
 	scoreNorm := NewScoreNormalizationIterator(ctx, binp)
 
 	out := collectRanked(scoreNorm)
-	require := require.New(t)
-	require.Len(out, 1)
-	require.Equal(nodes[1].Node.ID, out[0].Node.ID)
-	require.Equal([]uint16{1}, out[0].TaskResources["web"].Cpu.ReservedCores)
+	must.Len(t, 1, out)
+	must.Eq(t, nodes[1].Node.ID, out[0].Node.ID)
+	must.Eq(t, []uint16{1}, out[0].TaskResources["web"].Cpu.ReservedCores)
 }
 
 func TestBinPackIterator_ExistingAlloc(t *testing.T) {
@@ -1487,9 +1482,9 @@ func TestBinPackIterator_ExistingAlloc(t *testing.T) {
 		ClientStatus:  structs.AllocClientStatusPending,
 		TaskGroup:     "web",
 	}
-	require.NoError(t, state.UpsertJobSummary(998, mock.JobSummary(alloc1.JobID)))
-	require.NoError(t, state.UpsertJobSummary(999, mock.JobSummary(alloc2.JobID)))
-	require.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc1, alloc2}))
+	must.NoError(t, state.UpsertJobSummary(998, mock.JobSummary(alloc1.JobID)))
+	must.NoError(t, state.UpsertJobSummary(999, mock.JobSummary(alloc2.JobID)))
+	must.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc1, alloc2}))
 
 	taskGroup := &structs.TaskGroup{
 		EphemeralDisk: &structs.EphemeralDisk{},
@@ -1601,9 +1596,9 @@ func TestBinPackIterator_ExistingAlloc_PlannedEvict(t *testing.T) {
 		ClientStatus:  structs.AllocClientStatusPending,
 		TaskGroup:     "web",
 	}
-	require.NoError(t, state.UpsertJobSummary(998, mock.JobSummary(alloc1.JobID)))
-	require.NoError(t, state.UpsertJobSummary(999, mock.JobSummary(alloc2.JobID)))
-	require.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc1, alloc2}))
+	must.NoError(t, state.UpsertJobSummary(998, mock.JobSummary(alloc1.JobID)))
+	must.NoError(t, state.UpsertJobSummary(999, mock.JobSummary(alloc2.JobID)))
+	must.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc1, alloc2}))
 
 	// Add a planned eviction to alloc1
 	plan := ctx.Plan()
@@ -2079,6 +2074,138 @@ func TestBinPackIterator_Device_Failure_With_Eviction(t *testing.T) {
 	must.Eq(t, 1, ctx.metrics.DimensionExhausted["devices: no devices match request"])
 }
 
+// Tests that bin packing iterator will not place workloads on nodes
+// that would go over a designated MaxAlloc value
+func TestBinPackIterator_MaxAlloc(t *testing.T) {
+	state, ctx := testContext(t)
+
+	taskGen := func(name string) *structs.Task {
+		return &structs.Task{
+			Name:      name,
+			Resources: &structs.Resources{},
+		}
+	}
+	nodes := []*RankedNode{
+		{
+			Node: &structs.Node{
+				ID: uuid.Generate(),
+				NodeResources: &structs.NodeResources{
+					Processors: processorResources2048,
+					Cpu:        legacyCpuResources2048,
+					Memory: structs.NodeMemoryResources{
+						MemoryMB: 2048,
+					},
+				},
+			},
+		},
+		{
+			Node: &structs.Node{
+				ID: uuid.Generate(),
+				NodeResources: &structs.NodeResources{
+					Processors: processorResources2048,
+					Cpu:        legacyCpuResources2048,
+					Memory: structs.NodeMemoryResources{
+						MemoryMB: 2048,
+					},
+				},
+			},
+		},
+	}
+	// Add 1 existing allocation to each node
+	j1, j2 := mock.Job(), mock.Job()
+	alloc1 := &structs.Allocation{
+		Namespace:          structs.DefaultNamespace,
+		ID:                 uuid.Generate(),
+		EvalID:             uuid.Generate(),
+		NodeID:             nodes[0].Node.ID,
+		JobID:              j1.ID,
+		Job:                j1,
+		AllocatedResources: &structs.AllocatedResources{},
+		DesiredStatus:      structs.AllocDesiredStatusRun,
+		ClientStatus:       structs.AllocClientStatusPending,
+		TaskGroup:          "web",
+	}
+	alloc2 := &structs.Allocation{
+		Namespace:          structs.DefaultNamespace,
+		ID:                 uuid.Generate(),
+		EvalID:             uuid.Generate(),
+		NodeID:             nodes[1].Node.ID,
+		JobID:              j2.ID,
+		Job:                j2,
+		AllocatedResources: &structs.AllocatedResources{},
+		DesiredStatus:      structs.AllocDesiredStatusRun,
+		ClientStatus:       structs.AllocClientStatusPending,
+		TaskGroup:          "web",
+	}
+	must.NoError(t, state.UpsertJobSummary(998, mock.JobSummary(alloc1.JobID)))
+	must.NoError(t, state.UpsertJobSummary(999, mock.JobSummary(alloc2.JobID)))
+	must.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc1, alloc2}))
+
+	testCases := []struct {
+		name          string
+		maxAllocNode1 int
+		maxAllocNode2 int
+		tasks         []*structs.Task
+		tasksOn1      int
+		nodesPlaced   int
+		noNodes       bool
+	}{
+		{
+			name:          "both_nodes",
+			maxAllocNode1: 2,
+			maxAllocNode2: 2,
+			tasks: []*structs.Task{
+				taskGen("web1"),
+				taskGen("web2"),
+				taskGen("web3")},
+			nodesPlaced: 2,
+		},
+		{
+			name:          "only_node2",
+			maxAllocNode1: 1,
+			maxAllocNode2: 2,
+			tasks: []*structs.Task{
+				taskGen("web1"),
+				taskGen("web2"),
+				taskGen("web3")},
+			nodesPlaced: 1,
+		},
+		{
+			name:          "no_nodes",
+			maxAllocNode1: 1,
+			maxAllocNode2: 1,
+			tasks: []*structs.Task{
+				taskGen("web1"),
+				taskGen("web2"),
+				taskGen("web3")},
+			nodesPlaced: 0,
+			noNodes:     true,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// add allocation limits
+			nodes[0].Node.NodeMaxAllocs = tc.maxAllocNode1
+			nodes[1].Node.NodeMaxAllocs = tc.maxAllocNode2
+			static := NewStaticRankIterator(ctx, nodes)
+
+			// Create task group with empty resource sets
+			taskGroup := &structs.TaskGroup{
+				EphemeralDisk: &structs.EphemeralDisk{},
+				Tasks:         tc.tasks,
+			}
+			// Create BinPackIterator and evaluate tasks
+			binp := NewBinPackIterator(ctx, static, false, 0)
+			binp.SetTaskGroup(taskGroup)
+			binp.SetSchedulerConfiguration(testSchedulerConfig)
+			scoreNorm := NewScoreNormalizationIterator(ctx, binp)
+
+			// Place tasks
+			out := collectRanked(scoreNorm)
+			must.Len(t, tc.nodesPlaced, out)
+		})
+	}
+}
 func TestJobAntiAffinity_PlannedAlloc(t *testing.T) {
 	_, ctx := testContext(t)
 	nodes := []*RankedNode{
@@ -2185,13 +2312,12 @@ func TestNodeAntiAffinity_PenaltyNodes(t *testing.T) {
 
 	out := collectRanked(scoreNorm)
 
-	require := require.New(t)
-	require.Equal(2, len(out))
-	require.Equal(node1.ID, out[0].Node.ID)
-	require.Equal(-1.0, out[0].FinalScore)
+	must.Eq(t, 2, len(out))
+	must.Eq(t, node1.ID, out[0].Node.ID)
+	must.Eq(t, -1.0, out[0].FinalScore)
 
-	require.Equal(node2.ID, out[1].Node.ID)
-	require.Equal(0.0, out[1].FinalScore)
+	must.Eq(t, node2.ID, out[1].Node.ID)
+	must.Eq(t, 0.0, out[1].FinalScore)
 
 }
 
@@ -2249,30 +2375,40 @@ func TestScoreNormalizationIterator(t *testing.T) {
 	scoreNorm := NewScoreNormalizationIterator(ctx, nodeReschedulePenaltyIter)
 
 	out := collectRanked(scoreNorm)
-	require := require.New(t)
 
-	require.Equal(2, len(out))
-	require.Equal(out[0], nodes[0])
+	must.Eq(t, 2, len(out))
+	must.Eq(t, nodes[0], out[0])
 	// Score should be averaged between both scorers
 	// -0.75 from job anti affinity and -1 from node rescheduling penalty
-	require.Equal(-0.875, out[0].FinalScore)
-	require.Equal(out[1], nodes[1])
-	require.Equal(out[1].FinalScore, 0.0)
+	must.Eq(t, -0.875, out[0].FinalScore)
+	must.Eq(t, nodes[1], out[1])
+	must.Eq(t, 0.0, out[1].FinalScore)
 }
 
 func TestNodeAffinityIterator(t *testing.T) {
+	ci.Parallel(t)
 	_, ctx := testContext(t)
-	nodes := []*RankedNode{
-		{Node: mock.Node()},
-		{Node: mock.Node()},
-		{Node: mock.Node()},
-		{Node: mock.Node()},
-	}
 
-	nodes[0].Node.Attributes["kernel.version"] = "4.9"
-	nodes[1].Node.Datacenter = "dc2"
-	nodes[2].Node.Datacenter = "dc2"
-	nodes[2].Node.NodeClass = "large"
+	testNodes := func() []*RankedNode {
+		nodes := []*RankedNode{
+			{Node: mock.Node()},
+			{Node: mock.Node()},
+			{Node: mock.Node()},
+			{Node: mock.Node()},
+			{Node: mock.Node()},
+		}
+
+		nodes[0].Node.Attributes["kernel.version"] = "4.9"
+		nodes[1].Node.Datacenter = "dc2"
+		nodes[2].Node.Datacenter = "dc2"
+		nodes[2].Node.NodeClass = "large"
+
+		// this node should have zero affinity
+		nodes[4].Node.Attributes["kernel.version"] = "2.6"
+		nodes[4].Node.Datacenter = "dc3"
+		nodes[4].Node.NodeClass = "weird"
+		return nodes
+	}
 
 	affinities := []*structs.Affinity{
 		{
@@ -2300,37 +2436,80 @@ func TestNodeAffinityIterator(t *testing.T) {
 			Weight:  50,
 		},
 	}
-
-	static := NewStaticRankIterator(ctx, nodes)
-
 	job := mock.Job()
 	job.ID = "foo"
 	tg := job.TaskGroups[0]
 	tg.Affinities = affinities
 
-	nodeAffinity := NewNodeAffinityIterator(ctx, static)
-	nodeAffinity.SetTaskGroup(tg)
+	t.Run("affinity alone", func(t *testing.T) {
+		static := NewStaticRankIterator(ctx, testNodes())
 
-	scoreNorm := NewScoreNormalizationIterator(ctx, nodeAffinity)
+		nodeAffinity := NewNodeAffinityIterator(ctx, static)
+		nodeAffinity.SetTaskGroup(tg)
 
-	out := collectRanked(scoreNorm)
-	expectedScores := make(map[string]float64)
-	// Total weight = 300
-	// Node 0 matches two affinities(dc and kernel version), total weight = 150
-	expectedScores[nodes[0].Node.ID] = 0.5
+		scoreNorm := NewScoreNormalizationIterator(ctx, nodeAffinity)
+		out := collectRanked(scoreNorm)
 
-	// Node 1 matches an anti affinity, weight = -100
-	expectedScores[nodes[1].Node.ID] = -(1.0 / 3.0)
+		// Total weight = 300
+		// Node 0 matches two affinities(dc and kernel version), total weight = 150
+		test.Eq(t, 0.5, out[0].FinalScore)
 
-	// Node 2 matches one affinity(node class) with weight 50
-	expectedScores[nodes[2].Node.ID] = -(1.0 / 6.0)
+		// Node 1 matches an anti affinity, weight = -100
+		test.Eq(t, -(1.0 / 3.0), out[1].FinalScore)
 
-	// Node 3 matches one affinity (dc) with weight = 100
-	expectedScores[nodes[3].Node.ID] = 1.0 / 3.0
+		// Node 2 matches one affinity(node class) with weight 50
+		test.Eq(t, -(1.0 / 6.0), out[2].FinalScore)
 
-	require := require.New(t)
-	for _, n := range out {
-		require.Equal(expectedScores[n.Node.ID], n.FinalScore)
-	}
+		// Node 3 matches one affinity (dc) with weight = 100
+		test.Eq(t, 1.0/3.0, out[3].FinalScore)
 
+		// Node 4 matches no affinities but should still generate a score
+		test.Eq(t, 0, out[4].FinalScore)
+		test.Len(t, 1, out[4].Scores)
+	})
+
+	t.Run("affinity with binpack", func(t *testing.T) {
+		nodes := testNodes()
+		static := NewStaticRankIterator(ctx, nodes)
+
+		// include a binpack iterator so we can see the impact on including zero
+		// values in final scores. The nodes are all empty so score contribution
+		// from binpacking will be identical
+
+		binp := NewBinPackIterator(ctx, static, false, 0)
+		binp.SetTaskGroup(tg)
+		fit := structs.ScoreFitBinPack(nodes[0].Node, &structs.ComparableResources{
+			Flattened: structs.AllocatedTaskResources{
+				Cpu:    structs.AllocatedCpuResources{CpuShares: 500},
+				Memory: structs.AllocatedMemoryResources{MemoryMB: 256},
+			},
+		})
+		bp := fit / binPackingMaxFitScore
+
+		nodeAffinity := NewNodeAffinityIterator(ctx, binp)
+		nodeAffinity.SetTaskGroup(tg)
+
+		scoreNorm := NewScoreNormalizationIterator(ctx, nodeAffinity)
+		out := collectRanked(scoreNorm)
+
+		// Total weight = 300
+		// Node 0 matches two affinities(dc and kernel version), total weight = 150
+		test.Eq(t, (0.5+bp)/2, out[0].FinalScore)
+
+		// Node 1 matches an anti affinity, weight = -100
+		test.Eq(t, (-(1.0/3.0)+bp)/2, out[1].FinalScore)
+
+		// Node 2 matches one affinity(node class) with weight 50
+		test.Eq(t, (-(1.0/6.0)+bp)/2, out[2].FinalScore)
+
+		// Node 3 matches one affinity (dc) with weight = 100
+		test.Eq(t, ((1.0/3.0)+bp)/2, out[3].FinalScore)
+
+		// Node 4 matches no affinities but should still generate a score and
+		// the final score should be lower than any positive score
+		test.Eq(t, (0+bp)/2, out[4].FinalScore)
+		test.Len(t, 2, out[4].Scores)
+		test.Less(t, out[0].FinalScore, out[4].FinalScore)
+		test.Less(t, out[3].FinalScore, out[4].FinalScore)
+	})
 }

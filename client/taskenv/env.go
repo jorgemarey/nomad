@@ -5,6 +5,7 @@ package taskenv
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -96,6 +97,10 @@ const (
 	AddrPrefix = "NOMAD_ADDR_"
 
 	HostAddrPrefix = "NOMAD_HOST_ADDR_"
+
+	// UnixAddr is the task api unix socket, in the appropriate format
+	// for use in a NOMAD_ADDR (i.e. prefixed with "unix://")
+	UnixAddr = "NOMAD_UNIX_ADDR"
 
 	// IpPrefix is the prefix for passing the host IP of a port allocation
 	// to a task.
@@ -246,6 +251,32 @@ func (t *TaskEnv) All() map[string]string {
 	}
 
 	return m
+}
+
+// WithTask returns a shallow copy of the TaskEnv, with the EnvMap deep-cloned
+// and overwritten by task provided. This is only for use in the allocrunner
+// hooks which may need to interpolate per-task services or identities, as it
+// doesn't re-populate the rest of the environment
+func (t *TaskEnv) WithTask(alloc *structs.Allocation, task *structs.Task) *TaskEnv {
+	if t == nil {
+		return t
+	}
+	newT := new(TaskEnv)
+	*newT = *t
+	newT.envList = []string{}
+	newT.EnvMap = maps.Clone(t.EnvMap)
+
+	combined := alloc.Job.CombinedTaskMeta(alloc.TaskGroup, task.Name)
+	for k, v := range combined {
+		newT.EnvMap[fmt.Sprintf("%s%s", MetaPrefix, strings.ToUpper(k))] = v
+		newT.EnvMap[fmt.Sprintf("%s%s", MetaPrefix, k)] = v
+	}
+
+	for k, v := range task.Env {
+		newT.EnvMap[k] = v
+	}
+	newT.EnvMap[TaskName] = task.Name
+	return newT
 }
 
 // AllValues is a map of the task's environment variables and the node's
@@ -593,10 +624,12 @@ func (b *Builder) buildEnv(allocDir, localDir, secretsDir string,
 	// Build the Nomad Workload Token
 	if b.workloadTokenDefault != "" {
 		envMap[WorkloadToken] = b.workloadTokenDefault
+		envMap[UnixAddr] = "unix://" + filepath.Join(secretsDir, "api.sock")
 	}
 
 	for name, token := range b.workloadTokens {
 		envMap[WorkloadToken+"_"+name] = token
+		envMap[UnixAddr] = "unix://" + filepath.Join(secretsDir, "api.sock")
 	}
 
 	// Copy and interpolate task meta
@@ -658,10 +691,11 @@ func (b *Builder) buildEnv(allocDir, localDir, secretsDir string,
 
 // Build must be called after all the tasks environment values have been set.
 func (b *Builder) Build() *TaskEnv {
-	nodeAttrs := make(map[string]string)
 
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+
+	nodeAttrs := make(map[string]string)
 
 	if b.region != "" {
 		// Copy region over to node attrs
@@ -676,13 +710,6 @@ func (b *Builder) Build() *TaskEnv {
 	envMapClient, _ := b.buildEnv(b.clientSharedAllocDir, b.clientTaskLocalDir, b.clientTaskSecretsDir, nodeAttrs)
 
 	return NewTaskEnv(envMap, envMapClient, deviceEnvs, nodeAttrs, b.clientTaskRoot, b.clientSharedAllocDir)
-}
-
-// UpdateTask updates the environment based on a new alloc and task.
-func (b *Builder) UpdateTask(alloc *structs.Allocation, task *structs.Task) *Builder {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.setTask(task).setAlloc(alloc)
 }
 
 // SetHookEnv sets environment variables from a hook. Variables are
@@ -851,6 +878,9 @@ func (b *Builder) setAlloc(alloc *structs.Allocation) *Builder {
 
 // setNode is called from NewBuilder to populate node attributes.
 func (b *Builder) setNode(n *structs.Node) *Builder {
+	if n == nil {
+		return b
+	}
 	b.nodeAttrs = make(map[string]string, 4+len(n.Attributes)+len(n.Meta))
 	b.nodeAttrs[nodeIdKey] = n.ID
 	b.nodeAttrs[nodeNameKey] = n.Name

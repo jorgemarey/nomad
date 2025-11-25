@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types"
 	containerapi "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -27,7 +28,6 @@ import (
 	networkapi "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/hashicorp/consul-template/signals"
 	hclog "github.com/hashicorp/go-hclog"
@@ -351,6 +351,7 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 			driverConfig.Image = image
 		}
 	}
+	driverConfig.ImagePullTimeout = getValue(driverConfig.ImagePullTimeout, d.config.ImagePullTimeout)
 
 	handle := drivers.NewTaskHandle(taskHandleVersion)
 	handle.Config = cfg
@@ -713,7 +714,7 @@ func (d *Driver) resolveRegistryAuthentication(driverConfig *TaskConfig, repo st
 }
 
 // loadImage creates an image by loading it from the file system
-func (d *Driver) loadImage(task *drivers.TaskConfig, driverConfig *TaskConfig, client *client.Client) (id string, user string, err error) {
+func (d *Driver) loadImage(task *drivers.TaskConfig, driverConfig *TaskConfig, dockerClient *client.Client) (id string, user string, err error) {
 
 	archive := filepath.Join(task.TaskDir().LocalDir, driverConfig.LoadImage)
 	d.logger.Debug("loading image from disk", "archive", archive)
@@ -723,12 +724,12 @@ func (d *Driver) loadImage(task *drivers.TaskConfig, driverConfig *TaskConfig, c
 		return "", "", fmt.Errorf("unable to open image archive: %v", err)
 	}
 
-	if _, err := client.ImageLoad(d.ctx, f, true); err != nil {
+	if _, err := dockerClient.ImageLoad(d.ctx, f, client.ImageLoadWithQuiet(true)); err != nil {
 		return "", "", err
 	}
 	f.Close()
 
-	dockerImage, _, err := client.ImageInspectWithRaw(d.ctx, driverConfig.Image)
+	dockerImage, _, err := dockerClient.ImageInspectWithRaw(d.ctx, driverConfig.Image)
 	if err != nil {
 		return "", "", recoverableErrTimeouts(err)
 	}
@@ -955,6 +956,30 @@ func memoryLimits(driverHardLimitMB int64, taskMemory drivers.MemoryResources) (
 	return hard * 1024 * 1024, softBytes
 }
 
+// maxCPUShares is the maximum value for cpu_shares in cgroups v1
+// https://github.com/torvalds/linux/blob/v6.15/kernel/sched/sched.h#L503
+const maxCPUShares = 262_144
+const minCPUShares = 2
+
+// cpuResources normalizes the requested CPU shares when the total compute
+// available on the node is larger than the largest share value allowed by the
+// kernel. On cgroups v2, Docker will re-normalize this to be within the
+// acceptable range for cpu.weight [1-10000].
+func (d *Driver) cpuResources(requested int64) int64 {
+	if requested < minCPUShares {
+		return minCPUShares
+	}
+	if d.compute.TotalCompute < maxCPUShares {
+		return requested
+	}
+
+	result := int64(float64(requested) / float64(d.compute.TotalCompute) * maxCPUShares)
+	if result < minCPUShares {
+		return minCPUShares
+	}
+	return result
+}
+
 func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *TaskConfig,
 	imageID string) (createContainerOptions, error) {
 
@@ -1034,7 +1059,10 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		pidsLimit = driverConfig.PidsLimit
 	}
 
+	cpuShares := d.cpuResources(task.Resources.LinuxResources.CPUShares)
+
 	hostConfig := &containerapi.HostConfig{
+		CgroupnsMode: containerapi.CgroupnsMode(driverConfig.CgroupnsMode),
 		// do not set cgroup parent anymore
 
 		OomScoreAdj: driverConfig.OOMScoreAdj, // ignored on platforms other than linux
@@ -1055,7 +1083,7 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	hostConfig.Resources = containerapi.Resources{
 		Memory:            memory,            // hard limit
 		MemoryReservation: memoryReservation, // soft limit
-		CPUShares:         task.Resources.LinuxResources.CPUShares,
+		CPUShares:         cpuShares,
 		CpusetCpus:        task.Resources.LinuxResources.CpusetCpus,
 		PidsLimit:         &pidsLimit,
 	}
@@ -1665,7 +1693,7 @@ func (d *Driver) DestroyTask(taskID string, force bool) error {
 
 	c, err := dockerClient.ContainerInspect(d.ctx, h.containerID)
 	if err != nil {
-		if _, ok := err.(errdefs.ErrNotFound); ok {
+		if errdefs.IsNotFound(err) {
 			h.logger.Info("container was removed out of band, will proceed with DestroyTask",
 				"error", err)
 		} else {

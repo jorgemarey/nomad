@@ -305,7 +305,7 @@ func (sc *ServiceCheck) validateCommon(allowableTypes []string) error {
 
 	// validate address_mode
 	switch sc.AddressMode {
-	case "", AddressModeHost, AddressModeDriver, AddressModeAlloc:
+	case "", AddressModeHost, AddressModeDriver, AddressModeAlloc, AddressModeAllocIPv6:
 		// Ok
 	case AddressModeAuto:
 		return fmt.Errorf("invalid address_mode %q - %s only valid for services", sc.AddressMode, AddressModeAuto)
@@ -562,10 +562,11 @@ func hashHeader(h hash.Hash, m map[string][]string) {
 }
 
 const (
-	AddressModeAuto   = "auto"
-	AddressModeHost   = "host"
-	AddressModeDriver = "driver"
-	AddressModeAlloc  = "alloc"
+	AddressModeAuto      = "auto"
+	AddressModeHost      = "host"
+	AddressModeDriver    = "driver"
+	AddressModeAlloc     = "alloc"
+	AddressModeAllocIPv6 = "alloc_ipv6"
 
 	// ServiceProviderConsul is the default service provider and the way Nomad
 	// worked before native service discovery.
@@ -584,8 +585,6 @@ type Service struct {
 	// as one of the seed values when generating a Consul ServiceID.
 	Name string
 
-	Kind string
-
 	// Name of the Task associated with this service.
 	// Group services do not have a task name, unless they are a connect native
 	// service specifying the task implementing the service.
@@ -599,7 +598,8 @@ type Service struct {
 	PortLabel string
 
 	// AddressMode specifies how the address in service registration is
-	// determined. Must be "auto" (default), "host", "driver", or "alloc".
+	// determined. Must be "auto" (default), "host", "driver", "alloc" or
+	// "alloc_ipv6".
 	AddressMode string
 
 	// Address enables explicitly setting a custom address to use in service
@@ -648,6 +648,10 @@ type Service struct {
 	// Its name will be `consul-service/${service_name}`, and its contents will
 	// match the server's `consul.service_identity` configuration block.
 	Identity *WorkloadIdentity
+
+	// Kind defines the Consul service kind, valid only when provider is consul
+	// and a Consul Connect Gateway isn't defined for the service.
+	Kind string
 }
 
 // Copy the block recursively. Returns nil if nil.
@@ -676,6 +680,8 @@ func (s *Service) Copy() *Service {
 
 	ns.Weights = s.Weights.Copy()
 	ns.Identity = s.Identity.Copy()
+
+	ns.Kind = s.Kind
 
 	return ns
 }
@@ -767,7 +773,7 @@ func (s *Service) Validate() error {
 
 	switch s.AddressMode {
 	case "", AddressModeAuto:
-	case AddressModeHost, AddressModeDriver, AddressModeAlloc:
+	case AddressModeHost, AddressModeDriver, AddressModeAlloc, AddressModeAllocIPv6:
 		if s.Address != "" {
 			mErr.Errors = append(mErr.Errors, fmt.Errorf("Service address_mode must be %q if address is set", AddressModeAuto))
 		}
@@ -864,6 +870,17 @@ func (s *Service) validateConsulService(mErr *multierror.Error) {
 		if err := c.validateConsul(); err != nil {
 			mErr.Errors = append(mErr.Errors, fmt.Errorf("Check %s invalid: %v", c.Name, err))
 		}
+	}
+
+	// validate the consul service kind
+	switch api.ServiceKind(s.Kind) {
+	case api.ServiceKindTypical,
+		api.ServiceKindAPIGateway,
+		api.ServiceKindIngressGateway,
+		api.ServiceKindMeshGateway,
+		api.ServiceKindTerminatingGateway:
+	default:
+		mErr.Errors = append(mErr.Errors, fmt.Errorf("Service %s kind must be one of consul service kind or empty", s.Name))
 	}
 
 	// check connect
@@ -963,6 +980,7 @@ func (s *Service) Hash(allocID, taskName string, canary bool) string {
 	hashString(h, s.Namespace)
 	hashIdentity(h, s.Identity)
 	hashWeights(h, s.Weights)
+	hashString(h, s.Kind)
 
 	// Don't hash the provider parameter, so we don't cause churn of all
 	// registered services when upgrading Nomad versions. The provider is not
@@ -1144,6 +1162,10 @@ func (s *Service) Equal(o *Service) bool {
 	}
 
 	if !s.Weights.Equal(o.Weights) {
+		return false
+	}
+
+	if s.Kind != o.Kind {
 		return false
 	}
 

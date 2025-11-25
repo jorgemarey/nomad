@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -678,6 +679,61 @@ func TestAgent_ServerConfig_RaftProtocol_3(t *testing.T) {
 	}
 }
 
+func Test_convertServerConfig_errors(t *testing.T) {
+	ci.Parallel(t)
+
+	// This helper function provides an easy way to modify individual parameters
+	// within the configuration, without having to populate all objects that
+	// cause a panic when missing.
+	overlayDefaultFunc := func(cb func(*Config)) *Config {
+		defaultConfig := DevConfig(nil)
+		if cb != nil {
+			cb(defaultConfig)
+		}
+		_ = defaultConfig.normalizeAddrs()
+		return defaultConfig
+	}
+
+	testCases := []struct {
+		name        string
+		inputConfig *Config
+		expectErr   bool
+	}{
+		{
+			name: "num schedulers too big",
+			inputConfig: overlayDefaultFunc(func(config *Config) {
+				config.Server.NumSchedulers = pointer.Of(1<<63 - 1)
+			}),
+			expectErr: true,
+		},
+		{
+			name: "num schedulers negative",
+			inputConfig: overlayDefaultFunc(func(config *Config) {
+				config.Server.NumSchedulers = pointer.Of(-100)
+			}),
+			expectErr: true,
+		},
+		{
+			name: "valid",
+			inputConfig: overlayDefaultFunc(func(config *Config) {
+				config.Server.NumSchedulers = pointer.Of(runtime.NumCPU())
+			}),
+			expectErr: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, actualErr := convertServerConfig(tc.inputConfig)
+			if tc.expectErr {
+				must.Error(t, actualErr)
+			} else {
+				must.NoError(t, actualErr)
+			}
+		})
+	}
+}
+
 func TestConvertClientConfig(t *testing.T) {
 	ci.Parallel(t)
 	cases := []struct {
@@ -1044,7 +1100,7 @@ func TestServer_Reload_TLS_Shared_Keyloader(t *testing.T) {
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
 			EnableRPC:            true,
-			VerifyServerHostname: true,
+			VerifyServerHostname: false,
 			CAFile:               badca,
 			CertFile:             badcert,
 			KeyFile:              badkey,
@@ -1320,7 +1376,6 @@ func TestServer_Reload_VaultConfig(t *testing.T) {
 		c.Vaults[0] = &config.VaultConfig{
 			Name:      "default",
 			Enabled:   pointer.Of(true),
-			Token:     "vault-token",
 			Namespace: "vault-namespace",
 			Addr:      "https://vault.consul:8200",
 		}
@@ -1331,7 +1386,6 @@ func TestServer_Reload_VaultConfig(t *testing.T) {
 	newConfig.Vaults[0] = &config.VaultConfig{
 		Name:      "default",
 		Enabled:   pointer.Of(true),
-		Token:     "vault-token",
 		Namespace: "another-namespace",
 		Addr:      "https://vault.consul:8200",
 	}
@@ -1369,6 +1423,7 @@ func TestServer_ShouldReload_ReturnFalseForNoChanges(t *testing.T) {
 	}
 
 	agent := NewTestAgent(t, t.Name(), func(c *Config) {
+		c.Client.Enabled = false
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
 			EnableRPC:            true,
@@ -1407,6 +1462,7 @@ func TestServer_ShouldReload_ReturnTrueForOnlyHTTPChanges(t *testing.T) {
 	}
 
 	agent := NewTestAgent(t, t.Name(), func(c *Config) {
+		c.Client.Enabled = false
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
 			EnableRPC:            true,
@@ -1474,6 +1530,7 @@ func TestServer_ShouldReload_ReturnTrueForConfigChanges(t *testing.T) {
 	)
 
 	agent := NewTestAgent(t, t.Name(), func(c *Config) {
+		c.Client.Enabled = false
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
 			EnableRPC:            true,
@@ -1624,6 +1681,7 @@ func TestServer_ShouldReload_ShouldHandleMultipleChanges(t *testing.T) {
 	}
 
 	agent := NewTestAgent(t, t.Name(), func(c *Config) {
+		c.Client.Enabled = false
 		c.TLSConfig = &config.TLSConfig{
 			EnableHTTP:           true,
 			EnableRPC:            true,

@@ -79,7 +79,7 @@ func connectGatewayDriverConfig(hostNetwork bool) map[string]interface{} {
 // connectSidecarVersionConstraint is used when building the sidecar task to ensure
 // the proper Consul version is used that supports the necessary Connect
 // features. This includes bootstrapping envoy with a unix socket for Consul's
-// gRPC xDS API, and support for generating local service identity tokens.
+// gRPC xDS API.
 func connectSidecarVersionConstraint(cluster string) *structs.Constraint {
 	if cluster != structs.ConsulDefaultCluster && cluster != "" {
 		return &structs.Constraint{
@@ -273,10 +273,10 @@ func groupConnectHook(job *structs.Job, g *structs.TaskGroup) error {
 	// This should only be used to interpolate connect service names which are
 	// used in sidecar or gateway task names. Note that the service name might
 	// also be interpolated with job specifics during service canonicalization.
-	env := taskenv.NewEmptyBuilder().UpdateTask(&structs.Allocation{
+	env := taskenv.NewBuilder(nil, &structs.Allocation{
 		Job:       job,
 		TaskGroup: g.Name,
-	}, nil).Build()
+	}, nil, job.Region).Build()
 
 	for _, service := range g.Services {
 		switch {

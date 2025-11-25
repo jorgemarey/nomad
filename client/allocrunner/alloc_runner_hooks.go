@@ -12,6 +12,7 @@ import (
 	clientconfig "github.com/hashicorp/nomad/client/config"
 	"github.com/hashicorp/nomad/client/consul"
 	"github.com/hashicorp/nomad/client/taskenv"
+	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
@@ -103,21 +104,6 @@ func (ar *allocRunner) initRunnerHooks(config *clientconfig.Config) error {
 		return fmt.Errorf("failed to initialize network configurator: %v", err)
 	}
 
-	// Create a new taskenv.Builder which is used by hooks that mutate them to
-	// build new taskenv.TaskEnv.
-	newEnvBuilder := func() *taskenv.Builder {
-		return taskenv.NewBuilder(
-			config.Node,
-			ar.Alloc(),
-			nil,
-			config.Region,
-		).SetAllocDir(ar.allocDir.AllocDirPath())
-	}
-
-	// Create a *taskenv.TaskEnv which is used for read only purposes by the
-	// newNetworkHook and newChecksHook.
-	builtTaskEnv := newEnvBuilder().Build()
-
 	// Create the alloc directory hook. This is run first to ensure the
 	// directory path exists for other hooks.
 	alloc := ar.Alloc()
@@ -132,21 +118,20 @@ func (ar *allocRunner) initRunnerHooks(config *clientconfig.Config) error {
 			consulConfigs:           ar.clientConfig.GetConsulConfigs(hookLogger),
 			consulClientConstructor: consul.NewConsulClientFactory(config),
 			hookResources:           ar.hookResources,
-			envBuilder:              newEnvBuilder,
 			logger:                  hookLogger,
+			db:                      ar.stateDB,
 		}),
 		newUpstreamAllocsHook(hookLogger, ar.prevAllocWatcher),
 		newDiskMigrationHook(hookLogger, ar.prevAllocMigrator, ar.allocDir),
 		newCPUPartsHook(hookLogger, ar.partitions, alloc),
-		newAllocHealthWatcherHook(hookLogger, alloc, newEnvBuilder, hs, ar.Listener(), ar.consulServicesHandler, ar.checkStore),
-		newNetworkHook(hookLogger, ns, alloc, nm, nc, ar, builtTaskEnv),
+		newAllocHealthWatcherHook(hookLogger, alloc, hs, ar.Listener(), ar.consulServicesHandler, ar.checkStore),
+		newNetworkHook(hookLogger, ns, alloc, nm, nc, ar),
 		newGroupServiceHook(groupServiceHookConfig{
 			alloc:             alloc,
 			providerNamespace: alloc.ServiceProviderNamespace(),
 			serviceRegWrapper: ar.serviceRegWrapper,
 			hookResources:     ar.hookResources,
 			restarter:         ar,
-			taskEnvBuilder:    newEnvBuilder(),
 			networkStatus:     ar,
 			logger:            hookLogger,
 			shutdownDelayCtx:  ar.shutdownDelayCtx,
@@ -156,7 +141,7 @@ func (ar *allocRunner) initRunnerHooks(config *clientconfig.Config) error {
 		newConsulHTTPSocketHook(hookLogger, alloc, ar.allocDir,
 			config.GetConsulConfigs(ar.logger)),
 		newCSIHook(alloc, hookLogger, ar.csiManager, ar.rpcClient, ar, ar.hookResources, ar.clientConfig.Node.SecretID),
-		newChecksHook(hookLogger, alloc, ar.checkStore, ar, builtTaskEnv),
+		newChecksHook(hookLogger, alloc, ar.checkStore, ar),
 	}
 	if config.ExtraAllocHooks != nil {
 		ar.runnerHooks = append(ar.runnerHooks, config.ExtraAllocHooks...)
@@ -175,6 +160,13 @@ func (ar *allocRunner) prerun() error {
 			ar.logger.Trace("finished pre-run hooks", "end", end, "duration", end.Sub(start))
 		}()
 	}
+
+	allocEnv := taskenv.NewBuilder(
+		ar.clientConfig.GetNode(),
+		ar.Alloc(),
+		nil,
+		ar.clientConfig.Region,
+	).SetAllocDir(ar.allocDir.AllocDirPath()).Build()
 
 	for _, hook := range ar.runnerHooks {
 		pre, ok := hook.(interfaces.RunnerPrerunHook)
@@ -197,7 +189,7 @@ func (ar *allocRunner) prerun() error {
 			hookExecutionStart = time.Now()
 		}
 
-		err := pre.Prerun()
+		err := pre.Prerun(allocEnv)
 		ar.hookStatsHandler.Emit(hookExecutionStart, name, "prerun", err)
 		if err != nil {
 			return fmt.Errorf("pre-run hook %q failed: %v", name, err)
@@ -224,8 +216,16 @@ func (ar *allocRunner) update(update *structs.Allocation) error {
 		}()
 	}
 
+	allocEnv := taskenv.NewBuilder(
+		ar.clientConfig.GetNode(),
+		ar.Alloc(),
+		nil,
+		ar.clientConfig.Region,
+	).SetAllocDir(ar.allocDir.AllocDirPath()).Build()
+
 	req := &interfaces.RunnerUpdateRequest{
-		Alloc: update,
+		Alloc:    update,
+		AllocEnv: allocEnv,
 	}
 
 	var merr multierror.Error
@@ -256,6 +256,7 @@ func (ar *allocRunner) update(update *structs.Allocation) error {
 }
 
 // postrun is used to run the runners postrun hooks.
+// all hooks will run, even if any of them fail, and return a multierror, single error, or nil.
 func (ar *allocRunner) postrun() error {
 	if ar.logger.IsTrace() {
 		start := time.Now()
@@ -266,6 +267,7 @@ func (ar *allocRunner) postrun() error {
 		}()
 	}
 
+	var merr multierror.Error
 	for _, hook := range ar.runnerHooks {
 		post, ok := hook.(interfaces.RunnerPostrunHook)
 		if !ok {
@@ -280,7 +282,7 @@ func (ar *allocRunner) postrun() error {
 		}
 
 		if err := post.Postrun(); err != nil {
-			return fmt.Errorf("hook %q failed: %v", name, err)
+			merr.Errors = append(merr.Errors, fmt.Errorf("post-run hook %q failed: %w", name, err))
 		}
 
 		if ar.logger.IsTrace() {
@@ -289,7 +291,7 @@ func (ar *allocRunner) postrun() error {
 		}
 	}
 
-	return nil
+	return helper.FlattenMultierror(merr.ErrorOrNil())
 }
 
 // destroy is used to run the runners destroy hooks. All hooks are run and

@@ -5,19 +5,35 @@ package pool
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"testing"
 	"time"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper/testlog"
+	"github.com/hashicorp/yamux"
 	"github.com/shoenig/test/must"
 )
 
 func newTestPool(t *testing.T) *ConnPool {
 	l := testlog.HCLogger(t)
-	p := NewPool(l, 1*time.Minute, 10, nil)
+	p := NewPool(l, 1*time.Minute, 10, nil, yamux.DefaultConfig())
 	return p
+}
+
+func Test_NewPool(t *testing.T) {
+
+	// Generate a custom yamux configuration, so we can ensure this gets stored
+	// as expected.
+	yamuxConfig := yamux.DefaultConfig()
+	yamuxConfig.AcceptBacklog = math.MaxInt
+
+	testPool := NewPool(hclog.NewNullLogger(), 10*time.Second, 10, nil, yamuxConfig)
+	must.NotNil(t, testPool)
+	must.NotNil(t, testPool.yamuxCfg)
+	must.Eq(t, yamuxConfig.AcceptBacklog, testPool.yamuxCfg.AcceptBacklog)
 }
 
 func TestConnPool_ConnListener(t *testing.T) {

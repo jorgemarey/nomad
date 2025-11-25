@@ -23,7 +23,6 @@ import (
 	_ "github.com/hashicorp/nomad/e2e/parameterized"
 	_ "github.com/hashicorp/nomad/e2e/periodic"
 	_ "github.com/hashicorp/nomad/e2e/quotas"
-	_ "github.com/hashicorp/nomad/e2e/remotetasks"
 	_ "github.com/hashicorp/nomad/e2e/scaling"
 	_ "github.com/hashicorp/nomad/e2e/scalingpolicies"
 	_ "github.com/hashicorp/nomad/e2e/scheduler_sysbatch"
@@ -36,6 +35,7 @@ import (
 	_ "github.com/hashicorp/nomad/e2e/consultemplate"
 	_ "github.com/hashicorp/nomad/e2e/disconnectedclients"
 	_ "github.com/hashicorp/nomad/e2e/docker"
+	_ "github.com/hashicorp/nomad/e2e/dynamic_host_volumes"
 	_ "github.com/hashicorp/nomad/e2e/isolation"
 	_ "github.com/hashicorp/nomad/e2e/metrics"
 	_ "github.com/hashicorp/nomad/e2e/namespaces"
@@ -46,7 +46,7 @@ import (
 	_ "github.com/hashicorp/nomad/e2e/rescheduling"
 	_ "github.com/hashicorp/nomad/e2e/spread"
 	_ "github.com/hashicorp/nomad/e2e/vaultsecrets"
-	_ "github.com/hashicorp/nomad/e2e/volumes"
+	_ "github.com/hashicorp/nomad/e2e/volume_mounts"
 )
 
 func TestE2E(t *testing.T) {

@@ -11,9 +11,11 @@ import (
 	"io"
 	"maps"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/hashicorp/cli"
@@ -31,6 +33,10 @@ const (
 	formatJSON = "json"
 	formatHCL2 = "hcl2"
 )
+
+// uiMessageNoArguments is the message to write to the UI when a command is
+// passed arguments, but it does not take any.
+const uiMessageNoArguments = "This command takes no arguments"
 
 // maxLineLength is the maximum width of any line.
 const maxLineLength int = 78
@@ -753,11 +759,11 @@ func getByPrefix[T any](
 ) (*T, []*T, error) {
 	objs, _, err := queryFn(opts)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Error querying %s: %s", objName, err)
+		return nil, nil, fmt.Errorf("error querying %s: %s", objName, err)
 	}
 	switch len(objs) {
 	case 0:
-		return nil, nil, fmt.Errorf("No %s with prefix or ID %q found", objName, opts.Prefix)
+		return nil, nil, fmt.Errorf("no %s with prefix or ID %q found", objName, opts.Prefix)
 	case 1:
 		return objs[0], nil, nil
 	default:
@@ -777,4 +783,36 @@ func getByPrefix[T any](
 		}
 		return nil, objs, nil
 	}
+}
+
+func streamFrames(frames <-chan *api.StreamFrame, errCh <-chan error,
+	numLines int64, cancel chan struct{}) (io.ReadCloser, error) {
+
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
+	}
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+
+	// Create a reader
+	var r io.ReadCloser
+	frameReader := api.NewFrameReader(frames, errCh, cancel)
+	frameReader.SetUnblockTime(500 * time.Millisecond)
+	r = frameReader
+
+	// If numLines is set, wrap the reader
+	if numLines != -1 {
+		r = NewLineLimitReader(r, int(numLines), int(numLines*bytesToLines), 1*time.Second)
+	} else {
+	}
+	go func() {
+		<-signalCh
+
+		// End the streaming
+		r.Close()
+	}()
+
+	return r, nil
 }

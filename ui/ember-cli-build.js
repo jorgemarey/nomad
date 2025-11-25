@@ -12,15 +12,6 @@ const isTest = environment === 'test';
 
 module.exports = function (defaults) {
   let app = new EmberApp(defaults, {
-    svg: {
-      paths: [
-        'node_modules/@hashicorp/structure-icons/dist',
-        'public/images/icons',
-      ],
-      optimize: {
-        plugins: [{ removeViewBox: false }],
-      },
-    },
     codemirror: {
       modes: ['javascript', 'ruby'],
     },
@@ -39,8 +30,11 @@ module.exports = function (defaults) {
     sassOptions: {
       precision: 4,
       includePaths: [
+        './node_modules/bulma',
         './node_modules/@hashicorp/design-system-tokens/dist/products/css',
         './node_modules/@hashicorp/design-system-components/dist/styles',
+        './node_modules/ember-basic-dropdown/vendor',
+        './node_modules/ember-power-select/vendor',
       ],
     },
   });

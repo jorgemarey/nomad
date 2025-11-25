@@ -23,6 +23,7 @@ import (
 	"github.com/hashicorp/nomad/scheduler"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/serf/serf"
+	"github.com/hashicorp/yamux"
 )
 
 const (
@@ -403,6 +404,9 @@ type Config struct {
 	// connections from a single IP address. nil/0 means no limit.
 	RPCMaxConnsPerClient int
 
+	// RPCSessionConfig configures the yamux session configuration for RPC
+	RPCSessionConfig *yamux.Config
+
 	// LicenseConfig stores information about the Enterprise license loaded for the server.
 	LicenseConfig *LicenseConfig
 
@@ -438,6 +442,15 @@ type Config struct {
 
 	// KEKProviders are used to wrap the Nomad keyring
 	KEKProviderConfigs []*structs.KEKProviderConfig
+
+	// StartTimeout is provided to the server so that it can time out setup and
+	// startup process that are expected to complete before the server is
+	// considered healthy. Without this, the server can hang indefinitely
+	// waiting for these.
+	StartTimeout time.Duration
+
+	// LogFile is used by MonitorExport to stream a server's log file
+	LogFile string `hcl:"log_file"`
 }
 
 func (c *Config) Copy() *Config {
@@ -615,6 +628,7 @@ func DefaultConfig() *Config {
 		VaultConfigs: map[string]*config.VaultConfig{
 			structs.VaultDefaultCluster: config.DefaultVaultConfig()},
 		RPCHoldTimeout:           5 * time.Second,
+		RPCSessionConfig:         yamux.DefaultConfig(),
 		StatsCollectionInterval:  1 * time.Minute,
 		TLSConfig:                &config.TLSConfig{},
 		ReplicationBackoff:       30 * time.Second,
@@ -645,6 +659,7 @@ func DefaultConfig() *Config {
 		JobDefaultPriority:       structs.JobDefaultPriority,
 		JobMaxPriority:           structs.JobDefaultMaxPriority,
 		JobTrackedVersions:       structs.JobDefaultTrackedVersions,
+		StartTimeout:             30 * time.Second,
 	}
 
 	// Enable all known schedulers by default

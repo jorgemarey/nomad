@@ -160,7 +160,7 @@ func (s *HTTPServer) unableToAuditNonJSON(resp http.ResponseWriter, req *http.Re
 	return nil, CodedError(http.StatusInternalServerError, ErrUnableToAudit)
 }
 
-// auditHTTPHandler wraps  the passed handlerByteFn
+// auditNonJSONHandler wraps the passed handlerByteFn
 func (s *HTTPServer) auditNonJSONHandler(h handlerByteFn) handlerByteFn {
 	if !s.eventAuditor.Enabled() {
 		return h

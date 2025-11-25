@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/golang/snappy"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/go-set/v3"
 	"github.com/hashicorp/nomad/acl"
@@ -286,12 +286,6 @@ func (j *Job) Register(args *structs.JobRegisterRequest, reply *structs.JobRegis
 			}
 		}
 	}
-
-	// Clear the Vault token
-	args.Job.VaultToken = ""
-
-	// Clear the Consul token
-	args.Job.ConsulToken = ""
 
 	// Preserve the existing task group counts, if so requested
 	if existingJob != nil && args.PreserveCounts {
@@ -628,8 +622,6 @@ func (j *Job) Revert(args *structs.JobRevertRequest, reply *structs.JobRegisterR
 
 	// Build the register request
 	revJob := jobV.Copy()
-	revJob.VaultToken = args.VaultToken   // use vault token from revert to perform (re)registration
-	revJob.ConsulToken = args.ConsulToken // use consul token from revert to perform (re)registration
 
 	// Clear out the VersionTag to prevent tag duplication
 	revJob.VersionTag = nil
@@ -1463,36 +1455,24 @@ func (j *Job) List(args *structs.JobListRequest, reply *structs.JobListResponse)
 					return err
 				}
 
-				tokenizer := paginator.NewStructsTokenizer(
-					iter,
-					paginator.StructsTokenizerOptions{
-						WithNamespace: true,
-						WithID:        true,
-					},
-				)
-				filters := []paginator.Filter{
-					paginator.NamespaceFilter{
-						AllowableNamespaces: allowableNamespaces,
-					},
+				stubFn := func(job *structs.Job) (*structs.JobListStub, error) {
+					summary, err := state.JobSummaryByID(ws, job.Namespace, job.ID)
+					if err != nil || summary == nil {
+						return nil, fmt.Errorf("unable to look up summary for job: %v", job.ID)
+					}
+					return job.Stub(summary, args.Fields), nil
 				}
 
-				var jobs []*structs.JobListStub
-				paginator, err := paginator.NewPaginator(iter, tokenizer, filters, args.QueryOptions,
-					func(raw interface{}) error {
-						job := raw.(*structs.Job)
-						summary, err := state.JobSummaryByID(ws, job.Namespace, job.ID)
-						if err != nil || summary == nil {
-							return fmt.Errorf("unable to look up summary for job: %v", job.ID)
-						}
-						jobs = append(jobs, job.Stub(summary, args.Fields))
-						return nil
-					})
+				pager, err := paginator.NewPaginator(iter, args.QueryOptions,
+					paginator.NamespaceSelectorFunc[*structs.Job](allowableNamespaces),
+					paginator.NamespaceIDTokenizer[*structs.Job](args.NextToken),
+					stubFn)
 				if err != nil {
 					return structs.NewErrRPCCodedf(
 						http.StatusBadRequest, "failed to create result paginator: %v", err)
 				}
 
-				nextToken, err := paginator.Page()
+				jobs, nextToken, err := pager.Page()
 				if err != nil {
 					return structs.NewErrRPCCodedf(
 						http.StatusBadRequest, "failed to read result page: %v", err)
@@ -2057,8 +2037,14 @@ func (j *Job) Dispatch(args *structs.JobDispatchRequest, reply *structs.JobDispa
 		return fmt.Errorf("Specified job %q is stopped", args.JobID)
 	}
 
-	// Validate the arguments
-	if err := validateDispatchRequest(args, parameterizedJob); err != nil {
+	// Set priority to match parent job if unset
+	if args.Priority == 0 {
+		args.Priority = parameterizedJob.Priority
+	}
+
+	// Validate the arguments and parameterized job
+	agentConfig := j.srv.config
+	if err := validateDispatchRequest(args, parameterizedJob, agentConfig); err != nil {
 		return err
 	}
 
@@ -2109,6 +2095,7 @@ func (j *Job) Dispatch(args *structs.JobDispatchRequest, reply *structs.JobDispa
 	dispatchJob.Status = ""
 	dispatchJob.StatusDescription = ""
 	dispatchJob.DispatchIdempotencyToken = args.IdempotencyToken
+	dispatchJob.Priority = args.Priority
 
 	// Merge in the meta data
 	for k, v := range args.Meta {
@@ -2121,15 +2108,32 @@ func (j *Job) Dispatch(args *structs.JobDispatchRequest, reply *structs.JobDispa
 	// Compress the payload
 	dispatchJob.Payload = snappy.Encode(nil, args.Payload)
 
+	// If the job is periodic, we don't create an eval.
+	var eval *structs.Evaluation
+	if !dispatchJob.IsPeriodic() {
+		now := time.Now().UnixNano()
+		eval = &structs.Evaluation{
+			ID:          uuid.Generate(),
+			Namespace:   args.RequestNamespace(),
+			Priority:    dispatchJob.Priority,
+			Type:        dispatchJob.Type,
+			TriggeredBy: structs.EvalTriggerJobRegister,
+			JobID:       dispatchJob.ID,
+			Status:      structs.EvalStatusPending,
+			CreateTime:  now,
+			ModifyTime:  now,
+		}
+	}
+
 	regReq := &structs.JobRegisterRequest{
 		Job:          dispatchJob,
 		WriteRequest: args.WriteRequest,
+		Eval:         eval,
 	}
 
-	// Commit this update via Raft
 	_, jobCreateIndex, err := j.srv.raftApply(structs.JobRegisterRequestType, regReq)
 	if err != nil {
-		j.logger.Error("dispatched job register failed", "error")
+		j.logger.Error("dispatched job register failed", "error", err)
 		return err
 	}
 
@@ -2137,38 +2141,9 @@ func (j *Job) Dispatch(args *structs.JobDispatchRequest, reply *structs.JobDispa
 	reply.DispatchedJobID = dispatchJob.ID
 	reply.Index = jobCreateIndex
 
-	// If the job is periodic, we don't create an eval.
-	if !dispatchJob.IsPeriodic() {
-		// Create a new evaluation
-		now := time.Now().UnixNano()
-		eval := &structs.Evaluation{
-			ID:             uuid.Generate(),
-			Namespace:      args.RequestNamespace(),
-			Priority:       dispatchJob.Priority,
-			Type:           dispatchJob.Type,
-			TriggeredBy:    structs.EvalTriggerJobRegister,
-			JobID:          dispatchJob.ID,
-			JobModifyIndex: jobCreateIndex,
-			Status:         structs.EvalStatusPending,
-			CreateTime:     now,
-			ModifyTime:     now,
-		}
-		update := &structs.EvalUpdateRequest{
-			Evals:        []*structs.Evaluation{eval},
-			WriteRequest: structs.WriteRequest{Region: args.Region},
-		}
-
-		// Commit this evaluation via Raft
-		_, evalIndex, err := j.srv.raftApply(structs.EvalUpdateRequestType, update)
-		if err != nil {
-			j.logger.Error("eval create failed", "error", err, "method", "dispatch")
-			return err
-		}
-
-		// Setup the reply
+	if eval != nil {
 		reply.EvalID = eval.ID
-		reply.EvalCreateIndex = evalIndex
-		reply.Index = evalIndex
+		reply.EvalCreateIndex = jobCreateIndex
 	}
 
 	return nil
@@ -2176,7 +2151,7 @@ func (j *Job) Dispatch(args *structs.JobDispatchRequest, reply *structs.JobDispa
 
 // validateDispatchRequest returns whether the request is valid given the
 // parameterized job.
-func validateDispatchRequest(req *structs.JobDispatchRequest, job *structs.Job) error {
+func validateDispatchRequest(req *structs.JobDispatchRequest, job *structs.Job, config *Config) error {
 	// Check the payload constraint is met
 	hasInputData := len(req.Payload) != 0
 	if job.ParameterizedJob.Payload == structs.DispatchPayloadRequired && !hasInputData {
@@ -2235,6 +2210,11 @@ func validateDispatchRequest(req *structs.JobDispatchRequest, job *structs.Job) 
 		}
 
 		return fmt.Errorf("Dispatch did not provide required meta keys: %v", flat)
+	}
+
+	// Confirm that Priority is appropriately set on the JobDispatchRequest
+	if req.Priority < structs.JobMinPriority || req.Priority > config.JobMaxPriority {
+		return fmt.Errorf("dispatch job priority must be between [%d, %d]", structs.JobMinPriority, config.JobMaxPriority)
 	}
 
 	return nil

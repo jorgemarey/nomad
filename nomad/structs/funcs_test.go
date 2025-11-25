@@ -538,6 +538,54 @@ func TestAllocsFit_Devices(t *testing.T) {
 	require.True(fit)
 }
 
+// Tests that AllocsFit detects volume collisions for volumes that have
+// exclusive access
+func TestAllocsFit_ExclusiveVolumes(t *testing.T) {
+	ci.Parallel(t)
+
+	n := node2k()
+	a1 := &Allocation{
+		TaskGroup: "group",
+		Job: &Job{TaskGroups: []*TaskGroup{{Name: "group", Volumes: map[string]*VolumeRequest{
+			"foo": {
+				Source:     "example",
+				AccessMode: HostVolumeAccessModeSingleNodeSingleWriter,
+			},
+		}}}},
+		AllocatedResources: &AllocatedResources{
+			Tasks: map[string]*AllocatedTaskResources{
+				"web": {
+					Cpu:    AllocatedCpuResources{CpuShares: 500},
+					Memory: AllocatedMemoryResources{MemoryMB: 500},
+				},
+			},
+		},
+	}
+	a2 := a1.Copy()
+	a2.AllocatedResources.Tasks["web"] = &AllocatedTaskResources{
+		Cpu:    AllocatedCpuResources{CpuShares: 500},
+		Memory: AllocatedMemoryResources{MemoryMB: 500},
+	}
+	a2.Job.TaskGroups[0].Volumes["foo"].AccessMode = HostVolumeAccessModeSingleNodeMultiWriter
+
+	// Should fit one allocation
+	fit, _, _, err := AllocsFit(n, []*Allocation{a1}, nil, true)
+	must.NoError(t, err)
+	must.True(t, fit)
+
+	// Should not fit second allocation
+	fit, msg, _, err := AllocsFit(n, []*Allocation{a1, a2}, nil, true)
+	must.NoError(t, err)
+	must.False(t, fit)
+	must.Eq(t, "conflicting claims for host volume with single-writer", msg)
+
+	// Should not fit second allocation but won't detect since we disabled
+	// checking host volumes
+	fit, _, _, err = AllocsFit(n, []*Allocation{a1, a2}, nil, false)
+	must.NoError(t, err)
+	must.True(t, fit)
+}
+
 // TestAllocsFit_MemoryOversubscription asserts that only reserved memory is
 // used for capacity
 func TestAllocsFit_MemoryOversubscription(t *testing.T) {
@@ -668,6 +716,81 @@ func TestScoreFitBinPack(t *testing.T) {
 	}
 }
 
+func TestAllocsFit_MaxNodeAllocs(t *testing.T) {
+	ci.Parallel(t)
+	baseAlloc := &Allocation{
+		AllocatedResources: &AllocatedResources{
+			Tasks: map[string]*AllocatedTaskResources{
+				"web": {
+					Cpu: AllocatedCpuResources{
+						CpuShares:     1000,
+						ReservedCores: []uint16{},
+					},
+					Memory: AllocatedMemoryResources{
+						MemoryMB: 1024,
+					},
+				},
+			},
+			Shared: AllocatedSharedResources{
+				DiskMB: 5000,
+				Networks: Networks{
+					{
+						Mode:          "host",
+						IP:            "10.0.0.1",
+						ReservedPorts: []Port{{Label: "main", Value: 8000}},
+					},
+				},
+				Ports: AllocatedPorts{
+					{
+						Label:  "main",
+						Value:  8000,
+						HostIP: "10.0.0.1",
+					},
+				},
+			},
+		},
+	}
+
+	testCases := []struct {
+		name        string
+		allocations []*Allocation
+		expectErr   bool
+		maxAllocs   int
+	}{
+		{
+			name:        "happy_path",
+			allocations: []*Allocation{baseAlloc},
+			expectErr:   false,
+			maxAllocs:   2,
+		},
+		{
+			name:        "too many allocs",
+			allocations: []*Allocation{baseAlloc, baseAlloc, baseAlloc},
+			expectErr:   true,
+			maxAllocs:   2,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := node2k()
+			n.NodeMaxAllocs = tc.maxAllocs
+			fit, dim, used, err := AllocsFit(n, tc.allocations, nil, false)
+			if !tc.expectErr {
+				must.NoError(t, err)
+				must.True(t, fit)
+				must.Eq(t, 1000, used.Flattened.Cpu.CpuShares)
+				must.Eq(t, 1024, used.Flattened.Memory.MemoryMB)
+			} else {
+				must.False(t, fit)
+				must.StrContains(t, dim, "max allocation exceeded")
+				must.ErrorContains(t, err, "plan exceeds max allocation")
+				must.Eq(t, 0, used.Flattened.Cpu.CpuShares)
+				must.Eq(t, 0, used.Flattened.Memory.MemoryMB)
+			}
+		})
+	}
+}
 func TestACLPolicyListHash(t *testing.T) {
 	ci.Parallel(t)
 
@@ -798,64 +921,6 @@ func TestGenerateMigrateToken(t *testing.T) {
 	assert.True(CompareMigrateToken("x", nodeSecret, token2))
 }
 
-func TestVaultPoliciesSet(t *testing.T) {
-	input := map[string]map[string]*Vault{
-		"tg1": {
-			"task1": {
-				Policies: []string{"policy1-1"},
-			},
-			"task2": {
-				Policies: []string{"policy1-2"},
-			},
-		},
-		"tg2": {
-			"task1": {
-				Policies: []string{"policy2"},
-			},
-			"task2": {
-				Policies: []string{"policy2"},
-			},
-		},
-		"tg3": {
-			"task1": {
-				Policies: []string{"policy3-1"},
-			},
-		},
-		"tg4": {
-			"task1": nil,
-		},
-		"tg5": {
-			"task1": {
-				Policies: []string{"policy2"},
-			},
-		},
-		"tg6": {
-			"task1": {},
-		},
-		"tg7": {
-			"task1": {
-				Policies: []string{"policy7", "policy7"},
-			},
-		},
-		"tg8": {
-			"task1": {
-				Policies: []string{"policy8-1-1", "policy8-1-2"},
-			},
-		},
-	}
-	expected := []string{
-		"policy1-1",
-		"policy1-2",
-		"policy2",
-		"policy3-1",
-		"policy7",
-		"policy8-1-1",
-		"policy8-1-2",
-	}
-	got := VaultPoliciesSet(input)
-	require.ElementsMatch(t, expected, got)
-}
-
 func TestVaultNamespaceSet(t *testing.T) {
 	input := map[string]map[string]*Vault{
 		"tg1": {
@@ -901,14 +966,16 @@ func TestVaultNamespaceSet(t *testing.T) {
 	require.ElementsMatch(t, expected, got)
 }
 
-// TestParsePortRanges asserts ParsePortRanges errors on invalid port ranges.
+// TestParsePortRanges asserts ParsePortRanges errors on invalid port ranges and
+// returns the expected values
 func TestParsePortRanges(t *testing.T) {
 	ci.Parallel(t)
 
 	cases := []struct {
-		name string
-		spec string
-		err  string
+		name   string
+		spec   string
+		expect []uint64
+		err    string
 	}{
 		{
 			name: "UnmatchedDash",
@@ -930,14 +997,44 @@ func TestParsePortRanges(t *testing.T) {
 			spec: "9223372036854775807", // (2**63)-1
 			err:  "port must be < 65536 but found 9223372036854775807",
 		},
+		{
+			name:   "OverlappingRanges",
+			spec:   "1-3,2-4",
+			expect: []uint64{1, 2, 3, 2, 3, 4}, // we don't care about dupes
+		},
+		{
+			name: "ReversedRange",
+			spec: "3-1",
+			err:  "invalid range: ending value (1) less than starting (3) value",
+		},
+		{
+			name: "ZeroRange",
+			spec: "0-1",
+			err:  "port must be > 0",
+		},
+		{
+			name:   "OverlappingOutOfOrderRanges",
+			spec:   "2-4,1-3",
+			expect: []uint64{2, 3, 4, 1, 2, 3}, // we don't care about dupes
+		},
+		{
+			name: "HugeRange",
+			spec: "1-65536,1-65536",
+			err:  "maximum of 65536 ports can be reserved",
+		},
 	}
 
 	for i := range cases {
 		tc := cases[i]
 		t.Run(tc.name, func(t *testing.T) {
 			results, err := ParsePortRanges(tc.spec)
-			require.Nil(t, results)
-			require.EqualError(t, err, tc.err)
+			if tc.err == "" {
+				must.NoError(t, err)
+				must.Eq(t, tc.expect, results)
+			} else {
+				must.Nil(t, results)
+				must.EqError(t, err, tc.err)
+			}
 		})
 	}
 }

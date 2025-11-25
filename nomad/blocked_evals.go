@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
@@ -749,6 +749,7 @@ func (b *BlockedEvals) EmitStats(period time.Duration, stopCh <-chan struct{}) {
 				labels := []metrics.Label{
 					{Name: "datacenter", Value: k.dc},
 					{Name: "node_class", Value: k.class},
+					{Name: "node_pool", Value: k.nodepool},
 				}
 				metrics.SetGaugeWithLabels([]string{"nomad", "blocked_evals", "cpu"}, float32(v.CPU), labels)
 				metrics.SetGaugeWithLabels([]string{"nomad", "blocked_evals", "memory"}, float32(v.MemoryMB), labels)

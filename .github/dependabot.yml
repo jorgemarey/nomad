@@ -36,17 +36,7 @@ updates:
       day: "sunday"
       time: "09:00"
     assignees:
-      - "@hashicorp/web-platform"
+      - "@hashicorp/web-presence"
     labels:
       - "theme/dependencies"
       - "theme/website"
-  - package-ecosystem: github-actions
-    open-pull-requests-limit: 5
-    directory: /
-    labels:
-      - "theme/dependencies"
-      - "theme/ci"
-    schedule:
-      interval: "weekly"
-      day: "sunday"
-      time: "09:00"

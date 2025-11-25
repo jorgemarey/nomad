@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	golog "log"
@@ -13,13 +14,13 @@ import (
 	"time"
 
 	"github.com/hashicorp/cli"
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-netaddrs"
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/testlog"
 	"github.com/hashicorp/nomad/testutil"
 	"github.com/shoenig/test/must"
-	"github.com/stretchr/testify/require"
 )
 
 const stubAddress = "127.0.0.1"
@@ -92,18 +93,12 @@ func TestRetryJoin_Integration(t *testing.T) {
 		}
 		return true, nil
 	}, func(err error) {
-		t.Fatalf(err.Error())
+		t.Fatal(err)
 	})
 }
 
 func TestRetryJoin_Server_NonCloud(t *testing.T) {
 	ci.Parallel(t)
-	require := require.New(t)
-
-	serverJoin := &ServerJoin{
-		RetryMaxAttempts: 1,
-		RetryJoin:        []string{"127.0.0.1"},
-	}
 
 	var output []string
 
@@ -113,27 +108,24 @@ func TestRetryJoin_Server_NonCloud(t *testing.T) {
 	}
 
 	joiner := retryJoiner{
-		autoDiscover:  autoDiscover{goDiscover: &MockDiscover{}},
-		serverJoin:    mockJoin,
-		serverEnabled: true,
-		logger:        testlog.HCLogger(t),
-		errCh:         make(chan struct{}),
+		autoDiscover: autoDiscover{goDiscover: &MockDiscover{}},
+		joinCfg: &ServerJoin{
+			RetryMaxAttempts: 1,
+			RetryJoin:        []string{"127.0.0.1"},
+		},
+		joinFunc: mockJoin,
+		logger:   testlog.HCLogger(t),
+		errCh:    make(chan struct{}),
 	}
 
-	joiner.RetryJoin(serverJoin)
+	joiner.RetryJoin()
 
-	require.Equal(1, len(output))
-	require.Equal(stubAddress, output[0])
+	must.Eq(t, 1, len(output))
+	must.Eq(t, stubAddress, output[0])
 }
 
 func TestRetryJoin_Server_Cloud(t *testing.T) {
 	ci.Parallel(t)
-	require := require.New(t)
-
-	serverJoin := &ServerJoin{
-		RetryMaxAttempts: 1,
-		RetryJoin:        []string{"provider=aws, tag_value=foo"},
-	}
 
 	var output []string
 
@@ -144,28 +136,25 @@ func TestRetryJoin_Server_Cloud(t *testing.T) {
 
 	mockDiscover := &MockDiscover{}
 	joiner := retryJoiner{
-		autoDiscover:  autoDiscover{goDiscover: mockDiscover},
-		serverJoin:    mockJoin,
-		serverEnabled: true,
-		logger:        testlog.HCLogger(t),
-		errCh:         make(chan struct{}),
+		autoDiscover: autoDiscover{goDiscover: mockDiscover},
+		joinCfg: &ServerJoin{
+			RetryMaxAttempts: 1,
+			RetryJoin:        []string{"provider=aws, tag_value=foo"},
+		},
+		joinFunc: mockJoin,
+		logger:   testlog.HCLogger(t),
+		errCh:    make(chan struct{}),
 	}
 
-	joiner.RetryJoin(serverJoin)
+	joiner.RetryJoin()
 
-	require.Equal(1, len(output))
-	require.Equal("provider=aws, tag_value=foo", mockDiscover.ReceivedConfig)
-	require.Equal(stubAddress, output[0])
+	must.Eq(t, 1, len(output))
+	must.Eq(t, "provider=aws, tag_value=foo", mockDiscover.ReceivedConfig)
+	must.Eq(t, stubAddress, output[0])
 }
 
 func TestRetryJoin_Server_MixedProvider(t *testing.T) {
 	ci.Parallel(t)
-	require := require.New(t)
-
-	serverJoin := &ServerJoin{
-		RetryMaxAttempts: 1,
-		RetryJoin:        []string{"provider=aws, tag_value=foo", "127.0.0.1"},
-	}
 
 	var output []string
 
@@ -176,18 +165,21 @@ func TestRetryJoin_Server_MixedProvider(t *testing.T) {
 
 	mockDiscover := &MockDiscover{}
 	joiner := retryJoiner{
-		autoDiscover:  autoDiscover{goDiscover: mockDiscover},
-		serverJoin:    mockJoin,
-		serverEnabled: true,
-		logger:        testlog.HCLogger(t),
-		errCh:         make(chan struct{}),
+		autoDiscover: autoDiscover{goDiscover: mockDiscover},
+		joinCfg: &ServerJoin{
+			RetryMaxAttempts: 1,
+			RetryJoin:        []string{"provider=aws, tag_value=foo", "127.0.0.1"},
+		},
+		joinFunc: mockJoin,
+		logger:   testlog.HCLogger(t),
+		errCh:    make(chan struct{}),
 	}
 
-	joiner.RetryJoin(serverJoin)
+	joiner.RetryJoin()
 
-	require.Equal(2, len(output))
-	require.Equal("provider=aws, tag_value=foo", mockDiscover.ReceivedConfig)
-	require.Equal(stubAddress, output[0])
+	must.Eq(t, 2, len(output))
+	must.Eq(t, "provider=aws, tag_value=foo", mockDiscover.ReceivedConfig)
+	must.Eq(t, stubAddress, output[0])
 }
 
 func TestRetryJoin_AutoDiscover(t *testing.T) {
@@ -199,30 +191,29 @@ func TestRetryJoin_AutoDiscover(t *testing.T) {
 		return 0, nil
 	}
 
+	mockDiscover := &MockDiscover{}
+	mockNetaddrs := &MockNetaddrs{}
+
 	// 'exec=*'' tests autoDiscover go-netaddr support
 	// 'provider=aws, tag_value=foo' ensures that provider-prefixed configs are routed to go-discover
 	// 'localhost' ensures that bare hostnames are returned as-is
 	// 'localhost2:4648' ensures hostname:port entries are returned as-is
 	// '127.0.0.1:4648' ensures ip:port entiresare returned as-is
 	// '100.100.100.100' ensures that bare IPs are returned as-is
-	serverJoin := &ServerJoin{
-		RetryMaxAttempts: 1,
-		RetryJoin: []string{
-			"exec=echo 127.0.0.1", "provider=aws, tag_value=foo",
-			"localhost", "localhost2:4648", "127.0.0.1:4648", "100.100.100.100"},
-	}
-
-	mockDiscover := &MockDiscover{}
-	mockNetaddrs := &MockNetaddrs{}
 	joiner := retryJoiner{
-		autoDiscover:  autoDiscover{goDiscover: mockDiscover, netAddrs: mockNetaddrs},
-		serverJoin:    mockJoin,
-		serverEnabled: true,
-		logger:        testlog.HCLogger(t),
-		errCh:         make(chan struct{}),
+		autoDiscover: autoDiscover{goDiscover: mockDiscover, netAddrs: mockNetaddrs},
+		joinCfg: &ServerJoin{
+			RetryMaxAttempts: 1,
+			RetryJoin: []string{
+				"exec=echo 127.0.0.1", "provider=aws, tag_value=foo",
+				"localhost", "localhost2:4648", "127.0.0.1:4648", "100.100.100.100"},
+		},
+		joinFunc: mockJoin,
+		logger:   testlog.HCLogger(t),
+		errCh:    make(chan struct{}),
 	}
 
-	joiner.RetryJoin(serverJoin)
+	joiner.RetryJoin()
 
 	must.Eq(t, []string{
 		"127.0.0.1", "127.0.0.1", "localhost", "localhost2:4648",
@@ -234,12 +225,6 @@ func TestRetryJoin_AutoDiscover(t *testing.T) {
 
 func TestRetryJoin_Client(t *testing.T) {
 	ci.Parallel(t)
-	require := require.New(t)
-
-	serverJoin := &ServerJoin{
-		RetryMaxAttempts: 1,
-		RetryJoin:        []string{"127.0.0.1"},
-	}
 
 	var output []string
 
@@ -249,17 +234,139 @@ func TestRetryJoin_Client(t *testing.T) {
 	}
 
 	joiner := retryJoiner{
-		autoDiscover:  autoDiscover{goDiscover: &MockDiscover{}},
-		clientJoin:    mockJoin,
-		clientEnabled: true,
-		logger:        testlog.HCLogger(t),
-		errCh:         make(chan struct{}),
+		autoDiscover: autoDiscover{goDiscover: &MockDiscover{}},
+		joinCfg: &ServerJoin{
+			RetryMaxAttempts: 1,
+			RetryJoin:        []string{"127.0.0.1"},
+		},
+		joinFunc: mockJoin,
+		logger:   testlog.HCLogger(t),
+		errCh:    make(chan struct{}),
 	}
 
-	joiner.RetryJoin(serverJoin)
+	joiner.RetryJoin()
 
-	require.Equal(1, len(output))
-	require.Equal(stubAddress, output[0])
+	must.Eq(t, 1, len(output))
+	must.Eq(t, stubAddress, output[0])
+}
+
+// MockFailDiscover implements the DiscoverInterface interface and can be used
+// for tests that want to purposely fail the discovery process.
+type MockFailDiscover struct {
+	ReceivedConfig string
+}
+
+func (m *MockFailDiscover) Addrs(cfg string, _ *golog.Logger) ([]string, error) {
+	return nil, fmt.Errorf("test: failed discovery %q", cfg)
+}
+func (m *MockFailDiscover) Help() string { return "" }
+func (m *MockFailDiscover) Names() []string {
+	return []string{""}
+}
+
+func TestRetryJoin_RetryMaxAttempts(t *testing.T) {
+	ci.Parallel(t)
+
+	// Create an error channel to pass to the retry joiner. When the retry
+	// attempts have been exhausted, this channel is closed and our only way
+	// to test this apart from inspecting log entries.
+	errCh := make(chan struct{})
+
+	// Create a timeout to protect against problems within the test blocking
+	// for arbitrary long times.
+	timeout, timeoutStop := helper.NewSafeTimer(2 * time.Second)
+	defer timeoutStop()
+
+	var output []string
+
+	joiner := retryJoiner{
+		autoDiscover: autoDiscover{goDiscover: &MockFailDiscover{}},
+		joinCfg:      &ServerJoin{RetryMaxAttempts: 1, RetryJoin: []string{"provider=foo"}},
+		joinFunc: func(s []string) (int, error) {
+			output = s
+			return 0, nil
+		},
+		logger: testlog.HCLogger(t),
+		errCh:  errCh,
+	}
+
+	// Execute the retry join function in a routine, so we can track whether
+	// this returns and exits without close the error channel and thus
+	// indicating retry failure.
+	doneCh := make(chan struct{})
+
+	go func(doneCh chan struct{}) {
+		joiner.RetryJoin()
+		close(doneCh)
+	}(doneCh)
+
+	// The main test; ensure error channel is closed, indicating the retry
+	// limit has been reached.
+	select {
+	case <-errCh:
+		must.Len(t, 0, output)
+	case <-doneCh:
+		t.Fatal("retry join completed without closing error channel")
+	case <-timeout.C:
+		t.Fatal("timeout reached without error channel close")
+	}
+}
+
+func TestRetryJoin_joinFuncFailure(t *testing.T) {
+	// Create an error channel to pass to the retry joiner. When the retry
+	// attempts have been exhausted, this channel is closed and our only way
+	// to test this apart from inspecting log entries.
+	errCh := make(chan struct{})
+
+	// Create an output for logging that can be inspected
+	logOutput := bytes.NewBufferString("")
+
+	// Create a timeout to protect against problems within the test blocking
+	// for arbitrary long times.
+	timeout, timeoutStop := helper.NewSafeTimer(2 * time.Second)
+	defer timeoutStop()
+
+	var output []string
+
+	l := testlog.HCLogger(t)
+	s := hclog.NewSinkAdapter(&hclog.LoggerOptions{
+		Output: logOutput,
+		Level:  hclog.Warn,
+	})
+	l.RegisterSink(s)
+
+	joiner := retryJoiner{
+		autoDiscover: autoDiscover{goDiscover: &MockDiscover{}},
+		joinCfg:      &ServerJoin{RetryMaxAttempts: 1, RetryJoin: []string{"provider=foo"}},
+		joinFunc: func(_ []string) (int, error) {
+			return 0, fmt.Errorf("joinFunc testing error")
+		},
+		logger: l,
+		errCh:  errCh,
+	}
+
+	// Execute the retry join function in a routine, so we can track whether
+	// this returns and exits without close the error channel and thus
+	// indicating retry failure.
+	doneCh := make(chan struct{})
+
+	go func(doneCh chan struct{}) {
+		joiner.RetryJoin()
+		close(doneCh)
+	}(doneCh)
+
+	// The main test; ensure error channel is closed, indicating the retry
+	// limit has been reached.
+	select {
+	case <-errCh:
+		must.Len(t, 0, output)
+	case <-doneCh:
+		t.Fatal("retry join completed without closing error channel")
+	case <-timeout.C:
+		t.Fatal("timeout reached without error channel close")
+	}
+
+	must.StrContains(t, logOutput.String(), "joinFunc testing error")
 }
 
 // MockFailDiscover implements the DiscoverInterface interface and can be used
@@ -467,9 +574,9 @@ func TestRetryJoin_Validate(t *testing.T) {
 		t.Run(scenario.reason, func(t *testing.T) {
 			err := joiner.Validate(scenario.config)
 			if scenario.isValid {
-				require.NoError(t, err)
+				must.NoError(t, err, must.Sprint(scenario.reason))
 			} else {
-				require.Error(t, err)
+				must.Error(t, err, must.Sprint(scenario.reason))
 			}
 		})
 	}

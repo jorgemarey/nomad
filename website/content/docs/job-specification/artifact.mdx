@@ -1,13 +1,11 @@
 ---
 layout: docs
-page_title: artifact Block - Job Specification
+page_title: artifact block in the job specification
 description: |-
-  The "artifact" block instructs Nomad to fetch and unpack a remote resource,
-  such as a file, tarball, or binary, and permits downloading artifacts from a
-  variety of locations using a URL as the input source.
+  Configure fetching a remote resource in the `artifact` block of the Nomad job specification. Set the artifact destination, the source URL, HTTP headers, fetch options, mode, and whether Nomad should recursively chown the downloaded artifact. Review examples for downloading a file, fetching from a Git repository, unarchiving, verifying checksums, and downloading from an AWS S3-compatible bucket.
 ---
 
-# `artifact` Block
+# `artifact` block in the job specification
 
 <Placement groups={['job', 'group', 'task', 'artifact']} />
 
@@ -36,7 +34,7 @@ Nomad supports downloading `http`, `https`, `git`, `hg` and `S3` artifacts. If
 these artifacts are archived (`zip`, `tgz`, `bz2`, `xz`), they are
 automatically unarchived before the starting the task.
 
-## `artifact` Parameters
+## Parameters
 
 - `destination` `(string: "local/")` - Specifies the directory path to
   download the artifact, relative to the root of the [task's working
@@ -63,9 +61,17 @@ automatically unarchived before the starting the task.
   See [`go-getter`][go-getter] for details.
 
 - `chown` `(bool: false)` - Specifies whether Nomad should recursively `chown`
-  the downloaded artifact to be owned by the [`task.user`][task_user] uid and gid.
+  the downloaded artifact to be owned by the [`task.user`][task_user] uid and
+  gid.
 
-## Operation Limits
+## Environment
+
+The `artifact` downloader by default does not have access to the environment
+variables set for the Nomad client. Manage inheritance of environment variables
+with the [`artifact.set_environment_variables`][client_artifact] client
+configuration.
+
+## Operation limits
 
 The client [`artifact`][client_artifact] configuration can set limits to
 specific artifact operations to prevent excessive data download or operation
@@ -74,12 +80,12 @@ time.
 If a task's `artifact` retrieval exceeds one of those limits, the task will be
 interrupted and fail to start. Refer to the task events for more information.
 
-## `artifact` Examples
+## Examples
 
 The following examples only show the `artifact` blocks. Remember that the
 `artifact` block is only valid in the placements listed above.
 
-### Download File
+### Download file
 
 This example downloads the artifact from the provided URL and places it in
 `local/file.txt`. The `local/` path is relative to the [task's working
@@ -130,7 +136,7 @@ artifact {
 
 To download from a private repo, sshkey needs to be set. The key must be
 base64-encoded string. On Linux, you can run `base64 -w0 <file>` to encode the
-file. Or use [HCL2](/nomad/docs/job-specification/hcl2)
+file. Or use [HCL2](/nomad/docs/reference/hcl2)
 expressions to read and encode the key from a file on your machine:
 
 ```hcl
@@ -163,7 +169,7 @@ artifact {
 }
 ```
 
-### Download and Unarchive
+### Download and unarchive
 
 This example downloads and unarchives the result in `local/file`. Because the
 source URL is an archive extension, Nomad will automatically decompress it:
@@ -185,7 +191,7 @@ artifact {
 }
 ```
 
-### Download and Verify Checksums
+### Download and verify checksums
 
 This example downloads an artifact and verifies the resulting artifact's
 checksum before proceeding. If the checksum is invalid, an error will be
@@ -201,7 +207,7 @@ artifact {
 }
 ```
 
-### Download from an S3-compatible Bucket
+### Download from an S3-compatible bucket
 
 These examples download artifacts from Amazon S3. There are several different
 types of [S3 bucket addressing][s3-bucket-addr] and [S3 region-specific
@@ -268,11 +274,6 @@ artifact {
 }
 ```
 
-## Environment
-
-The `artifact` downloader by default does not have access to the environment variables
-set for the Nomad client. Inheritance of environment variables can be managed through the [`artifact.set_environment_variables`][client_artifact]
-client configuration.
 
 [client_artifact]: /nomad/docs/configuration/client#artifact-parameters
 [go-getter]: https://github.com/hashicorp/go-getter 'HashiCorp go-getter Library'
@@ -281,7 +282,7 @@ client configuration.
 [s3-bucket-addr]: http://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro 'Amazon S3 Bucket Addressing'
 [s3-region-endpoints]: http://docs.aws.amazon.com/general/latest/gr/rande.html#s3_region 'Amazon S3 Region Endpoints'
 [iam-instance-profiles]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-ec2_instance-profiles.html 'EC2 IAM instance profiles'
-[task's working directory]: /nomad/docs/runtime/environment#task-directories 'Task Directories'
+[task's working directory]: /nomad/docs/reference/runtime-environment-settings#task-directories 'Task Directories'
 [task_user]: /nomad/docs/job-specification/task#user
 [filesystem internals]: /nomad/docs/concepts/filesystem#templates-artifacts-and-dispatch-payloads
 [do_spaces]: https://www.digitalocean.com/products/spaces

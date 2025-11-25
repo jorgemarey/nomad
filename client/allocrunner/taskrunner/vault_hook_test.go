@@ -99,8 +99,8 @@ func setupTestVaultHook(t *testing.T, config *vaultHookConfig) *vaultHook {
 	if config.widmgr == nil {
 		db := cstate.NewMemDB(config.logger)
 		signer := widmgr.NewMockWIDSigner(config.task.Identities)
-		envBuilder := taskenv.NewBuilder(mock.Node(), config.alloc, nil, "global")
-		config.widmgr = widmgr.NewWIDMgr(signer, config.alloc, db, config.logger, envBuilder)
+		allocEnv := taskenv.NewBuilder(mock.Node(), config.alloc, nil, "global").Build()
+		config.widmgr = widmgr.NewWIDMgr(signer, config.alloc, db, config.logger, allocEnv)
 		err := config.widmgr.Run()
 		must.NoError(t, err)
 	}
@@ -117,18 +117,8 @@ func TestTaskRunner_VaultHook(t *testing.T) {
 		configs            map[string]*sconfig.VaultConfig
 		configNonrenewable bool
 		expectRole         string
-		expectLegacy       bool
 		expectNoRenew      bool
 	}{
-		{
-			name: "legacy flow",
-			task: &structs.Task{
-				Vault: &structs.Vault{
-					Cluster: structs.VaultDefaultCluster,
-				},
-			},
-			expectLegacy: true,
-		},
 		{
 			name: "jwt flow",
 			task: &structs.Task{
@@ -284,22 +274,18 @@ func TestTaskRunner_VaultHook(t *testing.T) {
 			// Token must have been derived.
 			var token string
 			client := hook.client.(*vaultclient.MockVaultClient)
-			if tc.expectLegacy {
-				tokens := client.LegacyTokens()
-				must.MapLen(t, 1, tokens)
-				token = tokens[tc.task.Name]
-			} else {
-				tokens := client.JWTTokens()
-				must.MapLen(t, 1, tokens)
 
-				swid, err := hook.widmgr.Get(structs.WIHandle{
-					IdentityName:       tc.task.Vault.IdentityName(),
-					WorkloadIdentifier: tc.task.Name,
-					WorkloadType:       structs.WorkloadTypeTask,
-				})
-				must.NoError(t, err)
-				token = tokens[swid.JWT]
-			}
+			tokens := client.JWTTokens()
+			must.MapLen(t, 1, tokens)
+
+			swid, err := hook.widmgr.Get(structs.WIHandle{
+				IdentityName:       tc.task.Vault.IdentityName(),
+				WorkloadIdentifier: tc.task.Name,
+				WorkloadType:       structs.WorkloadTypeTask,
+			})
+			must.NoError(t, err)
+			token = tokens[swid.JWT]
+
 			must.NotEq(t, "", token)
 
 			// Token must be derived with correct role.
@@ -443,7 +429,6 @@ func TestTaskRunner_VaultHook_recover(t *testing.T) {
 			// Verify token was recovered and not derived.
 			client := hook.client.(*vaultclient.MockVaultClient)
 			must.MapLen(t, 0, client.JWTTokens())
-			must.MapLen(t, 0, client.LegacyTokens())
 		})
 	}
 }
@@ -475,10 +460,10 @@ func TestTaskRunner_VaultHook_deriveError(t *testing.T) {
 
 		// Set unrecoverable error.
 		mockVaultClient.SetDeriveTokenWithJWTFn(
-			func(_ context.Context, _ vaultclient.JWTLoginRequest) (string, bool, error) {
+			func(_ context.Context, _ vaultclient.JWTLoginRequest) (string, bool, int, error) {
 				// Cancel the context to simulate the task being killed.
 				cancel()
-				return "", false, structs.NewRecoverableError(errors.New("unrecoverable test error"), false)
+				return "", false, 0, structs.NewRecoverableError(errors.New("unrecoverable test error"), false)
 			})
 
 		err := hook.Prestart(ctx, req, &resp)
@@ -524,16 +509,16 @@ func TestTaskRunner_VaultHook_deriveError(t *testing.T) {
 
 		// Set recoverable error.
 		mockVaultClient.SetDeriveTokenWithJWTFn(
-			func(_ context.Context, _ vaultclient.JWTLoginRequest) (string, bool, error) {
-				return "", false, structs.NewRecoverableError(errors.New("recoverable test error"), true)
+			func(_ context.Context, _ vaultclient.JWTLoginRequest) (string, bool, int, error) {
+				return "", false, 0, structs.NewRecoverableError(errors.New("recoverable test error"), true)
 			})
 
 		go func() {
 			// Wait a bit for the first error then fix token renewal.
 			time.Sleep(time.Second)
 			mockVaultClient.SetDeriveTokenWithJWTFn(
-				func(_ context.Context, _ vaultclient.JWTLoginRequest) (string, bool, error) {
-					return "secret", true, nil
+				func(_ context.Context, _ vaultclient.JWTLoginRequest) (string, bool, int, error) {
+					return "secret", true, 30, nil
 				})
 
 		}()
@@ -570,8 +555,8 @@ func TestTaskRunner_VaultHook_deriveError(t *testing.T) {
 
 		// Derive predictable token and fail renew request.
 		mockVaultClient.SetDeriveTokenWithJWTFn(
-			func(_ context.Context, _ vaultclient.JWTLoginRequest) (string, bool, error) {
-				return "secret", true, nil
+			func(_ context.Context, _ vaultclient.JWTLoginRequest) (string, bool, int, error) {
+				return "secret", true, 30, nil
 			})
 		mockVaultClient.SetRenewTokenError("secret", errors.New("test error"))
 

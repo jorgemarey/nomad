@@ -1,13 +1,12 @@
 ---
 layout: docs
-page_title: migrate Block - Job Specification
+page_title: migrate block in the job specification
 description: |-
-  The "migrate" block specifies the group's migrate strategy. The migrate
-  strategy is used to control the job's behavior when it is being migrated off
+  Define the group's allocation migration strategy in the `migrate` block of the Nomad job specification. The migration strategy is used to control the job's behavior when it is being migrated off
   of a draining node.
 ---
 
-# `migrate` Block
+# `migrate` block in the job specification
 
 <Placement
   groups={[
@@ -50,10 +49,10 @@ block for allocations on that node. The `migrate` block is for job authors to
 define how their services should be migrated, while the node drain deadline is
 for system operators to put hard limits on how long a drain may take.
 
-See the [Workload Migration Guide](/nomad/tutorials/manage-clusters/node-drain) for details
+See the [Workload Migration Guide](/nomad/docs/manage/migrate-workloads) for details
 on node draining.
 
-## `migrate` Parameters
+## Parameters
 
 - `max_parallel` `(int: 1)` - Specifies the number of allocations that can be
   migrated at the same time. This number must be less than the total
@@ -81,10 +80,10 @@ on node draining.
   automatically transitioned to unhealthy. This is specified using a label
   suffix like "2m" or "1h".
 
-[checks]: /nomad/docs/job-specification/service#check-parameters
+[checks]: /nomad/docs/job-specification/service#check
 [count]: /nomad/docs/job-specification/group#count
-[drain]: /nomad/docs/commands/node/drain
-[deadline]: /nomad/docs/commands/node/drain#deadline
+[drain]: /nomad/commands/node/drain
+[deadline]: /nomad/commands/node/drain#deadline
 [replaces]: /nomad/docs/job-specification/disconnect#replace
 [`restart`]: /nomad/docs/job-specification/restart
 [reschedules]: /nomad/docs/job-specification/reschedule

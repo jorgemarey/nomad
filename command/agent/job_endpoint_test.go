@@ -1964,9 +1964,8 @@ func TestHTTP_JobDispatch(t *testing.T) {
 			},
 		}
 		var resp structs.JobRegisterResponse
-		if err := s.Agent.RPC("Job.Register", &args, &resp); err != nil {
-			t.Fatalf("err: %v", err)
-		}
+		err := s.Agent.RPC("Job.Register", &args, &resp)
+		must.NoError(t, err)
 
 		// Make the request
 		respW := httptest.NewRecorder()
@@ -1981,26 +1980,172 @@ func TestHTTP_JobDispatch(t *testing.T) {
 
 		// Make the HTTP request
 		req2, err := http.NewRequest(http.MethodPut, "/v1/job/"+job.ID+"/dispatch", buf)
-		if err != nil {
-			t.Fatalf("err: %v", err)
-		}
+		must.NoError(t, err)
 		respW.Flush()
 
 		// Make the request
 		obj, err := s.Server.JobSpecificRequest(respW, req2)
-		if err != nil {
-			t.Fatalf("err: %v", err)
-		}
+		must.NoError(t, err)
 
 		// Check the response
 		dispatch := obj.(structs.JobDispatchResponse)
-		if dispatch.EvalID == "" {
-			t.Fatalf("bad: %v", dispatch)
+		must.NotEq(t, dispatch.EvalID, "")
+		must.NotEq(t, dispatch.DispatchedJobID, "")
+	})
+}
+
+func TestHTTP_JobDispatchPriority(t *testing.T) {
+	ci.Parallel(t)
+	defaultPriority := 50
+	validPriority := 90
+	invalidPriority := -1
+
+	testCases := []struct {
+		name             string
+		dispatchReq      *structs.JobDispatchRequest
+		expectedPriority int
+		expectedErr      bool
+	}{
+		{
+			name: "no priority",
+			dispatchReq: &structs.JobDispatchRequest{
+				WriteRequest: structs.WriteRequest{
+					Region:           "global",
+					Namespace:        structs.DefaultNamespace,
+					IdempotencyToken: "foo",
+				},
+			},
+			expectedPriority: defaultPriority,
+		},
+		{
+			name: "set invalid priority",
+			dispatchReq: &structs.JobDispatchRequest{
+				WriteRequest: structs.WriteRequest{
+					Region:           "global",
+					Namespace:        structs.DefaultNamespace,
+					IdempotencyToken: "foo",
+				},
+				Priority: invalidPriority,
+			},
+			expectedPriority: invalidPriority,
+			expectedErr:      true,
+		},
+		{
+			name: "set valid priority",
+			dispatchReq: &structs.JobDispatchRequest{
+				WriteRequest: structs.WriteRequest{
+					Region:           "global",
+					Namespace:        structs.DefaultNamespace,
+					IdempotencyToken: "foo",
+				},
+				Priority: validPriority,
+			},
+			expectedPriority: validPriority,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			httpTest(t, nil, func(s *TestAgent) {
+
+				// Create the parameterized job
+				job := mock.BatchJob()
+				job.ParameterizedJob = &structs.ParameterizedJobConfig{}
+
+				args := structs.JobRegisterRequest{
+					Job: job,
+					WriteRequest: structs.WriteRequest{
+						Region:    "global",
+						Namespace: structs.DefaultNamespace,
+					},
+				}
+
+				var resp structs.JobRegisterResponse
+				err := s.Agent.RPC("Job.Register", &args, &resp)
+				must.NoError(t, err)
+
+				// Make the request
+				respW := httptest.NewRecorder()
+				args2 := tc.dispatchReq
+				buf := encodeReq(args2)
+
+				// Make the HTTP request
+				req2, err := http.NewRequest(http.MethodPut, "/v1/job/"+job.ID+"/dispatch", buf)
+				must.NoError(t, err)
+				respW.Flush()
+
+				// Make the request
+				obj, err := s.Server.JobSpecificRequest(respW, req2)
+				if tc.expectedErr {
+					must.ErrorContains(t, err, "job priority must be between")
+					return
+				} else {
+					must.NoError(t, err)
+				}
+
+				// Check the response
+				dispatch := obj.(structs.JobDispatchResponse)
+				must.NotEq(t, dispatch.EvalID, "")
+				must.NotEq(t, dispatch.DispatchedJobID, "")
+				must.NotEq(t, job.ID, dispatch.DispatchedJobID)
+
+				//Check job priority
+
+				// Make the HTTP request
+				bufInfo := encodeReq(structs.Job{ParentID: job.ID})
+				reqInfo, err := http.NewRequest(http.MethodGet, "/v1/job/"+dispatch.DispatchedJobID, bufInfo)
+				must.NoError(t, err)
+
+				// Make the request
+				respInfo := httptest.NewRecorder()
+				objInfo, err := s.Server.JobSpecificRequest(respInfo, reqInfo)
+				must.NoError(t, err)
+				respInfo.Flush()
+
+				// Check the response
+				dispatchJob := objInfo.(*structs.Job)
+				must.Eq(t, tc.expectedPriority, dispatchJob.Priority)
+			})
+		})
+	}
+}
+
+func TestHTTP_JobDispatchPayload(t *testing.T) {
+	ci.Parallel(t)
+	httpTest(t, nil, func(s *TestAgent) {
+		// Create the parameterized job
+		job := mock.BatchJob()
+		job.ParameterizedJob = &structs.ParameterizedJobConfig{
+			Payload: "required",
 		}
 
-		if dispatch.DispatchedJobID == "" {
-			t.Fatalf("bad: %v", dispatch)
-		}
+		// Register the job
+		var resp structs.JobRegisterResponse
+		must.NoError(t, s.Agent.RPC("Job.Register",
+			&structs.JobRegisterRequest{
+				Job: job,
+				WriteRequest: structs.WriteRequest{
+					Region:    "global",
+					Namespace: structs.DefaultNamespace,
+				},
+			}, &resp))
+
+		// Build the request
+		url := "/v1/job/" + job.ID + "/dispatch/payload"
+		body := bytes.NewReader([]byte("any body at all"))
+		req, err := http.NewRequest(http.MethodPut, url, body)
+		must.NoError(t, err)
+
+		// Make the request
+		respW := httptest.NewRecorder()
+		obj, err := s.Server.JobSpecificRequest(respW, req)
+		must.NoError(t, err)
+		must.Eq(t, http.StatusOK, respW.Result().StatusCode)
+
+		// Check the response
+		dispatch := obj.(structs.JobDispatchResponse)
+		must.NotEq(t, "", dispatch.EvalID, must.Sprintf("expect EvalID in: %v", dispatch))
+		must.NotEq(t, "", dispatch.DispatchedJobID, must.Sprintf("expect DispatchedJobID in: %v", dispatch))
 	})
 }
 
@@ -2784,6 +2929,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 								FailuresBeforeWarning:  2,
 							},
 						},
+						Kind: "api-gateway",
 						Connect: &api.ConsulConnect{
 							Native: false,
 							SidecarService: &api.ConsulSidecarService{
@@ -2800,7 +2946,6 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 				Disconnect: &api.DisconnectStrategy{
 					LostAfter: pointer.Of(30 * time.Second),
 				},
-				MaxClientDisconnect: pointer.Of(30 * time.Second),
 				Tasks: []*api.Task{
 					{
 						Name:   "task1",
@@ -3018,8 +3163,6 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 				},
 			},
 		},
-		ConsulToken:       pointer.Of("abc123"),
-		VaultToken:        pointer.Of("def456"),
 		VaultNamespace:    pointer.Of("ghi789"),
 		Status:            pointer.Of("status"),
 		StatusDescription: pointer.Of("status_desc"),
@@ -3114,7 +3257,6 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 						Operand: "z",
 					},
 				},
-				PreventRescheduleOnLost: false,
 				Affinities: []*structs.Affinity{
 					{
 						LTarget: "x",
@@ -3200,6 +3342,7 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 							Passing: 5,
 							Warning: 1,
 						},
+						Kind:     "api-gateway",
 						OnUpdate: structs.OnUpdateRequireHealthy,
 						Checks: []*structs.ServiceCheck{
 							{
@@ -3249,7 +3392,6 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 					Replace:   pointer.Of(true),
 					Reconcile: structs.ReconcileOptionBestScore,
 				},
-				MaxClientDisconnect: pointer.Of(30 * time.Second),
 				Tasks: []*structs.Task{
 					{
 						Name:   "task1",
@@ -3435,7 +3577,6 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 							Role:                 "nomad-task",
 							Namespace:            "ns1",
 							Cluster:              structs.VaultDefaultCluster,
-							Policies:             []string{"a", "b", "c"},
 							Env:                  true,
 							DisableFile:          false,
 							ChangeMode:           "c",
@@ -3476,9 +3617,6 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 				},
 			},
 		},
-
-		ConsulToken: "abc123",
-		VaultToken:  "def456",
 	}
 
 	structsJob := ApiJobToStructJob(apiJob)
@@ -3628,9 +3766,8 @@ func TestJobs_ApiJobToStructsJob(t *testing.T) {
 		},
 		TaskGroups: []*structs.TaskGroup{
 			{
-				Name:                    "group1",
-				Count:                   5,
-				PreventRescheduleOnLost: false,
+				Name:  "group1",
+				Count: 5,
 				Constraints: []*structs.Constraint{
 					{
 						LTarget: "x",

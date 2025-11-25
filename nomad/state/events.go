@@ -41,12 +41,20 @@ var MsgTypeEvents = map[structs.MessageType]string{
 	structs.ServiceRegistrationUpsertRequestType:         structs.TypeServiceRegistration,
 	structs.ServiceRegistrationDeleteByIDRequestType:     structs.TypeServiceDeregistration,
 	structs.ServiceRegistrationDeleteByNodeIDRequestType: structs.TypeServiceDeregistration,
+	structs.HostVolumeRegisterRequestType:                structs.TypeHostVolumeRegistered,
+	structs.HostVolumeDeleteRequestType:                  structs.TypeHostVolumeDeleted,
+	structs.CSIVolumeRegisterRequestType:                 structs.TypeCSIVolumeRegistered,
+	structs.CSIVolumeDeregisterRequestType:               structs.TypeCSIVolumeDeregistered,
+	structs.CSIVolumeClaimRequestType:                    structs.TypeCSIVolumeClaim,
 }
 
 func eventsFromChanges(tx ReadTxn, changes Changes) *structs.Events {
 	eventType, ok := MsgTypeEvents[changes.MsgType]
 	if !ok {
-		return nil
+		eventType, ok = EnterpriseMsgTypeEvents[changes.MsgType]
+		if !ok {
+			return nil
+		}
 	}
 
 	var events []structs.Event
@@ -182,8 +190,60 @@ func eventFromChange(change memdb.Change) (structs.Event, bool) {
 					Service: before,
 				},
 			}, true
+		case TableHostVolumes:
+			before, ok := change.Before.(*structs.HostVolume)
+			if !ok {
+				return structs.Event{}, false
+			}
+			return structs.Event{
+				Topic: structs.TopicHostVolume,
+				FilterKeys: []string{
+					before.ID,
+					before.Name,
+					before.PluginID,
+				},
+				Namespace: before.Namespace,
+				Payload: &structs.HostVolumeEvent{
+					Volume: before,
+				},
+			}, true
+		case TableCSIVolumes:
+			before, ok := change.Before.(*structs.CSIVolume)
+			if !ok {
+				return structs.Event{}, false
+			}
+			return structs.Event{
+				Topic: structs.TopicCSIVolume,
+				Key:   before.ID,
+				FilterKeys: []string{
+					before.ID,
+					before.Name,
+					before.PluginID,
+				},
+				Namespace: before.Namespace,
+				Payload: &structs.CSIVolumeEvent{
+					Volume: before,
+				},
+			}, true
+		case TableCSIPlugins:
+			// note: there is no CSIPlugin event type, because CSI plugins don't
+			// have their own write RPCs; they are always created/removed via
+			// node updates
+			before, ok := change.Before.(*structs.CSIPlugin)
+			if !ok {
+				return structs.Event{}, false
+			}
+			return structs.Event{
+				Topic:      structs.TopicCSIPlugin,
+				Key:        before.ID,
+				FilterKeys: []string{before.ID},
+				Payload: &structs.CSIPluginEvent{
+					Plugin: before,
+				},
+			}, true
+		default:
+			return enterpriseEventFromChangeDeleted(change)
 		}
-		return structs.Event{}, false
 	}
 
 	switch change.Table {
@@ -360,7 +420,59 @@ func eventFromChange(change memdb.Change) (structs.Event, bool) {
 				Service: after,
 			},
 		}, true
+	case TableHostVolumes:
+		after, ok := change.After.(*structs.HostVolume)
+		if !ok {
+			return structs.Event{}, false
+		}
+		return structs.Event{
+			Topic: structs.TopicHostVolume,
+			Key:   after.ID,
+			FilterKeys: []string{
+				after.ID,
+				after.Name,
+				after.PluginID,
+			},
+			Namespace: after.Namespace,
+			Payload: &structs.HostVolumeEvent{
+				Volume: after,
+			},
+		}, true
+	case TableCSIVolumes:
+		after, ok := change.After.(*structs.CSIVolume)
+		if !ok {
+			return structs.Event{}, false
+		}
+		return structs.Event{
+			Topic: structs.TopicCSIVolume,
+			Key:   after.ID,
+			FilterKeys: []string{
+				after.ID,
+				after.Name,
+				after.PluginID,
+			},
+			Namespace: after.Namespace,
+			Payload: &structs.CSIVolumeEvent{
+				Volume: after,
+			},
+		}, true
+	case TableCSIPlugins:
+		// note: there is no CSIPlugin event type, because CSI plugins don't
+		// have their own write RPCs; they are always created/removed via
+		// node updates
+		after, ok := change.After.(*structs.CSIPlugin)
+		if !ok {
+			return structs.Event{}, false
+		}
+		return structs.Event{
+			Topic:      structs.TopicCSIPlugin,
+			Key:        after.ID,
+			FilterKeys: []string{after.ID},
+			Payload: &structs.CSIPluginEvent{
+				Plugin: after,
+			},
+		}, true
+	default:
+		return enterpriseEventFromChange(change)
 	}
-
-	return structs.Event{}, false
 }

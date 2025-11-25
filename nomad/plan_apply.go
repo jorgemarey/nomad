@@ -9,9 +9,9 @@ import (
 	"runtime"
 	"time"
 
-	metrics "github.com/armon/go-metrics"
 	log "github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/state"
@@ -806,7 +806,7 @@ func isValidForDisconnectedNode(plan *structs.Plan, nodeID string) bool {
 // as non reschedulables when lost or if the allocs are being updated to lost.
 func isValidForDownNode(plan *structs.Plan, nodeID string) bool {
 	for _, alloc := range plan.NodeAllocation[nodeID] {
-		if !(alloc.ClientStatus == structs.AllocClientStatusUnknown && alloc.PreventRescheduleOnDisconnect()) &&
+		if !(alloc.ClientStatus == structs.AllocClientStatusUnknown && alloc.PreventReplaceOnDisconnect()) &&
 			(alloc.ClientStatus != structs.AllocClientStatusLost) {
 			return false
 		}

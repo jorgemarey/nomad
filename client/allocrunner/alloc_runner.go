@@ -12,6 +12,7 @@ import (
 
 	"github.com/armon/go-metrics"
 	log "github.com/hashicorp/go-hclog"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/nomad/client/allocdir"
 	"github.com/hashicorp/nomad/client/allocrunner/hookstats"
@@ -91,10 +92,6 @@ type allocRunner struct {
 	// consulProxiesClientFunc gets a client used by the envoy version hook for
 	// looking up supported envoy versions of the consul agent.
 	consulProxiesClientFunc consul.SupportedProxiesAPIFunc
-
-	// sidsClient is the client used by the service identity hook for
-	// managing SI tokens
-	sidsClient consul.ServiceIdentityAPI
 
 	// vaultClientFunc is used to get the client used to manage Vault tokens
 	vaultClientFunc vaultclient.VaultClientFunc
@@ -249,7 +246,6 @@ func NewAllocRunner(config *config.AllocRunnerConfig) (interfaces.AllocRunner, e
 		clientBaseLabels:         config.BaseLabels,
 		consulServicesHandler:    config.ConsulServices,
 		consulProxiesClientFunc:  config.ConsulProxiesFunc,
-		sidsClient:               config.ConsulSI,
 		vaultClientFunc:          config.VaultFunc,
 		tasks:                    make(map[string]*taskrunner.TaskRunner, len(tg.Tasks)),
 		waitCh:                   make(chan struct{}),
@@ -302,17 +298,15 @@ func NewAllocRunner(config *config.AllocRunnerConfig) (interfaces.AllocRunner, e
 	ar.shutdownDelayCtx = shutdownDelayCtx
 	ar.shutdownDelayCancelFn = shutdownDelayCancel
 
-	// Create a *taskenv.Builder for the allocation so the WID manager can
-	// interpolate services with the allocation and tasks as needed
-	envBuilder := taskenv.NewBuilder(
+	allocEnv := taskenv.NewBuilder(
 		config.ClientConfig.Node,
 		ar.Alloc(),
 		nil,
 		config.ClientConfig.Region,
-	).SetAllocDir(ar.allocDir.AllocDirPath())
+	).SetAllocDir(ar.allocDir.AllocDirPath()).Build()
 
 	// initialize the workload identity manager
-	widmgr := widmgr.NewWIDMgr(ar.widsigner, alloc, ar.stateDB, ar.logger, envBuilder)
+	widmgr := widmgr.NewWIDMgr(ar.widsigner, alloc, ar.stateDB, ar.logger, allocEnv)
 	ar.widmgr = widmgr
 
 	// Initialize the runners hooks.
@@ -343,7 +337,6 @@ func (ar *allocRunner) initTaskRunners(tasks []*structs.Task) error {
 			DynamicRegistry:     ar.dynamicRegistry,
 			ConsulServices:      ar.consulServicesHandler,
 			ConsulProxiesFunc:   ar.consulProxiesClientFunc,
-			ConsulSI:            ar.sidsClient,
 			VaultFunc:           ar.vaultClientFunc,
 			DeviceStatsReporter: ar.deviceStatsReporter,
 			CSIManager:          ar.csiManager,
@@ -737,14 +730,41 @@ func (ar *allocRunner) killTasks() map[string]*structs.TaskState {
 	// run alloc prekill hooks
 	ar.preKillHooks()
 
+	// generate task event for given task runner
+	taskEventFn := func(tr *taskrunner.TaskRunner) *structs.TaskEvent {
+		// if the task has already finished, do not
+		// generate an event
+		if !tr.TaskState().FinishedAt.IsZero() {
+			return nil
+		}
+
+		te := structs.NewTaskEvent(structs.TaskKilling).
+			SetKillTimeout(tr.Task().KillTimeout, ar.clientConfig.MaxKillTimeout)
+
+		// if the task is not set failed, the job type is batch, and the
+		// allocation is being migrated then mark the task as failed. this
+		// ensures the task is recreated if no eligible nodes are immediately
+		// available.
+		if !tr.TaskState().Failed &&
+			ar.alloc.Job.Type == structs.JobTypeBatch &&
+			ar.alloc.DesiredTransition.Migrate != nil &&
+			*ar.alloc.DesiredTransition.Migrate {
+
+			ar.logger.Trace("marking migrating batch job task failed on kill", "task_name", tr.Task().Name)
+			te.SetFailsTask()
+		}
+
+		return te
+	}
+
 	// Kill leader first, synchronously
 	for name, tr := range ar.tasks {
 		if !tr.IsLeader() {
 			continue
 		}
 
-		taskEvent := structs.NewTaskEvent(structs.TaskKilling)
-		taskEvent.SetKillTimeout(tr.Task().KillTimeout, ar.clientConfig.MaxKillTimeout)
+		taskEvent := taskEventFn(tr)
+
 		err := tr.Kill(context.TODO(), taskEvent)
 		if err != nil && err != taskrunner.ErrTaskNotRunning {
 			ar.logger.Warn("error stopping leader task", "error", err, "task_name", name)
@@ -766,8 +786,8 @@ func (ar *allocRunner) killTasks() map[string]*structs.TaskState {
 		wg.Add(1)
 		go func(name string, tr *taskrunner.TaskRunner) {
 			defer wg.Done()
-			taskEvent := structs.NewTaskEvent(structs.TaskKilling)
-			taskEvent.SetKillTimeout(tr.Task().KillTimeout, ar.clientConfig.MaxKillTimeout)
+			taskEvent := taskEventFn(tr)
+
 			err := tr.Kill(context.TODO(), taskEvent)
 			if err != nil && err != taskrunner.ErrTaskNotRunning {
 				ar.logger.Warn("error stopping task", "error", err, "task_name", name)
@@ -790,8 +810,8 @@ func (ar *allocRunner) killTasks() map[string]*structs.TaskState {
 		wg.Add(1)
 		go func(name string, tr *taskrunner.TaskRunner) {
 			defer wg.Done()
-			taskEvent := structs.NewTaskEvent(structs.TaskKilling)
-			taskEvent.SetKillTimeout(tr.Task().KillTimeout, ar.clientConfig.MaxKillTimeout)
+			taskEvent := taskEventFn(tr)
+
 			err := tr.Kill(context.TODO(), taskEvent)
 			if err != nil && err != taskrunner.ErrTaskNotRunning {
 				ar.logger.Warn("error stopping sidecar task", "error", err, "task_name", name)

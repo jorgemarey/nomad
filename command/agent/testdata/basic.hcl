@@ -95,6 +95,7 @@ client {
   gc_disk_usage_threshold  = 82
   gc_inode_usage_threshold = 91
   gc_max_allocs            = 50
+  gc_volumes_on_node_gc    = true
   no_host_uuid             = false
   disable_remote_exec      = true
 
@@ -143,6 +144,7 @@ server {
   event_buffer_size             = 200
   job_default_priority          = 100
   job_max_priority              = 200
+  start_timeout                 = "1m"
 
   plan_rejection_tracker {
     enabled        = true
@@ -270,10 +272,7 @@ consul {
 
 vault {
   address               = "127.0.0.1:9500"
-  allow_unauthenticated = true
-  task_token_ttl        = "1s"
   enabled               = false
-  token                 = "12345"
   ca_file               = "/path/to/ca/file"
   ca_path               = "/path/to/ca"
   cert_file             = "/path/to/cert/file"
@@ -350,8 +349,9 @@ reporting {
     enabled = true
   }
 
-  address         = "http://localhost:8080"
-  export_interval = "15m"
+  address                 = "http://localhost:8080"
+  export_interval         = "15m"
+  snapshot_retention_time = "24h"
 }
 
 keyring "awskms" {

@@ -25,6 +25,9 @@ func testServer(t *testing.T, runClient bool, cb func(*agent.Config)) (*agent.Te
 	a := agent.NewTestAgent(t, t.Name(), func(config *agent.Config) {
 		config.Client.Enabled = runClient
 
+		// Disable UI hints in test by default
+		config.UI.ShowCLIHints = pointer.Of(false)
+
 		if cb != nil {
 			cb(config)
 		}
@@ -71,7 +74,11 @@ func testJob(jobID string) *api.Job {
 		AddTask(task).
 		RequireDisk(&api.EphemeralDisk{
 			SizeMB: pointer.Of(20),
-		})
+		}).ScalingPolicy(&api.ScalingPolicy{
+		Min:     pointer.Of(int64(1)),
+		Max:     pointer.Of(int64(5)),
+		Enabled: pointer.Of(true),
+	})
 
 	job := api.NewBatchJob(jobID, jobID, "global", 1).
 		AddDatacenter("dc1").
@@ -98,7 +105,30 @@ func testNomadServiceJob(jobID string) *api.Job {
 	}}
 	return j
 }
+func testServiceJob(jobID string) *api.Job {
+	task := api.NewTask("task1", "mock_driver").
+		SetConfig("exit_code", 0).
+		Require(&api.Resources{
+			MemoryMB: pointer.Of(256),
+			CPU:      pointer.Of(100),
+		}).
+		SetLogConfig(&api.LogConfig{
+			MaxFiles:      pointer.Of(1),
+			MaxFileSizeMB: pointer.Of(2),
+		})
 
+	group := api.NewTaskGroup("group1", 1).
+		AddTask(task).
+		RequireDisk(&api.EphemeralDisk{
+			SizeMB: pointer.Of(20),
+		})
+
+	job := api.NewServiceJob(jobID, jobID, "global", 1).
+		AddDatacenter("dc1").
+		AddTaskGroup(group)
+
+	return job
+}
 func testMultiRegionJob(jobID, region, datacenter string) *api.Job {
 	task := api.NewTask("task1", "mock_driver").
 		SetConfig("kill_after", "10s").

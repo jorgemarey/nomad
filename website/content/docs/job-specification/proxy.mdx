@@ -1,19 +1,19 @@
 ---
 layout: docs
-page_title: proxy Block - Job Specification
+page_title: proxy block in the job specification
 description: |-
   The "proxy" block allows specifying options for configuring
-  sidecar proxies used in Consul Connect integration
+  sidecar proxies used in Consul service mesh integration
 ---
 
-# `proxy` Block
+# `proxy` block in the job specification
 
 <Placement
   groups={['job', 'group', 'service', 'connect', 'sidecar_service', 'proxy']}
 />
 
 The `proxy` block allows configuring various options for the sidecar proxy
-managed by Nomad for [Consul Connect][]. It is valid only within the context of
+managed by Nomad for [Consul service mesh][]. It is valid only within the context of
 a `sidecar_service` block.
 
 ```hcl
@@ -47,10 +47,10 @@ job "countdash" {
 }
 ```
 
-## `proxy` Parameters
+## Parameters
 
 - `config` `(map: nil)` - Proxy configuration that is opaque to Nomad and passed
-  directly to Consul. See [Consul Connect documentation][envoy_dynamic_config]
+  directly to Consul. See [Consul service mesh documentation][envoy_dynamic_config]
   for details. Keys and values support [runtime variable interpolation][].
 - `expose` <code>([expose]: nil)</code> - Used to configure expose path
   configuration for Envoy. See Consul's [Expose Paths Configuration
@@ -68,7 +68,7 @@ job "countdash" {
 - `upstreams` <code>([upstreams][]: nil)</code> - Used to configure details of
   each upstream service that this sidecar proxy communicates with.
 
-## `proxy` Examples
+## Examples
 
 The following example is a proxy specification that includes upstreams
 configuration.
@@ -97,11 +97,11 @@ sidecar_service {
 }
 ```
 
-[Consul Connect]: /nomad/docs/integrations/consul-connect
+[Consul service mesh]: /nomad/docs/networking/consul
 [job]: /nomad/docs/job-specification/job 'Nomad job Job Specification'
 [group]: /nomad/docs/job-specification/group 'Nomad group Job Specification'
 [task]: /nomad/docs/job-specification/task 'Nomad task Job Specification'
-[runtime variable interpolation]: /nomad/docs/runtime/interpolation 'Nomad interpolation'
+[runtime variable interpolation]: /nomad/docs/reference/runtime-variable-interpolation 'Nomad interpolation'
 [sidecar_service]: /nomad/docs/job-specification/sidecar_service 'Nomad sidecar service Specification'
 [upstreams]: /nomad/docs/job-specification/upstreams 'Nomad upstream config Specification'
 [expose]: /nomad/docs/job-specification/expose 'Nomad proxy expose configuration'

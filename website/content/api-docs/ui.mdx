@@ -6,7 +6,8 @@ description: The /ui namespace is used to access the Nomad web user interface.
 
 # Nomad Web UI
 
-The Nomad UI is accessible at `/ui`. It is not namespaced by version. A request to `/` will also redirect to `/ui`.
+The Nomad UI is accessible at `/ui`. It is not namespaced by version, so do not
+prepend `/vi` to this endpoint. A request to `/` redirects to `/ui`.
 
 ## List Jobs
 
@@ -494,9 +495,7 @@ This page lists all allocations for a CSI plugin. Each allocation includes the s
 
 - `type` `(string: "")` - Filters the list of allocations to only those with a matching plugin type. Value must be `controller`, `node`, or unset.
 
-## Optimize
-
-~> **Enterprise Only!** This feature depends on functionality only present in Nomad Autoscaler Enterprise.
+## Optimize <EnterpriseAlert inline/>
 
 This page lists all recommendations surfaced by [dynamic application sizing](/nomad/tools/autoscaling#dynamic-application-sizing). This page will automatically redirect to the recommendation summary route for the first recommendation sorted by relevance.
 
@@ -559,7 +558,7 @@ authenticate all future requests to allow read access to additional resources.
 
 The Nomad UI supports several keyboard shortcuts in order to help users navigate and operate Nomad. You can use common key commands to dig into jobs, view logs, monitor evaluations, and more.
 
-Type `?` from anywhere in the UI to launch the Keyboard Shortcuts panel. 
+Type `?` from anywhere in the UI to launch the Keyboard Shortcuts panel.
 
 ### Default key commands:
 

@@ -47,6 +47,8 @@ type OperatorDebugCommand struct {
 	pprofDuration      time.Duration
 	logLevel           string
 	logIncludeLocation bool
+	logLookback        time.Duration
+	logFileExport      bool
 	maxNodes           int
 	nodeClass          string
 	nodeIDs            []string
@@ -182,6 +184,21 @@ Debug Options:
   -log-include-location
     Include file and line information in each log line monitored. The default
     is true.
+
+  -log-file-export=<bool>
+    Include the contents of agents' Nomad logfiles in the debug capture. The
+    log export monitor runs concurrently with the log monitor and ignores the
+    -log-level and -log-include-location flags used to configure that monitor.
+    Nomad returns an error if the agent does not have file logging configured.
+    Cannot be used with -log-lookback.
+
+  -log-lookback=<duration>
+    Include historical journald logs in the debug capture.  The journald
+    export monitor runs concurrently with the log monitor and ignores the
+    -log-level and -log-include-location flags used to configure that monitor.
+    This flag is only available on Linux systems using systemd. Refer to the
+    -log-file-export flag to retrieve historical logs on non-Linux systems, or
+    those without systemd. Cannot be used with -log-file-export.
 
   -max-nodes=<count>
     Cap the maximum number of client nodes included in the capture. Defaults
@@ -353,8 +370,7 @@ func (c *OperatorDebugCommand) Name() string { return "debug" }
 func (c *OperatorDebugCommand) Run(args []string) int {
 	flags := c.Meta.FlagSet(c.Name(), FlagSetClient)
 	flags.Usage = func() { c.Ui.Output(c.Help()) }
-
-	var duration, interval, pprofInterval, output, pprofDuration, eventTopic string
+	var duration, interval, pprofInterval, output, pprofDuration, eventTopic, logLookback string
 	var eventIndex int64
 	var nodeIDs, serverIDs string
 	var allowStale bool
@@ -365,6 +381,8 @@ func (c *OperatorDebugCommand) Run(args []string) int {
 	flags.StringVar(&interval, "interval", "30s", "")
 	flags.StringVar(&c.logLevel, "log-level", "TRACE", "")
 	flags.BoolVar(&c.logIncludeLocation, "log-include-location", true, "")
+	flags.StringVar(&logLookback, "log-lookback", "", "")
+	flags.BoolVar(&c.logFileExport, "log-file-export", false, "")
 	flags.IntVar(&c.maxNodes, "max-nodes", 10, "")
 	flags.StringVar(&c.nodeClass, "node-class", "", "")
 	flags.StringVar(&nodeIDs, "node-id", "all", "")
@@ -397,6 +415,19 @@ func (c *OperatorDebugCommand) Run(args []string) int {
 
 	if err := flags.Parse(args); err != nil {
 		c.Ui.Error(fmt.Sprintf("Error parsing arguments: %q", err))
+		return 1
+	}
+
+	// Parse the logLookback duration
+	l, err := time.ParseDuration(logLookback)
+	if err != nil && logLookback != "" {
+		c.Ui.Error(fmt.Sprintf("Error parsing -log-lookback: %s: %s", logLookback, err.Error()))
+		return 1
+	}
+	c.logLookback = l
+
+	if c.logLookback != 0 && c.logFileExport {
+		c.Ui.Error("Error parsing inputs, -log-file-export and -log-lookback cannot be used together.")
 		return 1
 	}
 
@@ -462,7 +493,7 @@ func (c *OperatorDebugCommand) Run(args []string) int {
 	// Verify there are no extra arguments
 	args = flags.Args()
 	if l := len(args); l != 0 {
-		c.Ui.Error("This command takes no arguments")
+		c.Ui.Error(uiMessageNoArguments)
 		c.Ui.Error(commandErrorText(c))
 		return 1
 	}
@@ -512,7 +543,6 @@ func (c *OperatorDebugCommand) Run(args []string) int {
 	}
 
 	c.opts = &api.QueryOptions{
-		Region:     c.Meta.region,
 		AllowStale: allowStale,
 		AuthToken:  c.Meta.token,
 	}
@@ -612,7 +642,7 @@ func (c *OperatorDebugCommand) Run(args []string) int {
 	}
 
 	// Filter for servers matching criteria
-	c.serverIDs, err = filterServerMembers(c.members, serverIDs, c.region)
+	c.serverIDs, err = filterServerMembers(c.members, serverIDs, c.Meta.Region())
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("Failed to parse server list; err: %v", err))
 		return 1
@@ -638,8 +668,8 @@ func (c *OperatorDebugCommand) Run(args []string) int {
 	c.Ui.Output("Starting debugger...")
 	c.Ui.Output("")
 	c.Ui.Output(fmt.Sprintf("Nomad CLI Version: %s", version.GetVersion().FullVersionNumber(true)))
-	c.Ui.Output(fmt.Sprintf("           Region: %s", c.region))
-	c.Ui.Output(fmt.Sprintf("        Namespace: %s", c.namespace))
+	c.Ui.Output(fmt.Sprintf("           Region: %s", c.Meta.Region()))
+	c.Ui.Output(fmt.Sprintf("        Namespace: %s", c.Meta.Namespace()))
 	c.Ui.Output(fmt.Sprintf("          Servers: (%d/%d) %v", serverCaptureCount, serversFound, c.serverIDs))
 	c.Ui.Output(fmt.Sprintf("          Clients: (%d/%d) %v", nodeCaptureCount, nodesFound, c.nodeIDs))
 	if nodeCaptureCount > 0 && nodeCaptureCount == c.maxNodes {
@@ -754,6 +784,16 @@ func (c *OperatorDebugCommand) mkdir(paths ...string) error {
 
 // startMonitors starts go routines for each node and client
 func (c *OperatorDebugCommand) startMonitors(client *api.Client) {
+	// if requested, start monitor export first
+	if c.logLookback != 0 || c.logFileExport {
+		for _, id := range c.nodeIDs {
+			go c.startMonitorExport(clientDir, "node_id", id, client)
+		}
+
+		for _, id := range c.serverIDs {
+			go c.startMonitorExport(serverDir, "server_id", id, client)
+		}
+	}
 	for _, id := range c.nodeIDs {
 		go c.startMonitor(clientDir, "node_id", id, client)
 	}
@@ -796,6 +836,54 @@ func (c *OperatorDebugCommand) startMonitor(path, idKey, nodeID string, client *
 			fh.WriteString(fmt.Sprintf("monitor: %s\n", err.Error()))
 			return
 
+		case <-c.ctx.Done():
+			return
+		}
+	}
+}
+
+// startMonitor starts one monitor api request, writing to a file. It blocks and should be
+// called in a go routine. Errors are ignored, we want to build the archive even if a node
+// is unavailable
+func (c *OperatorDebugCommand) startMonitorExport(path, idKey, nodeID string, client *api.Client) {
+	monitorExportPath := "monitor_export.log"
+	qo := api.QueryOptions{
+		Params: map[string]string{
+			idKey:        nodeID,
+			"on_disk":    strconv.FormatBool(c.logFileExport),
+			"logs_since": c.logLookback.String(),
+		},
+		AllowStale: c.queryOpts().AllowStale,
+	}
+
+	// serviceName and onDisk cannot be set together, only set servicename if we're sure
+	// loglookback is set and logFileExport is false
+	if lookback := c.logLookback.String(); lookback != "" && !c.logFileExport {
+		qo.Params["service_name"] = "nomad"
+	}
+
+	// prepare output location
+	c.mkdir(path, nodeID)
+	fh, err := os.Create(c.path(path, nodeID, monitorExportPath))
+	if err != nil {
+		return
+	}
+	defer fh.Close()
+
+	outCh, errCh := client.Agent().MonitorExport(c.ctx.Done(), &qo)
+	for {
+		select {
+		case out := <-outCh:
+			if out == nil {
+				continue
+			}
+			fh.Write(out.Data)
+
+		case err := <-errCh:
+			if err != io.EOF {
+				fh.WriteString(fmt.Sprintf("monitor: %s\n", err.Error()))
+				return
+			}
 		case <-c.ctx.Done():
 			return
 		}

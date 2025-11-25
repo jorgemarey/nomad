@@ -285,6 +285,7 @@ func TestCSIVolumeEndpoint_Register(t *testing.T) {
 	err = msgpackrpc.CallWithCodec(codec, "CSIVolume.Register", req1, resp1)
 	must.NoError(t, err)
 	must.NotEq(t, uint64(0), resp1.Index)
+	must.Eq(t, "", resp1.Warnings)
 
 	// Get the volume back out
 	req2 := &structs.CSIVolumeGetRequest{
@@ -388,7 +389,7 @@ func TestCSIVolumeEndpoint_Claim(t *testing.T) {
 		},
 	}
 	index++
-	err = state.UpsertNode(structs.MsgTypeTestSetup, index, node)
+	err = state.UpsertNode(structs.MsgTypeTestSetup, index, node.Copy())
 	require.NoError(t, err)
 
 	vols := []*structs.CSIVolume{{
@@ -615,20 +616,23 @@ func TestCSIVolumeEndpoint_Unpublish(t *testing.T) {
 		endState       structs.CSIVolumeClaimState
 		nodeID         string
 		otherNodeID    string
+		externalNodeID string
 		expectedErrMsg string
 	}
 	testCases := []tc{
 		{
-			name:          "success",
-			startingState: structs.CSIVolumeClaimStateControllerDetached,
-			nodeID:        node.ID,
-			otherNodeID:   uuid.Generate(),
+			name:           "success",
+			startingState:  structs.CSIVolumeClaimStateControllerDetached,
+			nodeID:         node.ID,
+			otherNodeID:    uuid.Generate(),
+			externalNodeID: "i-example",
 		},
 		{
-			name:          "non-terminal allocation on same node",
-			startingState: structs.CSIVolumeClaimStateNodeDetached,
-			nodeID:        node.ID,
-			otherNodeID:   node.ID,
+			name:           "non-terminal allocation on same node",
+			startingState:  structs.CSIVolumeClaimStateNodeDetached,
+			nodeID:         node.ID,
+			otherNodeID:    node.ID,
+			externalNodeID: "i-example",
 		},
 		{
 			name:           "unpublish previously detached node",
@@ -637,6 +641,7 @@ func TestCSIVolumeEndpoint_Unpublish(t *testing.T) {
 			expectedErrMsg: "could not detach from controller: controller detach volume: No path to node",
 			nodeID:         node.ID,
 			otherNodeID:    uuid.Generate(),
+			externalNodeID: "i-example",
 		},
 		{
 			name:           "unpublish claim on garbage collected node",
@@ -645,6 +650,15 @@ func TestCSIVolumeEndpoint_Unpublish(t *testing.T) {
 			expectedErrMsg: "could not detach from controller: controller detach volume: No path to node",
 			nodeID:         uuid.Generate(),
 			otherNodeID:    uuid.Generate(),
+			externalNodeID: "i-example",
+		},
+		{
+			name:           "unpublish claim on garbage collected node missing external ID",
+			startingState:  structs.CSIVolumeClaimStateTaken,
+			endState:       structs.CSIVolumeClaimStateNodeDetached,
+			nodeID:         uuid.Generate(),
+			otherNodeID:    uuid.Generate(),
+			externalNodeID: "",
 		},
 		{
 			name:           "first unpublish",
@@ -653,6 +667,7 @@ func TestCSIVolumeEndpoint_Unpublish(t *testing.T) {
 			expectedErrMsg: "could not detach from controller: controller detach volume: No path to node",
 			nodeID:         node.ID,
 			otherNodeID:    uuid.Generate(),
+			externalNodeID: "i-example",
 		},
 	}
 
@@ -693,7 +708,7 @@ func TestCSIVolumeEndpoint_Unpublish(t *testing.T) {
 			claim := &structs.CSIVolumeClaim{
 				AllocationID:   alloc.ID,
 				NodeID:         tc.nodeID,
-				ExternalNodeID: "i-example",
+				ExternalNodeID: tc.externalNodeID,
 				Mode:           structs.CSIVolumeClaimRead,
 			}
 
@@ -708,7 +723,7 @@ func TestCSIVolumeEndpoint_Unpublish(t *testing.T) {
 			otherClaim := &structs.CSIVolumeClaim{
 				AllocationID:   otherAlloc.ID,
 				NodeID:         tc.otherNodeID,
-				ExternalNodeID: "i-example",
+				ExternalNodeID: tc.externalNodeID,
 				Mode:           structs.CSIVolumeClaimRead,
 			}
 
@@ -1263,25 +1278,11 @@ func TestCSIVolumeEndpoint_Create(t *testing.T) {
 	must.NoError(t, err)
 	must.NotEq(t, uint64(0), resp1.Index)
 
-	// Get the volume back out
-	req2 := &structs.CSIVolumeGetRequest{
-		ID: volID,
-		QueryOptions: structs.QueryOptions{
-			Region:    "global",
-			Namespace: ns,
-			AuthToken: validToken,
-		},
-	}
-	resp2 := &structs.CSIVolumeGetResponse{}
-	err = msgpackrpc.CallWithCodec(codec, "CSIVolume.Get", req2, resp2)
-	must.NoError(t, err)
-	must.Eq(t, resp1.Index, resp2.Index)
+	// Check the new volume in the response
+	must.Eq(t, 1, len(resp1.Volumes))
+	must.Eq(t, "", resp1.Warnings)
+	vol := resp1.Volumes[0]
 
-	vol := resp2.Volume
-	must.NotNil(t, vol)
-	must.Eq(t, volID, vol.ID)
-
-	// these fields are set from the args
 	must.Eq(t, "csi.CSISecrets(map[mysecret:[REDACTED]])",
 		vol.Secrets.String())
 	must.Eq(t, "csi.CSIOptions(FSType: ext4, MountFlags: [REDACTED])",
@@ -1679,7 +1680,7 @@ func TestCSIVolumeEndpoint_DeleteSnapshot(t *testing.T) {
 	}
 	var resp0 structs.NodeUpdateResponse
 	err = client.RPC("Node.Register", req0, &resp0)
-	require.NoError(t, err)
+	must.NoError(t, err)
 
 	testutil.WaitForResult(func() (bool, error) {
 		nodes := srv.connectedNodes()
@@ -1707,7 +1708,7 @@ func TestCSIVolumeEndpoint_DeleteSnapshot(t *testing.T) {
 		}
 	}).Node
 	index++
-	require.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, index, node))
+	must.NoError(t, state.UpsertNode(structs.MsgTypeTestSetup, index, node))
 
 	// Delete the snapshot request
 	req1 := &structs.CSISnapshotDeleteRequest{
@@ -1719,6 +1720,7 @@ func TestCSIVolumeEndpoint_DeleteSnapshot(t *testing.T) {
 			{
 				ID:       "snap-34567",
 				PluginID: "minnie",
+				Secrets:  map[string]string{"super": "secret"},
 			},
 		},
 		WriteRequest: structs.WriteRequest{
@@ -1729,7 +1731,16 @@ func TestCSIVolumeEndpoint_DeleteSnapshot(t *testing.T) {
 
 	resp1 := &structs.CSISnapshotDeleteResponse{}
 	err = msgpackrpc.CallWithCodec(codec, "CSIVolume.DeleteSnapshot", req1, resp1)
-	require.NoError(t, err)
+	must.NoError(t, err)
+
+	must.Eq(t, &cstructs.ClientCSIControllerDeleteSnapshotRequest{
+		ID:      "snap-34567",
+		Secrets: map[string]string{"super": "secret"},
+		CSIControllerQuery: cstructs.CSIControllerQuery{
+			ControllerNodeID: node.ID,
+			PluginID:         "minnie",
+		},
+	}, fake.LastDeleteSnapshotRequest)
 }
 
 func TestCSIVolumeEndpoint_ListSnapshots(t *testing.T) {

@@ -19,12 +19,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/armon/go-metrics"
 	assetfs "github.com/elazarl/go-bindata-assetfs"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/go-connlimit"
 	log "github.com/hashicorp/go-hclog"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/go-msgpack/v2/codec"
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/rs/cors"
@@ -404,12 +404,16 @@ func (s *HTTPServer) registerHandlers(enableDebug bool) {
 	s.mux.HandleFunc("/v1/deployments", s.wrap(s.DeploymentsRequest))
 	s.mux.HandleFunc("/v1/deployment/", s.wrap(s.DeploymentSpecificRequest))
 
+	s.mux.HandleFunc("GET /v1/volumes", s.wrap(s.ListVolumesRequest))
 	s.mux.HandleFunc("/v1/volumes", s.wrap(s.CSIVolumesRequest))
 	s.mux.HandleFunc("/v1/volumes/external", s.wrap(s.CSIExternalVolumesRequest))
 	s.mux.HandleFunc("/v1/volumes/snapshot", s.wrap(s.CSISnapshotsRequest))
 	s.mux.HandleFunc("/v1/volume/csi/", s.wrap(s.CSIVolumeSpecificRequest))
 	s.mux.HandleFunc("/v1/plugins", s.wrap(s.CSIPluginsRequest))
 	s.mux.HandleFunc("/v1/plugin/csi/", s.wrap(s.CSIPluginSpecificRequest))
+	s.mux.HandleFunc("/v1/volume/host/", s.wrap(s.HostVolumeSpecificRequest))
+	s.mux.HandleFunc("/v1/volumes/claims", s.wrap(s.TaskGroupHostVolumeClaimListRequest))
+	s.mux.HandleFunc("/v1/volumes/claim/", s.wrap(s.TaskGroupHostVolumeClaimRequest))
 
 	s.mux.HandleFunc("/v1/acl/policies", s.wrap(s.ACLPoliciesRequest))
 	s.mux.HandleFunc("/v1/acl/policy/", s.wrap(s.ACLPolicySpecificRequest))
@@ -468,6 +472,7 @@ func (s *HTTPServer) registerHandlers(enableDebug bool) {
 	// "application/json" Content-Type depending on the ?plain= query
 	// parameter.
 	s.mux.HandleFunc("/v1/agent/monitor", s.wrap(s.AgentMonitor))
+	s.mux.HandleFunc("/v1/agent/monitor/export", s.wrap(s.AgentMonitorExport))
 
 	s.mux.HandleFunc("/v1/agent/pprof/", s.wrapNonJSON(s.AgentPprofRequest))
 
@@ -492,6 +497,7 @@ func (s *HTTPServer) registerHandlers(enableDebug bool) {
 	s.mux.HandleFunc("/v1/operator/autopilot/health", s.wrap(s.OperatorServerHealth))
 	s.mux.HandleFunc("/v1/operator/snapshot", s.wrap(s.SnapshotRequest))
 	s.mux.HandleFunc("/v1/operator/upgrade-check/", s.wrap(s.UpgradeCheckRequest))
+	s.mux.HandleFunc("/v1/operator/utilization", s.wrap(s.OperatorUtilizationRequest))
 
 	s.mux.HandleFunc("/v1/system/gc", s.wrap(s.GarbageCollectRequest))
 	s.mux.HandleFunc("/v1/system/reconcile/summaries", s.wrap(s.ReconcileJobSummaries))

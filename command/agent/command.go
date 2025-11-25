@@ -16,17 +16,18 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
-	metrics "github.com/armon/go-metrics"
-	"github.com/armon/go-metrics/circonus"
-	"github.com/armon/go-metrics/datadog"
-	"github.com/armon/go-metrics/prometheus"
 	"github.com/hashicorp/cli"
 	checkpoint "github.com/hashicorp/go-checkpoint"
 	discover "github.com/hashicorp/go-discover"
 	hclog "github.com/hashicorp/go-hclog"
+	metrics "github.com/hashicorp/go-metrics/compat"
+	"github.com/hashicorp/go-metrics/compat/circonus"
+	"github.com/hashicorp/go-metrics/compat/datadog"
+	"github.com/hashicorp/go-metrics/compat/prometheus"
 	gsyslog "github.com/hashicorp/go-syslog"
 	"github.com/hashicorp/nomad/helper"
 	flaghelper "github.com/hashicorp/nomad/helper/flags"
@@ -74,6 +75,7 @@ func (c *Command) readConfig() *Config {
 		ACL:       &ACLConfig{},
 		Audit:     &config.AuditConfig{},
 		Reporting: &config.ReportingConfig{},
+		Eventlog:  &Eventlog{},
 	}
 
 	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
@@ -108,6 +110,8 @@ func (c *Command) readConfig() *Config {
 	flags.StringVar(&cmdConfig.Client.StateDir, "state-dir", "", "")
 	flags.StringVar(&cmdConfig.Client.AllocDir, "alloc-dir", "", "")
 	flags.StringVar(&cmdConfig.Client.AllocMountsDir, "alloc-mounts-dir", "", "")
+	flags.StringVar(&cmdConfig.Client.HostVolumesDir, "host-volumes-dir", "", "")
+	flags.StringVar(&cmdConfig.Client.HostVolumePluginDir, "host-volume-plugin-dir", "", "")
 	flags.StringVar(&cmdConfig.Client.NodeClass, "node-class", "", "")
 	flags.StringVar(&cmdConfig.Client.NodePool, "node-pool", "", "")
 	flags.StringVar(&servers, "servers", "", "")
@@ -127,6 +131,10 @@ func (c *Command) readConfig() *Config {
 	flags.BoolVar(&cmdConfig.LogJson, "log-json", false, "")
 	flags.BoolVar(&cmdConfig.LogIncludeLocation, "log-include-location", false, "")
 	flags.StringVar(&cmdConfig.NodeName, "node", "", "")
+
+	// Eventlog options
+	flags.BoolVar(&cmdConfig.Eventlog.Enabled, "eventlog", false, "")
+	flags.StringVar(&cmdConfig.Eventlog.Level, "eventlog-level", "", "")
 
 	// Consul options
 	defaultConsul := cmdConfig.defaultConsul()
@@ -171,10 +179,6 @@ func (c *Command) readConfig() *Config {
 		return nil
 	}), "consul-verify-ssl", "")
 	flags.StringVar(&defaultConsul.Addr, "consul-address", "", "")
-	flags.Var((flaghelper.FuncBoolVar)(func(b bool) error {
-		defaultConsul.AllowUnauthenticated = &b
-		return nil
-	}), "consul-allow-unauthenticated", "")
 
 	// Vault options
 	defaultVault := cmdConfig.defaultVault()
@@ -182,11 +186,6 @@ func (c *Command) readConfig() *Config {
 		defaultVault.Enabled = &b
 		return nil
 	}), "vault-enabled", "")
-	flags.Var((flaghelper.FuncBoolVar)(func(b bool) error {
-		defaultVault.AllowUnauthenticated = &b
-		return nil
-	}), "vault-allow-unauthenticated", "")
-	flags.StringVar(&defaultVault.Token, "vault-token", "", "")
 	flags.StringVar(&defaultVault.Addr, "vault-address", "", "")
 	flags.StringVar(&defaultVault.Namespace, "vault-namespace", "", "")
 	flags.StringVar(&defaultVault.Role, "vault-create-from-role", "", "")
@@ -301,11 +300,6 @@ func (c *Command) readConfig() *Config {
 	// configuration sources have been merged.
 	defaultVault = config.defaultVault()
 
-	// Check to see if we should read the Vault token from the environment
-	if defaultVault.Token == "" {
-		defaultVault.Token = os.Getenv("VAULT_TOKEN")
-	}
-
 	// Check to see if we should read the Vault namespace from the environment
 	if defaultVault.Namespace == "" {
 		defaultVault.Namespace = os.Getenv("VAULT_NAMESPACE")
@@ -382,11 +376,13 @@ func (c *Command) IsValidConfig(config, cmdConfig *Config) bool {
 
 	// Verify the paths are absolute.
 	dirs := map[string]string{
-		"data-dir":         config.DataDir,
-		"plugin-dir":       config.PluginDir,
-		"alloc-dir":        config.Client.AllocDir,
-		"alloc-mounts-dir": config.Client.AllocMountsDir,
-		"state-dir":        config.Client.StateDir,
+		"data-dir":               config.DataDir,
+		"plugin-dir":             config.PluginDir,
+		"alloc-dir":              config.Client.AllocDir,
+		"alloc-mounts-dir":       config.Client.AllocMountsDir,
+		"host-volumes-dir":       config.Client.HostVolumesDir,
+		"host-volume-plugin-dir": config.Client.HostVolumePluginDir,
+		"state-dir":              config.Client.StateDir,
 	}
 	for k, dir := range dirs {
 		if dir == "" {
@@ -491,6 +487,15 @@ func (c *Command) IsValidConfig(config, cmdConfig *Config) bool {
 		)
 		return false
 	}
+	if err := config.RPC.Validate(); err != nil {
+		c.Ui.Error(fmt.Sprintf("rpc block invalid: %v", err))
+		return false
+	}
+
+	if err := config.Eventlog.Validate(); err != nil {
+		c.Ui.Error(fmt.Sprintf("eventlog block invalid: %v", err))
+		return false
+	}
 
 	if !config.DevMode {
 		// Ensure that we have the directories we need to run.
@@ -545,6 +550,13 @@ func (c *Command) IsValidConfig(config, cmdConfig *Config) bool {
 		c.Ui.Warn("Please remove deprecated protocol_version field from config.")
 	}
 
+	for _, keyring := range config.KEKProviders {
+		if err := keyring.Validate(); err != nil {
+			c.Ui.Error(fmt.Sprintf("keyring %q invalid: %v", keyring.Name, err))
+			return false
+		}
+	}
+
 	return true
 }
 
@@ -579,6 +591,7 @@ func SetupLoggers(ui cli.Ui, config *Config) (*gatedwriter.Writer, io.Writer) {
 	if logLevel == "OFF" {
 		config.EnableSyslog = false
 	}
+
 	// Check if syslog is enabled
 	if config.EnableSyslog {
 		ui.Output(fmt.Sprintf("Config enable_syslog is `true` with log_level=%v", config.LogLevel))
@@ -588,6 +601,17 @@ func SetupLoggers(ui cli.Ui, config *Config) (*gatedwriter.Writer, io.Writer) {
 			return nil, nil
 		}
 		writers = append(writers, newSyslogWriter(l, config.LogJson))
+	}
+
+	// Check if eventlog is enabled
+	if config.Eventlog != nil && config.Eventlog.Enabled {
+		l, err := winsvc.NewEventLogger(config.Eventlog.Level)
+		if err != nil {
+			ui.Error(fmt.Sprintf("Windows event logger setup failed: %s", err))
+			return nil, nil
+		}
+
+		writers = append(writers, l)
 	}
 
 	// Check if file logging is enabled
@@ -650,19 +674,12 @@ func (c *Command) setupAgent(config *Config, logger hclog.InterceptLogger, logOu
 	}
 	c.httpServers = httpServers
 
-	for _, vault := range config.Vaults {
-		if vault.Token != "" {
-			logger.Warn("Setting a Vault token in the agent configuration is deprecated and will be removed in Nomad 1.10. Migrate your Vault configuration to use workload identity.", "cluster", vault.Name)
-		}
-	}
-
 	// If DisableUpdateCheck is not enabled, set up update checking
 	// (DisableUpdateCheck is false by default)
 	if config.DisableUpdateCheck != nil && !*config.DisableUpdateCheck {
 		version := config.Version.Version
 		if config.Version.VersionPrerelease != "" {
 			version += fmt.Sprintf("-%s", config.Version.VersionPrerelease)
-		}
 		updateParams := &checkpoint.CheckParams{
 			Product: "nomad",
 			Version: version,
@@ -731,6 +748,7 @@ func (c *Command) AutocompleteFlags() complete.Flags {
 		"-region":                      complete.PredictAnything,
 		"-data-dir":                    complete.PredictDirs("*"),
 		"-plugin-dir":                  complete.PredictDirs("*"),
+		"-host-volume-plugin-dir":      complete.PredictDirs("*"),
 		"-dc":                          complete.PredictAnything,
 		"-log-level":                   complete.PredictAnything,
 		"-json-logs":                   complete.PredictNothing,
@@ -770,6 +788,8 @@ func (c *Command) AutocompleteFlags() complete.Flags {
 		"-vault-tls-server-name":                  complete.PredictAnything,
 		"-acl-enabled":                            complete.PredictNothing,
 		"-acl-replication-token":                  complete.PredictAnything,
+		"-eventlog":                               complete.PredictNothing,
+		"-eventlog-level":                         complete.PredictSet("INFO", "WARN", "ERROR"),
 	}
 }
 
@@ -917,6 +937,10 @@ func (c *Command) Run(args []string) int {
 		return 1
 	}
 
+	// Add events for the eventlog
+	winsvc.SendEvent(winsvc.NewEvent(winsvc.EventServiceReady))
+	defer func() { winsvc.SendEvent(winsvc.NewEvent(winsvc.EventServiceStopped)) }()
+
 	// Wait for exit
 	return c.handleSignals()
 }
@@ -926,13 +950,8 @@ func (c *Command) handleRetryJoin(config *Config) error {
 	c.retryJoinErrCh = make(chan struct{})
 
 	if config.Server.Enabled && len(config.Server.RetryJoin) != 0 {
-		joiner := retryJoiner{
-			autoDiscover:  autoDiscover{goDiscover: &discover.Discover{}, netAddrs: &netAddrs{}},
-			errCh:         c.retryJoinErrCh,
-			logger:        c.agent.logger.Named("joiner"),
-			serverJoin:    c.agent.server.Join,
-			serverEnabled: true,
-		}
+
+		joiner := retryJoiner{}
 
 		if err := joiner.Validate(config); err != nil {
 			return err
@@ -960,54 +979,101 @@ func (c *Command) handleRetryJoin(config *Config) error {
 		len(config.Server.ServerJoin.RetryJoin) != 0 {
 
 		joiner := retryJoiner{
-			autoDiscover:  autoDiscover{goDiscover: &discover.Discover{}, netAddrs: &netAddrs{}},
-			errCh:         c.retryJoinErrCh,
-			logger:        c.agent.logger.Named("joiner"),
-			serverJoin:    c.agent.server.Join,
-			serverEnabled: true,
+			autoDiscover: autoDiscover{goDiscover: &discover.Discover{}, netAddrs: &netAddrs{}},
+			errCh:        c.retryJoinErrCh,
+			joinCfg:      config.Server.ServerJoin,
+			joinFunc:     c.agent.server.Join,
+			logger:       c.agent.logger.Named("joiner").With("agent_mode", "server"),
 		}
 
 		if err := joiner.Validate(config); err != nil {
 			return err
 		}
 
-		go joiner.RetryJoin(config.Server.ServerJoin)
+		go joiner.RetryJoin()
 	}
 
 	if config.Client.Enabled &&
 		config.Client.ServerJoin != nil &&
 		len(config.Client.ServerJoin.RetryJoin) != 0 {
 		joiner := retryJoiner{
-			autoDiscover:  autoDiscover{goDiscover: &discover.Discover{}, netAddrs: &netAddrs{}},
-			errCh:         c.retryJoinErrCh,
-			logger:        c.agent.logger.Named("joiner"),
-			clientJoin:    c.agent.client.SetServers,
-			clientEnabled: true,
+			autoDiscover: autoDiscover{goDiscover: &discover.Discover{}, netAddrs: &netAddrs{}},
+			errCh:        c.retryJoinErrCh,
+			joinCfg:      config.Client.ServerJoin,
+			joinFunc:     c.agent.client.SetServers,
+			logger:       c.agent.logger.Named("joiner").With("agent_mode", "client"),
 		}
 
 		if err := joiner.Validate(config); err != nil {
 			return err
 		}
 
-		go joiner.RetryJoin(config.Client.ServerJoin)
+		go joiner.RetryJoin()
 	}
 
 	return nil
 }
 
-// These constants are for readiness signalling via the systemd notify protocol.
-// The functions we send these messages to are no-op on non-Linux systems. See
-// also https://www.man7.org/linux/man-pages/man3/sd_notify.3.html
-const (
-	sdReady     = "READY=1"
-	sdReloading = "RELOADING=1"
-	sdStopping  = "STOPPING=1"
-	sdMonotonic = "MONOTONIC_USEC=%d"
-)
+// terminateGracefully attempts a graceful leave
+func (c *Command) terminateGracefully(signalCh chan os.Signal, sdSock io.Writer) int {
+	sdNotify(sdSock, sdStopping)
+
+	gracefulCh := make(chan struct{})
+	gracefulClose := sync.OnceFunc(func() { close(gracefulCh) })
+	defer gracefulClose()
+
+	timeout := gracefulTimeout
+
+	if c.agent.client != nil {
+		config := c.agent.client.GetConfig()
+
+		if config == nil {
+			c.Ui.Output("Unable to read the agent configuration, using the default graceful timeout")
+		} else if config.Drain != nil && config.Drain.Deadline != 0 {
+			timeout += config.Drain.Deadline
+		}
+	}
+
+	c.Ui.Output("Gracefully shutting down agent...")
+	go func() {
+		if err := c.agent.Leave(); err != nil {
+			c.Ui.Error(fmt.Sprintf("Error: %s", err))
+			return
+		}
+		gracefulClose()
+	}()
+
+	delay := time.NewTimer(timeout)
+
+	// Wait for leave or another signal to be received
+	for {
+		select {
+		case sig := <-signalCh:
+			// If a SIGPIPE is received, ignore it and
+			// continue waiting
+			if sig == syscall.SIGPIPE {
+				c.agent.logger.Trace("caught SIGPIPE during graceful shutdown, ignoring")
+				continue
+			}
+			c.agent.logger.Trace("caught signal during graceful shutdown", "signal", sig)
+
+			return 1
+		case <-delay.C:
+			return 1
+		case <-gracefulCh:
+		}
+
+		break
+	}
+
+	return 0
+}
 
 // handleSignals blocks until we get an exit-causing signal
 func (c *Command) handleSignals() int {
 	signalCh := make(chan os.Signal, 4)
+	defer signal.Stop(signalCh)
+
 	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGPIPE)
 
 	// Signal readiness only once signal handlers are setup
@@ -1015,74 +1081,63 @@ func (c *Command) handleSignals() int {
 	if err != nil {
 		c.agent.logger.Debug("notify socket could not be accessed", "error", err)
 	}
+
 	if sdSock != nil {
 		defer sdSock.Close()
 	}
 	sdNotify(sdSock, sdReady)
 
-	// Wait for a signal
-WAIT:
-	var sig os.Signal
-	select {
-	case s := <-signalCh:
-		sig = s
-	case <-winsvc.ShutdownChannel():
-		sig = os.Interrupt
-	case <-c.ShutdownCh:
-		sig = os.Interrupt
-	case <-c.retryJoinErrCh:
-		return 1
-	}
+	for {
+		select {
+		case sig := <-signalCh:
+			// Skip any SIGPIPE signal (see issues #1798, #3554)
+			if sig == syscall.SIGPIPE {
+				continue
+			}
 
-	// Skip any SIGPIPE signal and don't try to log it (See issues #1798, #3554)
-	if sig == syscall.SIGPIPE {
-		goto WAIT
-	}
+			c.Ui.Output(fmt.Sprintf("Caught signal: %v", sig))
 
-	c.Ui.Output(fmt.Sprintf("Caught signal: %v", sig))
+			switch sig {
+			case syscall.SIGHUP:
+				sdNotifyReloading(sdSock)
+				err := c.handleReload()
+				if err != nil {
+					c.Ui.Error(fmt.Sprintf("Fatal error while reloading: %v", err))
+					return 1
+				}
 
-	// Check if this is a SIGHUP
-	if sig == syscall.SIGHUP {
-		sdNotify(sdSock, sdReloading)
-		sdNotify(sdSock, fmt.Sprintf(sdMonotonic, time.Now().UnixMicro()))
-		c.handleReload()
-		sdNotify(sdSock, sdReady)
-		goto WAIT
-	}
+				sdNotify(sdSock, sdReady)
+			case syscall.SIGTERM:
+				if !c.agent.GetConfig().LeaveOnTerm {
+					return 1
+				}
 
-	// Check if we should do a graceful leave
-	graceful := false
-	if sig == os.Interrupt && c.agent.GetConfig().LeaveOnInt {
-		graceful = true
-	} else if sig == syscall.SIGTERM && c.agent.GetConfig().LeaveOnTerm {
-		graceful = true
-	}
+				return c.terminateGracefully(signalCh, sdSock)
+			case os.Interrupt:
+				if !c.agent.GetConfig().LeaveOnInt {
+					return 1
+				}
 
-	// Bail fast if not doing a graceful leave
-	if !graceful {
-		return 1
-	}
+				return c.terminateGracefully(signalCh, sdSock)
+			}
 
-	// Attempt a graceful leave
-	sdNotify(sdSock, sdStopping)
-	gracefulCh := make(chan struct{})
-	c.Ui.Output("Gracefully shutting down agent...")
-	go func() {
-		if err := c.agent.Leave(); err != nil {
-			c.Ui.Error(fmt.Sprintf("Error: %s", err))
-			return
+		case <-winsvc.ShutdownChannel():
+			if !c.agent.GetConfig().LeaveOnInt {
+				return 1
+			}
+
+			return c.terminateGracefully(signalCh, sdSock)
+
+		case <-c.ShutdownCh:
+			if !c.agent.GetConfig().LeaveOnInt {
+				return 1
+			}
+
+			return c.terminateGracefully(signalCh, sdSock)
+
+		case <-c.retryJoinErrCh:
+			return 1
 		}
-		close(gracefulCh)
-	}()
-
-	// Wait for leave or another signal
-	select {
-	case <-signalCh:
-		return 1
-	case <-time.After(gracefulTimeout):
-		return 1
-	case <-gracefulCh:
-		return 0
 	}
 }
 
@@ -1105,12 +1160,14 @@ func (c *Command) reloadHTTPServer() error {
 }
 
 // handleReload is invoked when we should reload our configs, e.g. SIGHUP
-func (c *Command) handleReload() {
+// It will only return an error if the reload encountered a fatal error that must
+// cause an agent termination.
+func (c *Command) handleReload() error {
 	c.Ui.Output("Reloading configuration...")
 	newConf := c.readConfig()
 	if newConf == nil {
 		c.Ui.Error("Failed to reload configs")
-		return
+		return nil
 	}
 
 	// Change the log level
@@ -1131,7 +1188,7 @@ func (c *Command) handleReload() {
 		err := c.agent.Reload(newConf)
 		if err != nil {
 			c.agent.logger.Error("failed to reload the config", "error", err)
-			return
+			return nil
 		}
 	}
 
@@ -1140,7 +1197,7 @@ func (c *Command) handleReload() {
 		sconf, err := convertServerConfig(newConf)
 		if err != nil {
 			c.agent.logger.Error("failed to convert server config", "error", err)
-			return
+			return nil
 		}
 
 		// Finalize the config to get the agent objects injected in
@@ -1149,7 +1206,7 @@ func (c *Command) handleReload() {
 		// Reload the config
 		if err := s.Reload(sconf); err != nil {
 			c.agent.logger.Error("reloading server config failed", "error", err)
-			return
+			return fmt.Errorf("reloading server config failed: %w", err)
 		}
 	}
 
@@ -1158,18 +1215,18 @@ func (c *Command) handleReload() {
 		clientConfig, err := convertClientConfig(newConf)
 		if err != nil {
 			c.agent.logger.Error("failed to convert client config", "error", err)
-			return
+			return nil
 		}
 
 		// Finalize the config to get the agent objects injected in
 		if err := c.agent.finalizeClientConfig(clientConfig); err != nil {
 			c.agent.logger.Error("failed to finalize client config", "error", err)
-			return
+			return nil
 		}
 
 		if err := client.Reload(clientConfig); err != nil {
 			c.agent.logger.Error("reloading client config failed", "error", err)
-			return
+			return fmt.Errorf("reloading client config failed: %w", err)
 		}
 	}
 
@@ -1181,9 +1238,9 @@ func (c *Command) handleReload() {
 		err := c.reloadHTTPServer()
 		if err != nil {
 			c.agent.httpLogger.Error("reloading config failed", "error", err)
-			return
 		}
 	}
+	return nil
 }
 
 // setupTelemetry is used to set up the telemetry sub-systems.
@@ -1445,6 +1502,14 @@ General Options (clients and servers):
   -log-include-location
     Include file and line information in each log line. The default is false.
 
+  -eventlog
+   Enable sending Nomad agent logs to the Windows Event Log.
+
+  -eventlog-level
+	Specifies the verbosity of logs the Nomad agent outputs. Valid log levels
+	include ERROR, WARN, or INFO in  order of verbosity. Level must be
+    of equal or less verbosity as defined for the -log-level parameter.
+
   -node=<name>
     The name of the local agent. This name is used to identify the node
     in the cluster. The name must be unique per region. The default is
@@ -1551,7 +1616,7 @@ Client Options:
 
   -network-interface
     Forces the network fingerprinter to use the specified network interface.
-  
+
   -preferred-address-family
     Specify which IP family to prefer when selecting an IP address of the
     network interface. Valid values are "ipv4" and "ipv6". When not specified,
@@ -1560,6 +1625,14 @@ Client Options:
   -network-speed
     The default speed for network interfaces in MBits if the link speed can not
     be determined dynamically.
+
+  -host-volumes-dir
+    Directory wherein host volume plugins should place volumes. The default is
+    <data-dir>/host_volumes.
+
+  -host-volume-plugin-dir
+    Directory containing dynamic host volume plugins. The default is
+    <data-dir>/host_volume_plugins.
 
 ACL Options:
 

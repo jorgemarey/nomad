@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/client/allocdir"
 	"github.com/hashicorp/nomad/client/lib/cgroupslib"
+	"github.com/hashicorp/nomad/client/lib/cpustats"
 	"github.com/hashicorp/nomad/client/taskenv"
 	"github.com/hashicorp/nomad/client/testutil"
 	"github.com/hashicorp/nomad/drivers/shared/capabilities"
@@ -37,7 +39,11 @@ import (
 )
 
 func init() {
-	executorFactories["LibcontainerExecutor"] = libcontainerFactory
+	// There are no busybox arm64 images to download. These tests will need to
+	// be reworked, or a custom build performed.
+	if runtime.GOARCH == "amd64" {
+		executorFactories["LibcontainerExecutor"] = libcontainerFactory
+	}
 }
 
 var libcontainerFactory = executorFactory{
@@ -287,8 +293,6 @@ func TestExecutor_OOMKilled(t *testing.T) {
 	execCmd.ResourceLimits = true
 	execCmd.ModePID = "private"
 	execCmd.ModeIPC = "private"
-	execCmd.Resources.LinuxResources.MemoryLimitBytes = 10 * 1024 * 1024
-	execCmd.Resources.NomadResources.Memory.MemoryMB = 10
 
 	executor := NewExecutorWithIsolation(testlog.HCLogger(t), compute)
 	defer executor.Shutdown("SIGKILL", 0)
@@ -827,6 +831,71 @@ func TestExecutor_WorkDir(t *testing.T) {
 	must.Eq(t, output, workDir)
 }
 
+// TestExecutor_UserEnv tests that the USER environment variable is set
+// correctly if user is set. We're not testing HOME because that could get
+// tricky on GHA runners.
+func TestExecutor_UserEnv(t *testing.T) {
+	t.Parallel()
+	testutil.RequireCILinux(t)
+	testutil.ExecCompatible(t)
+
+	testExecCmd := testExecutorCommandWithChroot(t)
+	execCmd, allocDir := testExecCmd.command, testExecCmd.allocDir
+	execCmd.Cmd = "/bin/bash"
+	execCmd.Args = []string{"-c", "echo $USER"}
+	execCmd.User = "runner"
+	execCmd.ResourceLimits = true
+	defer allocDir.Destroy()
+
+	executor := NewExecutorWithIsolation(testlog.HCLogger(t), compute)
+	defer executor.Shutdown("SIGKILL", 0)
+
+	ps, err := executor.Launch(execCmd)
+	must.NoError(t, err)
+	must.NonZero(t, ps.Pid)
+
+	state, err := executor.Wait(context.Background())
+	must.NoError(t, err)
+	must.Zero(t, state.ExitCode)
+
+	_, ok := executor.(*LibcontainerExecutor)
+	must.True(t, ok)
+
+	output := strings.TrimSpace(testExecCmd.stdout.String())
+	must.Eq(t, output, "runner")
+}
+
+func TestExecutor_LogNameEnv(t *testing.T) {
+	t.Parallel()
+	testutil.RequireCILinux(t)
+	testutil.ExecCompatible(t)
+
+	testExecCmd := testExecutorCommandWithChroot(t)
+	execCmd, allocDir := testExecCmd.command, testExecCmd.allocDir
+	execCmd.Cmd = "/bin/bash"
+	execCmd.Args = []string{"-c", "echo $LOGNAME"}
+	execCmd.User = "runner"
+	execCmd.ResourceLimits = true
+	defer allocDir.Destroy()
+
+	executor := NewExecutorWithIsolation(testlog.HCLogger(t), compute)
+	defer executor.Shutdown("SIGKILL", 0)
+
+	ps, err := executor.Launch(execCmd)
+	must.NoError(t, err)
+	must.NonZero(t, ps.Pid)
+
+	state, err := executor.Wait(context.Background())
+	must.NoError(t, err)
+	must.Zero(t, state.ExitCode)
+
+	_, ok := executor.(*LibcontainerExecutor)
+	must.True(t, ok)
+
+	output := strings.TrimSpace(testExecCmd.stdout.String())
+	must.Eq(t, output, "runner")
+}
+
 func TestExecCommand_getCgroupOr_off(t *testing.T) {
 	ci.Parallel(t)
 
@@ -1033,4 +1102,28 @@ func TestCgroupDeviceRules(t *testing.T) {
 		Permissions: "rwm",
 		Allow:       true,
 	})
+}
+
+func TestExecutor_clampCPUShares(t *testing.T) {
+
+	le := &LibcontainerExecutor{
+		logger:  testlog.HCLogger(t),
+		compute: cpustats.Compute{TotalCompute: 12000},
+	}
+
+	must.Eq(t, MaxCPUShares, le.clampCpuShares(MaxCPUShares))
+	must.Eq(t, 1000, le.clampCpuShares(1000))
+
+	le.compute.TotalCompute = MaxCPUShares
+	must.Eq(t, MaxCPUShares, le.clampCpuShares(MaxCPUShares))
+
+	le.compute.TotalCompute = MaxCPUShares + 1
+	must.Eq(t, 262143, le.clampCpuShares(MaxCPUShares))
+
+	le.compute.TotalCompute = MaxCPUShares + 1
+	must.Eq(t, 2, le.clampCpuShares(1))
+
+	le.compute = cpustats.Compute{TotalCompute: MaxCPUShares * 2}
+	must.Eq(t, 500, le.clampCpuShares(1000))
+	must.Eq(t, MaxCPUShares/2, le.clampCpuShares(MaxCPUShares))
 }

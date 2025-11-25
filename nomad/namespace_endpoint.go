@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-memdb"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/go-multierror"
 
 	"github.com/hashicorp/nomad/nomad/state"
@@ -305,7 +305,7 @@ func (n *Namespace) namespaceNoAssociatedVarsLocally(namespace string, snap *sta
 func (n *Namespace) namespaceNoAssociatedQuotasLocally(namespace string, snap *state.StateSnapshot) (bool, error) {
 	ns, _ := snap.NamespaceByName(nil, namespace)
 	if ns == nil {
-		return false, fmt.Errorf("namespace %s does not exist", ns.Name)
+		return false, fmt.Errorf("namespace %s does not exist", namespace)
 	}
 	if ns.Quota != "" {
 		return false, nil

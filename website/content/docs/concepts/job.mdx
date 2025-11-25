@@ -15,7 +15,7 @@ other tasks. Review job statuses and how Nomad versions your jobs.
 
 In Nomad, a _job_ is a user-specified state for a workload. The user expresses the job that should be running, but not where it should run. Nomad allocates resources and ensures that the actual state matches the user's desired state. A job consists of one or more tasks that you can organize into [task groups][task-groups].
 
-Declare the desired state of your job in a [job specification][job-specification], or _jobspec_, that describes
+Declare the desired state of your job in a [job specification][job-spec], or _jobspec_, that describes
 the tasks and resources necessary for the job to run. You can also
 include job constraints to control which clients Nomad runs the job on.
 
@@ -160,26 +160,28 @@ jobs:
   configuration and examples.
 - The [Schedulers] page explains the different types of Nomad schedulers and how
   those schedulers run jobs.
+- The [Declare jobs][deploy-jobs] section contains guides for creating a job,
+  using task drivers, and deployment strategies.
 
 These tutorial resources contain examples of different kinds of jobs and how to
 configure them:
 
 - The [Quick Start][quickstart] tutorials cover deploying an application and
   its resources, which include parameterized and periodic jobs.
-- The [Deploy and Manage Jobs][deploy-jobs] tutorial contains examples of different types of jobs.
-- The [Create Nomad Job Specifications][job-spec-tutorial] collection explains several aspects of job creation, including parameterized jobs and deploying a Java app on Nomad.
+- The [Create Nomad Job Specifications][job-spec-tutorial] collection contains
+  guides for migrating a Java application to Nomad.
 
 
 [allocations]: /nomad/docs/glossary#allocation
 [deployment]: /nomad/docs/glossary/#deployment
-[deploy-jobs]: /nomad/tutorials/manage-jobs/
+[deploy-jobs]: /nomad/docs/job-declare
 [job-spec]: /nomad/docs/job-specification
 [job-spec-tutorial]: /nomad/tutorials/job-specifications
 [quickstart]: /nomad/tutorials/get-started/gs-deploy-job
-[Schedulers]: /nomad/docs/schedulers
+[Schedulers]: /nomad/docs/concepts/scheduling/schedulers
 [task-groups]: /nomad/docs/glossary#task-group
 [tasks]: /nomad/docs/glossary#task
-[job-versions-guide]: /nomad/tutorials/manage-jobs/jobs-version
-[compare-versions-section]: /nomad/tutorials/manage-jobs/jobs-version#compare-versions
-[revert-version-section]: /nomad/tutorials/manage-jobs/jobs-version#revert-to-a-version
-[clone-version-section]: /nomad/tutorials/manage-jobs/jobs-version#clone-a-version
+[job-versions-guide]: /nomad/docs/job-run/versions
+[compare-versions-section]: /nomad/docs/job-run/versions#compare-versions
+[revert-version-section]: /nomad/docs/job-run/versions#revert-to-a-version
+[clone-version-section]: /nomad/docs/job-run/versions#clone-a-version

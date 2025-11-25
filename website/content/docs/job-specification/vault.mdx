@@ -1,13 +1,13 @@
 ---
 layout: docs
-page_title: vault Block - Job Specification
+page_title: vault block in the job specification
 description: |-
-  The "vault" block allows the task to specify that it requires a token from a
+  The `vault` block allows the task to specify that it requires a token from a
   HashiCorp Vault server. Nomad will automatically retrieve a Vault token for
   the task and handle token renewal for the task.
 ---
 
-# `vault` Block
+# `vault` block in the job specification
 
 <Placement
   groups={[
@@ -56,7 +56,7 @@ according to the value set in the `change_mode` parameter.
 If a `vault` block is specified, the [`template`][template] block can interact
 with Vault as well.
 
-## `vault` Parameters
+## Parameters
 
 - `allow_token_expiration` `(bool: false)` - Specifies that Nomad clients should
   not attempt to renew a task's Vault token, allowing it to expire. This should
@@ -109,22 +109,16 @@ with Vault as well.
   to use for the task. The Nomad client will retrieve a Vault token that is scoped to
   this particular namespace.
 
-- `policies` `(array<string>: [])` - Specifies the set of Vault policies that
-  the task requires. The Nomad client will retrieve a Vault token that is
-  limited to those policies. This field may only be used with the legacy Vault
-  authentication workflow and not with JWT and workload identity. It is
-  deprecated in favor of the `role` field and will be removed in Nomad 1.10.
-
 - `role` `(string: "")` - Specifies the Vault role used when retrieving a token
   from Vault using JWT and workload identity. If not specified the client's
   [`create_from_role`][] value is used.
 
-## `vault` Examples
+## Examples
 
 The following examples only show the `vault` blocks. Remember that the
 `vault` block is only valid in the placements listed above.
 
-### Retrieve Token
+### Retrieve token
 
 This example tells the Nomad client to retrieve a Vault token. The token is
 available to the task via the canonical environment variable `VAULT_TOKEN` and
@@ -137,7 +131,7 @@ vault {
 }
 ```
 
-### Signal Task
+### Signal task
 
 This example shows signaling the task instead of restarting it.
 
@@ -150,7 +144,7 @@ vault {
 }
 ```
 
-### Private Token and Change Modes
+### Private token and change modes
 
 This example retrieves a Vault token that is not shared with the task when using
 a driver that provides `image` isolation like [Docker][docker].
@@ -202,7 +196,7 @@ the certificate is reissued, as indicated by `change_mode = "restart"`
 (which is the default value for `change_mode`).
 
 
-### Vault Namespace
+### Vault namespace
 
 This example shows specifying a particular Vault namespace for a given task.
 
@@ -219,11 +213,11 @@ vault {
 ```
 
 [`create_from_role`]: /nomad/docs/configuration/vault#create_from_role
-[docker]: /nomad/docs/drivers/docker "Docker Driver"
+[docker]: /nomad/docs/job-declare/task-driver/docker "Docker Driver"
 [restart]: /nomad/docs/job-specification/restart "Nomad restart Job Specification"
 [template]: /nomad/docs/job-specification/template "Nomad template Job Specification"
 [vault]: https://www.vaultproject.io/ "Vault by HashiCorp"
 [`vault.name`]: /nomad/docs/configuration/vault#name
 [`vault_retry`]: /nomad/docs/configuration/client#vault_retry
-[Workload Identity with Vault]: /nomad/docs/integrations/vault/acl#nomad-workload-identities
-[legacy Vault authentication workflow]: /nomad/docs/integrations/vault/acl#authentication-without-workload-identity-legacy
+[Workload Identity with Vault]: /nomad/docs/secure/vault/acl#nomad-workload-identities
+[legacy Vault authentication workflow]: /nomad/docs/v1.8.x/integrations/vault/acl

@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/command/agent"
 	"github.com/hashicorp/nomad/testutil"
+	"github.com/shoenig/test"
 	"github.com/shoenig/test/must"
 )
 
@@ -40,7 +41,7 @@ func TestACLAuthMethodCreateCommand_Run(t *testing.T) {
 
 	// Test the basic validation on the command.
 	must.Eq(t, 1, cmd.Run([]string{"-address=" + url, "this-command-does-not-take-args"}))
-	must.StrContains(t, ui.ErrorWriter.String(), "This command takes no arguments")
+	must.StrContains(t, ui.ErrorWriter.String(), uiMessageNoArguments)
 
 	ui.OutputWriter.Reset()
 	ui.ErrorWriter.Reset()
@@ -67,9 +68,10 @@ func TestACLAuthMethodCreateCommand_Run(t *testing.T) {
 	args := []string{
 		"-address=" + url, "-token=" + rootACLToken.SecretID, "-name=acl-auth-method-cli-test",
 		"-type=OIDC", "-token-locality=global", "-default=true", "-max-token-ttl=3600s",
-		"-config={\"OIDCDiscoveryURL\":\"http://example.com\", \"ExpirationLeeway\": \"1h\"}",
+		`-config={"OIDCDiscoveryURL":"http://example.com", "OIDCClientID": "example-id", "BoundAudiences": ["example-aud"], "ExpirationLeeway": "1h"}`,
 	}
-	must.Eq(t, 0, cmd.Run(args))
+	test.Eq(t, 0, cmd.Run(args))
+	test.Eq(t, "", ui.ErrorWriter.String())
 	s := ui.OutputWriter.String()
 	must.StrContains(t, s, "acl-auth-method-cli-test")
 
@@ -81,7 +83,11 @@ func TestACLAuthMethodCreateCommand_Run(t *testing.T) {
 	defer os.Remove(configFile.Name())
 	must.Nil(t, err)
 
-	conf := map[string]interface{}{"OIDCDiscoveryURL": "http://example.com"}
+	conf := map[string]interface{}{
+		"OIDCDiscoveryURL": "http://example.com",
+		"OIDCClientID":     "example-id",
+		"BoundAudiences":   []string{"example-aud"},
+	}
 	jsonData, err := json.Marshal(conf)
 	must.Nil(t, err)
 
@@ -93,7 +99,8 @@ func TestACLAuthMethodCreateCommand_Run(t *testing.T) {
 		"-type=OIDC", "-token-locality=global", "-default=false", "-max-token-ttl=3600s",
 		fmt.Sprintf("-config=@%s", configFile.Name()),
 	}
-	must.Eq(t, 0, cmd.Run(args))
+	test.Eq(t, 0, cmd.Run(args))
+	test.Eq(t, "", ui.ErrorWriter.String())
 	s = ui.OutputWriter.String()
 	must.StrContains(t, s, "acl-auth-method-cli-test")
 

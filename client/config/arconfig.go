@@ -8,6 +8,7 @@ import (
 
 	"github.com/armon/go-metrics"
 	log "github.com/hashicorp/go-hclog"
+	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/nomad/client/allocdir"
 	arinterfaces "github.com/hashicorp/nomad/client/allocrunner/interfaces"
 	"github.com/hashicorp/nomad/client/consul"
@@ -62,9 +63,6 @@ type AllocRunnerConfig struct {
 	// ConsulProxiesFunc gets a Consul client used to lookup supported envoy
 	// versions of the Consul agent.
 	ConsulProxiesFunc consul.SupportedProxiesAPIFunc
-
-	// ConsulSI is the Consul client used to manage service identity tokens.
-	ConsulSI consul.ServiceIdentityAPI
 
 	// VaultFunc is the function to get a Vault client to use to retrieve Vault
 	// tokens

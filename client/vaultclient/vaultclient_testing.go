@@ -9,14 +9,11 @@ import (
 	"sync"
 
 	"github.com/hashicorp/nomad/helper/uuid"
-	"github.com/hashicorp/nomad/nomad/structs"
 )
 
 // MockVaultClient is used for testing the vaultclient integration and is safe
 // for concurrent access.
 type MockVaultClient struct {
-	// legacyTokens stores the tokens per task derived using the legacy flow.
-	legacyTokens map[string]string
 
 	// jwtTokens stores the tokens derived using the JWT flow.
 	jwtTokens map[string]string
@@ -36,27 +33,24 @@ type MockVaultClient struct {
 	// token is derived
 	deriveTokenErrors map[string]map[string]error
 
-	// DeriveTokenFn allows the caller to control the DeriveToken function. If
-	// not set an error is returned if found in DeriveTokenErrors and otherwise
-	// a token is generated and returned
-	DeriveTokenFn func(a *structs.Allocation, tasks []string) (map[string]string, error)
-
 	// deriveTokenWithJWTFn allows the caller to control the DeriveTokenWithJWT
 	// function.
-	deriveTokenWithJWTFn func(context.Context, JWTLoginRequest) (string, bool, error)
+	deriveTokenWithJWTFn func(context.Context, JWTLoginRequest) (string, bool, int, error)
 
 	// renewable determines if the tokens returned should be marked as renewable
 	renewable bool
+
+	duration int
 
 	mu sync.Mutex
 }
 
 // NewMockVaultClient returns a MockVaultClient for testing
 func NewMockVaultClient(_ string) (VaultClient, error) {
-	return &MockVaultClient{renewable: true}, nil
+	return &MockVaultClient{renewable: true, duration: 30}, nil
 }
 
-func (vc *MockVaultClient) DeriveTokenWithJWT(ctx context.Context, req JWTLoginRequest) (string, bool, error) {
+func (vc *MockVaultClient) DeriveTokenWithJWT(ctx context.Context, req JWTLoginRequest) (string, bool, int, error) {
 	vc.mu.Lock()
 	defer vc.mu.Unlock()
 
@@ -73,30 +67,7 @@ func (vc *MockVaultClient) DeriveTokenWithJWT(ctx context.Context, req JWTLoginR
 		token = fmt.Sprintf("%s-%s", token, req.Role)
 	}
 	vc.jwtTokens[req.JWT] = token
-	return token, vc.renewable, nil
-}
-
-func (vc *MockVaultClient) DeriveToken(a *structs.Allocation, tasks []string) (map[string]string, error) {
-	vc.mu.Lock()
-	defer vc.mu.Unlock()
-
-	if vc.DeriveTokenFn != nil {
-		return vc.DeriveTokenFn(a, tasks)
-	}
-
-	tokens := make(map[string]string, len(tasks))
-	for _, task := range tasks {
-		if tasks, ok := vc.deriveTokenErrors[a.ID]; ok {
-			if err, ok := tasks[task]; ok {
-				return nil, err
-			}
-		}
-
-		tokens[task] = uuid.Generate()
-	}
-
-	vc.legacyTokens = tokens
-	return tokens, nil
+	return token, vc.renewable, vc.duration, nil
 }
 
 func (vc *MockVaultClient) SetDeriveTokenError(allocID string, tasks []string, err error) {
@@ -161,14 +132,7 @@ func (vc *MockVaultClient) SetRenewable(renewable bool) {
 	vc.renewable = renewable
 }
 
-// LegacyTokens returns the tokens generated using the legacy flow.
-func (vc *MockVaultClient) LegacyTokens() map[string]string {
-	vc.mu.Lock()
-	defer vc.mu.Unlock()
-	return vc.legacyTokens
-}
-
-// JWTTotkens returns the tokens generated suing the JWT flow.
+// JWTTokens returns the tokens generated suing the JWT flow.
 func (vc *MockVaultClient) JWTTokens() map[string]string {
 	vc.mu.Lock()
 	defer vc.mu.Unlock()
@@ -198,24 +162,8 @@ func (vc *MockVaultClient) RenewTokenErrCh(token string) chan error {
 	return vc.renewTokens[token]
 }
 
-// RenewTokenErrors is used to return an error when the RenewToken is called
-// with the given token
-func (vc *MockVaultClient) RenewTokenErrors() map[string]error {
-	vc.mu.Lock()
-	defer vc.mu.Unlock()
-	return vc.renewTokenErrors
-}
-
-// DeriveTokenErrors maps an allocation ID and tasks to an error when the
-// token is derived
-func (vc *MockVaultClient) DeriveTokenErrors() map[string]map[string]error {
-	vc.mu.Lock()
-	defer vc.mu.Unlock()
-	return vc.deriveTokenErrors
-}
-
 // SetDeriveTokenWithJWTFn sets the function used to derive tokens using JWT.
-func (vc *MockVaultClient) SetDeriveTokenWithJWTFn(f func(context.Context, JWTLoginRequest) (string, bool, error)) {
+func (vc *MockVaultClient) SetDeriveTokenWithJWTFn(f func(context.Context, JWTLoginRequest) (string, bool, int, error)) {
 	vc.mu.Lock()
 	defer vc.mu.Unlock()
 	vc.deriveTokenWithJWTFn = f
