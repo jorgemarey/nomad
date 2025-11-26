@@ -41,22 +41,3 @@ func (h jobVaultHook) Validate(job *structs.Job) ([]error, error) {
 
 	return nil, h.validateClustersForNamespace(job, vaultBlocks)
 }
-
-func hasWid(job *structs.Job, groupName, taskName string, vaultBlock *structs.Vault) bool {
-	for _, group := range job.TaskGroups {
-		if group.Name != groupName {
-			continue
-		}
-		for _, task := range group.Tasks {
-			if task.Name != taskName {
-				continue
-			}
-			for _, wid := range task.Identities {
-				if wid.Name == vaultBlock.IdentityName() {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}

@@ -964,7 +964,6 @@ func (s *Service) Hash(allocID, taskName string, canary bool) string {
 	hashString(h, allocID)
 	hashString(h, taskName)
 	hashString(h, s.Name)
-	hashString(h, s.Kind)
 	hashString(h, s.PortLabel)
 	hashString(h, s.AddressMode)
 	hashString(h, s.Address)
@@ -1126,10 +1125,6 @@ func (s *Service) Equal(o *Service) bool {
 	}
 
 	if s.Name != o.Name {
-		return false
-	}
-
-	if s.Kind != o.Kind {
 		return false
 	}
 

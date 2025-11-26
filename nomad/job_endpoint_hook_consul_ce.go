@@ -52,8 +52,6 @@ func (h jobConsulHook) Validate(job *structs.Job) ([]error, error) {
 					return nil, err
 				}
 			}
-
-			// TODO: revisar si esto está bien
 		}
 	}
 

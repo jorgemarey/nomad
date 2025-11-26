@@ -1407,9 +1407,6 @@ func (c *ServiceClient) serviceRegs(
 			}
 		}
 	}
-	if service.Kind != "" {
-		kind = api.ServiceKind(service.Kind)
-	}
 
 	taggedAddresses, err := parseTaggedAddresses(service.TaggedAddresses, port)
 	if err != nil {
