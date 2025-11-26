@@ -74,7 +74,8 @@ endif
 
 ifeq (Darwin,$(THIS_OS))
 ALL_TARGETS = darwin_amd64 \
-	darwin_arm64
+	darwin_arm64 \
+	linux_amd64
 endif
 
 ifeq (FreeBSD,$(THIS_OS))
