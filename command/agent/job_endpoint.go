@@ -603,12 +603,13 @@ func (s *HTTPServer) jobUpdate(resp http.ResponseWriter, req *http.Request, jobI
 		Job:        sJob,
 		Submission: submission,
 
-		EnforceIndex:   args.EnforceIndex,
-		JobModifyIndex: args.JobModifyIndex,
-		PolicyOverride: args.PolicyOverride,
-		PreserveCounts: args.PreserveCounts,
-		EvalPriority:   args.EvalPriority,
-		WriteRequest:   *writeReq,
+		EnforceIndex:      args.EnforceIndex,
+		JobModifyIndex:    args.JobModifyIndex,
+		PolicyOverride:    args.PolicyOverride,
+		PreserveCounts:    args.PreserveCounts,
+		PreserveResources: args.PreserveResources,
+		EvalPriority:      args.EvalPriority,
+		WriteRequest:      *writeReq,
 	}
 
 	var out structs.JobRegisterResponse
@@ -1463,6 +1464,19 @@ func ApiTaskToStructsTask(job *structs.Job, group *structs.TaskGroup,
 			ChangeMode:           *apiTask.Vault.ChangeMode,
 			ChangeSignal:         *apiTask.Vault.ChangeSignal,
 			AllowTokenExpiration: *apiTask.Vault.AllowTokenExpiration,
+		}
+	}
+
+	if len(apiTask.Secrets) > 0 {
+		structsTask.Secrets = []*structs.Secret{}
+		for _, s := range apiTask.Secrets {
+			structsTask.Secrets = append(structsTask.Secrets, &structs.Secret{
+				Name:     s.Name,
+				Provider: s.Provider,
+				Path:     s.Path,
+				Config:   s.Config,
+				Env:      s.Env,
+			})
 		}
 	}
 

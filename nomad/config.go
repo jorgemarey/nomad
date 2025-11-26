@@ -433,6 +433,9 @@ type Config struct {
 	// JobTrackedVersions is the number of historic Job versions that are kept.
 	JobTrackedVersions int
 
+	// JobMaxCount is the maximum total task group counts for a single Job.
+	JobMaxCount int
+
 	Reporting *config.ReportingConfig
 
 	// OIDCIssuer is the URL for the OIDC Issuer field in Workload Identity JWTs.
@@ -448,6 +451,11 @@ type Config struct {
 	// considered healthy. Without this, the server can hang indefinitely
 	// waiting for these.
 	StartTimeout time.Duration
+
+	// NodeIntroductionConfig is the configuration for the node introduction
+	// feature. This feature allows servers to validate node registration
+	// requests and perform the appropriate enforcement actions.
+	NodeIntroductionConfig *structs.NodeIntroductionConfig
 
 	// LogFile is used by MonitorExport to stream a server's log file
 	LogFile string `hcl:"log_file"`
@@ -480,6 +488,7 @@ func (c *Config) Copy() *Config {
 	nc.LicenseConfig = c.LicenseConfig.Copy()
 	nc.SearchConfig = c.SearchConfig.Copy()
 	nc.KEKProviderConfigs = helper.CopySlice(c.KEKProviderConfigs)
+	nc.NodeIntroductionConfig = c.NodeIntroductionConfig.Copy()
 
 	return &nc
 }
@@ -658,8 +667,10 @@ func DefaultConfig() *Config {
 		DeploymentQueryRateLimit: deploymentwatcher.LimitStateQueriesPerSecond,
 		JobDefaultPriority:       structs.JobDefaultPriority,
 		JobMaxPriority:           structs.JobDefaultMaxPriority,
+		JobMaxCount:              structs.JobDefaultMaxCount,
 		JobTrackedVersions:       structs.JobDefaultTrackedVersions,
 		StartTimeout:             30 * time.Second,
+		NodeIntroductionConfig:   structs.DefaultNodeIntroductionConfig(),
 	}
 
 	// Enable all known schedulers by default

@@ -141,6 +141,9 @@ const (
 	// NOTE: MessageTypes are shared between CE and ENT. If you need to add a
 	// new type, check that ENT is not already using that value.
 	// MEIGAS: When we made the initial code we set them (namespace request types) at 24 and 25
+	//
+	// NOTE: Adding a new MessageType above? You need to have a version check
+	// for the feature to avoid panics during upgrades.
 )
 
 const (
@@ -225,11 +228,17 @@ const (
 	RateMetricRead  = "read"
 	RateMetricList  = "list"
 	RateMetricWrite = "write"
+
+	// Vault secret provider used in task validation
+	SecretProviderVault = "vault"
 )
 
 var (
 	// validNamespaceName is used to validate a namespace name
 	validNamespaceName = regexp.MustCompile("^[a-zA-Z0-9-]{1,128}$")
+
+	// validSecretName is used to validate a secret name
+	validSecretName = regexp.MustCompile("^[a-zA-Z0-9_]{1,128}$")
 )
 
 // NamespacedID is a tuple of an ID and a namespace
@@ -552,11 +561,17 @@ func (ai *AuthenticatedIdentity) String() string {
 	if ai.ACLToken != nil && ai.ACLToken != AnonymousACLToken {
 		return "token:" + ai.ACLToken.AccessorID
 	}
-	if ai.Claims != nil {
+	if ai.Claims != nil && ai.Claims.IsWorkload() {
 		return "alloc:" + ai.Claims.AllocationID
 	}
 	if ai.ClientID != "" {
 		return "client:" + ai.ClientID
+	}
+	if ai.Claims != nil && ai.Claims.IsNode() {
+		return "client:" + ai.Claims.NodeID
+	}
+	if ai.Claims != nil && ai.Claims.IsNodeIntroduction() {
+		return "client-introduction:" + ai.Claims.NodeIntroductionIdentityClaims.String()
 	}
 	return ai.TLSName + ":" + ai.RemoteIP.String()
 }
@@ -604,19 +619,6 @@ type WriteMeta struct {
 	Index uint64
 }
 
-// NodeRegisterRequest is used for Node.Register endpoint
-// to register a node as being a schedulable entity.
-type NodeRegisterRequest struct {
-	Node      *Node
-	NodeEvent *NodeEvent
-
-	// CreateNodePool is used to indicate that the node's node pool should be
-	// create along with the node registration if it doesn't exist.
-	CreateNodePool bool
-
-	WriteRequest
-}
-
 // NodeDeregisterRequest is used for Node.Deregister endpoint
 // to deregister a node as being a schedulable entity.
 type NodeDeregisterRequest struct {
@@ -648,16 +650,6 @@ type NodeServerInfo struct {
 
 	// Datacenter is the datacenter that a Nomad server belongs to
 	Datacenter string
-}
-
-// NodeUpdateStatusRequest is used for Node.UpdateStatus endpoint
-// to update the status of a node.
-type NodeUpdateStatusRequest struct {
-	NodeID    string
-	Status    string
-	NodeEvent *NodeEvent
-	UpdatedAt int64
-	WriteRequest
 }
 
 // NodeUpdateDrainRequest is used for updating the drain strategy
@@ -753,6 +745,11 @@ type JobRegisterRequest struct {
 	// counts should be preserved, over those specified in the new job spec
 	// PreserveCounts is ignored for newly created jobs.
 	PreserveCounts bool
+
+	// PreserveResources indicates that during job update, existing task
+	// resources should be preserved, over those specified in the new job spec
+	// PreserveResources is ignored for newly created jobs.
+	PreserveResources bool
 
 	// PolicyOverride is set when the user is attempting to override any policies
 	PolicyOverride bool
@@ -1164,6 +1161,7 @@ type AllocUpdateDesiredTransitionRequest struct {
 type AllocStopRequest struct {
 	AllocID         string
 	NoShutdownDelay bool
+	Reschedule      bool
 
 	WriteRequest
 }
@@ -1269,6 +1267,9 @@ type ClusterMetadata struct {
 
 // VaultAccessor is a reference to a created Vault token on behalf of
 // an allocation's task.
+//
+// DEPRECATED (1.10.0): this object exists only to allow decoding any accessors
+// still left in state so they can be discarded during FSM restore
 type VaultAccessor struct {
 	AllocID     string
 	Task        string
@@ -1501,36 +1502,6 @@ type JobValidateResponse struct {
 	// Warnings contains any warnings about the given job. These may include
 	// deprecation warnings.
 	Warnings string
-}
-
-// NodeUpdateResponse is used to respond to a node update
-type NodeUpdateResponse struct {
-	HeartbeatTTL    time.Duration
-	EvalIDs         []string
-	EvalCreateIndex uint64
-	NodeModifyIndex uint64
-
-	// Features informs clients what enterprise features are allowed
-	Features uint64
-
-	// LeaderRPCAddr is the RPC address of the current Raft Leader.  If
-	// empty, the current Nomad Server is in the minority of a partition.
-	LeaderRPCAddr string
-
-	// NumNodes is the number of Nomad nodes attached to this quorum of
-	// Nomad Servers at the time of the response.  This value can
-	// fluctuate based on the health of the cluster between heartbeats.
-	NumNodes int32
-
-	// Servers is the full list of known Nomad servers in the local
-	// region.
-	Servers []*NodeServerInfo
-
-	// SchedulingEligibility is used to inform clients what the server-side
-	// has for their scheduling status during heartbeats.
-	SchedulingEligibility string
-
-	QueryMeta
 }
 
 // NodeDrainUpdateResponse is used to respond to a node drain update
@@ -2101,19 +2072,6 @@ type Node struct {
 	// reserved from scheduling.
 	ReservedResources *NodeReservedResources
 
-	// Resources is the available resources on the client.
-	// For example 'cpu=2' 'memory=2048'
-	// COMPAT(0.10): Remove after 0.10
-	Resources *Resources
-
-	// Reserved is the set of resources that are reserved,
-	// and should be subtracted from the total resources for
-	// the purposes of scheduling. This may be provide certain
-	// high-watermark tolerances or because of external schedulers
-	// consuming resources.
-	// COMPAT(0.10): Remove after 0.10
-	Reserved *Resources
-
 	// Links are used to 'link' this client to external
 	// systems. For example 'consul=foo.dc1' 'aws=i-83212'
 	// 'ami=ami-123'
@@ -2147,6 +2105,15 @@ type Node struct {
 
 	// StatusDescription is meant to provide more human useful information
 	StatusDescription string
+
+	// IdentitySigningKeyID is the ID of the root key used to sign the identity
+	// of the node. This is primarily used to ensure Nomad does not delete a
+	// root keyring that still has nodes with identities signed by it.
+	//
+	// This field is only set if the node has a workload identity and will be
+	// modified by the server when the node is registered or updated, and the
+	// signing key ID has changed from what is stored in state.
+	IdentitySigningKeyID string
 
 	// StatusUpdatedAt is the time stamp at which the state of the node was
 	// updated, stored as Unix (no nano seconds!)
@@ -2285,8 +2252,6 @@ func (n *Node) Copy() *Node {
 	nn.Attributes = maps.Clone(nn.Attributes)
 	nn.NodeResources = nn.NodeResources.Copy()
 	nn.ReservedResources = nn.ReservedResources.Copy()
-	nn.Resources = nn.Resources.Copy()
-	nn.Reserved = nn.Reserved.Copy()
 	nn.Links = maps.Clone(nn.Links)
 	nn.Meta = maps.Clone(nn.Meta)
 	nn.DrainStrategy = nn.DrainStrategy.Copy()
@@ -4357,6 +4322,9 @@ const (
 	// JobMaxPriority is the maximum allowed configuration value for maximum job priority
 	JobMaxPriority = math.MaxInt16 - 1
 
+	// JobDefaultMaxCount is the default maximum total task group counts per job
+	JobDefaultMaxCount = 50000
+
 	// CoreJobPriority should be higher than any user
 	// specified job so that it gets priority. This is important
 	// for the system to remain healthy.
@@ -5157,6 +5125,33 @@ func (j *Job) Vault() map[string]map[string]*Vault {
 	return blocks
 }
 
+// Secrets returns the set of secrets per task group, per task
+func (j *Job) Secrets() map[string][]string {
+	blocks := make(map[string][]string, len(j.TaskGroups))
+
+	for _, tg := range j.TaskGroups {
+		secrets := []string{}
+
+		for _, task := range tg.Tasks {
+			if len(task.Secrets) == 0 {
+				continue
+			}
+
+			for _, s := range task.Secrets {
+				if !slices.Contains(secrets, s.Provider) {
+					secrets = append(secrets, s.Provider)
+				}
+			}
+		}
+
+		if len(secrets) != 0 {
+			blocks[tg.Name] = secrets
+		}
+	}
+
+	return blocks
+}
+
 // ConnectTasks returns the set of Consul Connect enabled tasks defined on the
 // job that will require a Service Identity token in the case that Consul ACLs
 // are enabled. The TaskKind.Value is the name of the Consul service.
@@ -5383,6 +5378,9 @@ var (
 type UpdateStrategy struct {
 	// Stagger is used to determine the rate at which allocations are migrated
 	// due to down or draining nodes.
+	//
+	// Deprecated: as of Nomad 1.11, this field is equivalent to MinHealthyTime
+	// and will be removed in future releases.
 	Stagger time.Duration
 
 	// MaxParallel is how many updates can be done in parallel
@@ -7145,9 +7143,9 @@ func (tg *TaskGroup) Validate(j *Job) error {
 		}
 	}
 
-	if j.Type == JobTypeSystem {
+	if j.Type == JobTypeSystem || j.Type == JobTypeSysBatch {
 		if tg.ReschedulePolicy != nil {
-			mErr = multierror.Append(mErr, fmt.Errorf("System jobs should not have a reschedule policy"))
+			mErr = multierror.Append(mErr, fmt.Errorf("System or sysbatch jobs should not have a reschedule policy"))
 		}
 	} else {
 		if tg.ReschedulePolicy != nil {
@@ -7857,6 +7855,9 @@ type Task struct {
 	// have access to.
 	Vault *Vault
 
+	// List of secrets for the task.
+	Secrets []*Secret
+
 	// Consul configuration specific to this task. If uset, falls back to the
 	// group's Consul field.
 	Consul *Consul
@@ -8151,6 +8152,12 @@ func (t *Task) Validate(jobType string, tg *TaskGroup) error {
 	if t.Name == "" {
 		mErr.Errors = append(mErr.Errors, errors.New("Missing task name"))
 	}
+
+	// Tasks cannot be named "alloc" as this conflicts with and breaks task
+	// filesystem isolation features.
+	if t.Name == "alloc" {
+		mErr.Errors = append(mErr.Errors, errors.New("Task cannot be named \"alloc\""))
+	}
 	if strings.ContainsAny(t.Name, `/\`) {
 		// We enforce this so that when creating the directory on disk it will
 		// not have any slashes.
@@ -8353,6 +8360,23 @@ func (t *Task) Validate(jobType string, tg *TaskGroup) error {
 
 		if err := wid.Validate(); err != nil {
 			mErr.Errors = append(mErr.Errors, fmt.Errorf("Identity %q is invalid: %w", wid.Name, err))
+		}
+	}
+
+	secrets := make(map[string]bool)
+	for _, s := range t.Secrets {
+		if _, ok := secrets[s.Name]; ok {
+			mErr.Errors = append(mErr.Errors, fmt.Errorf("Duplicate secret %q found", s.Name))
+		} else {
+			secrets[s.Name] = true
+		}
+
+		if s.Provider == SecretProviderVault && t.Vault == nil {
+			mErr.Errors = append(mErr.Errors, fmt.Errorf("Secret %q has provider \"vault\" but no vault block", s.Name))
+		}
+
+		if err := s.Validate(); err != nil {
+			mErr.Errors = append(mErr.Errors, fmt.Errorf("Secret %q is invalid: %w", s.Name, err))
 		}
 	}
 
@@ -10002,6 +10026,11 @@ func (c *Constraint) Validate() error {
 	return mErr.ErrorOrNil()
 }
 
+// DiffID fulfills the DiffableWithID interface.
+func (c *Constraint) DiffID() string {
+	return c.String()
+}
+
 type Constraints []*Constraint
 
 // Equal compares Constraints as a set
@@ -10116,6 +10145,11 @@ func (a *Affinity) Validate() error {
 	}
 
 	return mErr.ErrorOrNil()
+}
+
+// DiffID fulfills the DiffableWithID interface.
+func (a *Affinity) DiffID() string {
+	return a.String()
 }
 
 // Spread is used to specify desired distribution of allocations according to weight
@@ -10441,6 +10475,102 @@ func (v *Vault) Validate() error {
 	}
 
 	return mErr.ErrorOrNil()
+}
+
+type Secret struct {
+	Name     string
+	Provider string
+	Path     string
+	Config   map[string]any
+	Env      map[string]string
+}
+
+func (s *Secret) Equal(o *Secret) bool {
+	if s == nil || o == nil {
+		return s == o
+	}
+
+	switch {
+	case s.Name != o.Name:
+		return false
+	case s.Provider != o.Provider:
+		return false
+	case s.Path != o.Path:
+		return false
+	case !maps.Equal(s.Config, o.Config):
+		return false
+	case !maps.Equal(s.Env, o.Env):
+		return false
+	}
+
+	return true
+}
+
+func (s *Secret) Copy() *Secret {
+	if s == nil {
+		return nil
+	}
+
+	confCopy, err := copystructure.Copy(s.Config)
+	if err != nil {
+		// The default Copy() implementation should not return
+		// an error, so we should not reach this code path.
+		panic(err.Error())
+	}
+
+	return &Secret{
+		Name:     s.Name,
+		Provider: s.Provider,
+		Path:     s.Path,
+		Config:   confCopy.(map[string]any),
+		Env:      maps.Clone(s.Env),
+	}
+}
+
+func (s *Secret) Validate() error {
+	if s == nil {
+		return nil
+	}
+
+	var mErr multierror.Error
+
+	if s.Name == "" {
+		_ = multierror.Append(&mErr, errors.New("secret name cannot be empty"))
+	}
+
+	if !validSecretName.MatchString(s.Name) {
+		_ = multierror.Append(&mErr, fmt.Errorf("secret name must match regex %s", validSecretName))
+	}
+
+	if s.Provider == "" {
+		_ = multierror.Append(&mErr, errors.New("secret provider cannot be empty"))
+	}
+
+	if s.Path == "" {
+		_ = multierror.Append(&mErr, errors.New("secret path cannot be empty"))
+	}
+
+	if s.Provider == "nomad" || s.Provider == "vault" {
+		if len(s.Env) > 0 {
+			_ = multierror.Append(&mErr, fmt.Errorf("%s provider cannot use the env block", s.Provider))
+		}
+	} else {
+		if len(s.Config) > 0 {
+			_ = multierror.Append(&mErr, fmt.Errorf("custom plugin provider %s cannot use the config block", s.Provider))
+		}
+	}
+
+	return mErr.ErrorOrNil()
+}
+
+func (s *Secret) Canonicalize() {
+	if s == nil {
+		return
+	}
+
+	if len(s.Config) == 0 {
+		s.Config = nil
+	}
 }
 
 const (
@@ -10881,6 +11011,11 @@ type DesiredTransition struct {
 	// task shutdown_delay configuration and ignore the delay for any
 	// allocations stopped as a result of this Deregister call.
 	NoShutdownDelay *bool
+
+	// MigrateDisablePlacement is used to disable the placement of the allocation
+	// when Migrate is set. This field is used to prevent batch job allocations
+	// from being placed after being stopped.
+	MigrateDisablePlacement *bool
 }
 
 // Merge merges the two desired transitions, preferring the values from the
@@ -10888,6 +11023,10 @@ type DesiredTransition struct {
 func (d *DesiredTransition) Merge(o *DesiredTransition) {
 	if o.Migrate != nil {
 		d.Migrate = o.Migrate
+	}
+
+	if o.MigrateDisablePlacement != nil {
+		d.MigrateDisablePlacement = o.MigrateDisablePlacement
 	}
 
 	if o.Reschedule != nil {
@@ -10905,12 +11044,18 @@ func (d *DesiredTransition) Merge(o *DesiredTransition) {
 
 // ShouldMigrate returns whether the transition object dictates a migration.
 func (d *DesiredTransition) ShouldMigrate() bool {
+	if d == nil {
+		return false
+	}
 	return d.Migrate != nil && *d.Migrate
 }
 
 // ShouldReschedule returns whether the transition object dictates a
 // rescheduling.
 func (d *DesiredTransition) ShouldReschedule() bool {
+	if d == nil {
+		return false
+	}
 	return d.Reschedule != nil && *d.Reschedule
 }
 
@@ -10930,6 +11075,15 @@ func (d *DesiredTransition) ShouldIgnoreShutdownDelay() bool {
 		return false
 	}
 	return d.NoShutdownDelay != nil && *d.NoShutdownDelay
+}
+
+// ShouldDisableMigrationPlacement returns whether the transition object dictates
+// that the migration should place allocation.
+func (d *DesiredTransition) ShouldDisableMigrationPlacement() bool {
+	if d == nil {
+		return false
+	}
+	return d.MigrateDisablePlacement != nil && *d.MigrateDisablePlacement
 }
 
 const (
@@ -11361,6 +11515,7 @@ func (a *Allocation) MigrateStrategy() *MigrateStrategy {
 func (a *Allocation) NextRescheduleTime() (time.Time, bool) {
 	failTime := a.LastEventTime()
 	reschedulePolicy := a.ReschedulePolicy()
+	isRescheduledBatch := a.Job.Type == JobTypeBatch && a.DesiredTransition.ShouldReschedule()
 
 	// If reschedule is disabled, return early
 	if reschedulePolicy == nil || (reschedulePolicy.Attempts == 0 && !reschedulePolicy.Unlimited) {
@@ -11368,7 +11523,7 @@ func (a *Allocation) NextRescheduleTime() (time.Time, bool) {
 	}
 
 	if (a.DesiredStatus == AllocDesiredStatusStop && !a.LastRescheduleFailed()) ||
-		(a.ClientStatus != AllocClientStatusFailed && a.ClientStatus != AllocClientStatusLost) ||
+		(!isRescheduledBatch && a.ClientStatus != AllocClientStatusFailed && a.ClientStatus != AllocClientStatusLost) ||
 		failTime.IsZero() || reschedulePolicy == nil {
 		return time.Time{}, false
 	}
@@ -11385,6 +11540,7 @@ func (a *Allocation) nextRescheduleTime(failTime time.Time, reschedulePolicy *Re
 		attempted, attempts := a.RescheduleTracker.rescheduleInfo(reschedulePolicy, failTime)
 		rescheduleEligible = attempted < attempts && nextDelay < reschedulePolicy.Interval
 	}
+
 	return nextRescheduleTime, rescheduleEligible
 }
 
@@ -12192,7 +12348,7 @@ func (a *AllocNetworkStatus) IsZero() bool {
 	if a == nil {
 		return true
 	}
-	if a.InterfaceName != "" || a.Address != "" {
+	if a.InterfaceName != "" || a.Address != "" || a.AddressIPv6 != "" {
 		return false
 	}
 	if !a.DNS.IsZero() {
@@ -12321,6 +12477,7 @@ const (
 	EvalTriggerScaling              = "job-scaling"
 	EvalTriggerMaxDisconnectTimeout = "max-disconnect-timeout"
 	EvalTriggerReconnect            = "reconnect"
+	EvalTriggerAllocReschedule      = "alloc-reschedule"
 )
 
 const (
@@ -12468,6 +12625,9 @@ type Evaluation struct {
 	// made, but the metrics are persisted so that the user can use the feedback
 	// to determine the cause.
 	FailedTGAllocs map[string]*AllocMetric
+
+	// PlanAnnotations represents the output of the reconciliation step.
+	PlanAnnotations *PlanAnnotations
 
 	// ClassEligibility tracks computed node classes that have been explicitly
 	// marked as eligible or ineligible.
@@ -13115,11 +13275,15 @@ type DesiredUpdates struct {
 	DestructiveUpdate uint64
 	Canary            uint64
 	Preemptions       uint64
+	Disconnect        uint64
+	Reconnect         uint64
+	RescheduleNow     uint64
+	RescheduleLater   uint64
 }
 
 func (d *DesiredUpdates) GoString() string {
-	return fmt.Sprintf("(place %d) (inplace %d) (destructive %d) (stop %d) (migrate %d) (ignore %d) (canary %d)",
-		d.Place, d.InPlaceUpdate, d.DestructiveUpdate, d.Stop, d.Migrate, d.Ignore, d.Canary)
+	return fmt.Sprintf("(place %d) (inplace %d) (destructive %d) (stop %d) (migrate %d) (ignore %d) (canary %d) (reschedule now %d) (reschedule later %d) (disconnect %d) (reconnect %d)",
+		d.Place, d.InPlaceUpdate, d.DestructiveUpdate, d.Stop, d.Migrate, d.Ignore, d.Canary, d.RescheduleNow, d.RescheduleLater, d.Disconnect, d.Reconnect)
 }
 
 // msgpackHandle is a shared handle for encoding/decoding of structs
@@ -13335,7 +13499,7 @@ func (a *ACLPolicy) Validate() error {
 		err := fmt.Errorf("invalid name '%s'", a.Name)
 		mErr.Errors = append(mErr.Errors, err)
 	}
-	if _, err := acl.Parse(a.Rules); err != nil {
+	if _, err := acl.Parse(a.Rules, acl.PolicyParseStrict); err != nil {
 		err = fmt.Errorf("failed to parse rules: %v", err)
 		mErr.Errors = append(mErr.Errors, err)
 	}

@@ -29,7 +29,7 @@ sudo apt-get update
 sudo apt-get upgrade -y
 sudo apt-get install -y \
      software-properties-common \
-     dnsmasq unzip tree redis-tools jq curl tmux awscli nfs-common \
+     unzip tree redis-tools jq curl tmux awscli nfs-common \
      apt-transport-https ca-certificates gnupg2 stress
 
 # Install hc-install
@@ -96,7 +96,7 @@ sudo apt-get install -y openjdk-17-jdk-headless
 # CNI
 echo "Installing CNI plugins"
 wget -q -O - \
-     https://github.com/containernetworking/plugins/releases/download/v1.0.0/cni-plugins-linux-amd64-v1.0.0.tgz \
+     https://github.com/containernetworking/plugins/releases/download/v1.8.0/cni-plugins-linux-amd64-v1.8.0.tgz \
     | sudo tar -C /opt/cni/bin -xz
 
 echo "Installing consul-cni plugin"
@@ -108,6 +108,14 @@ sudo mv /tmp/linux/cni/loopback.* /opt/cni/config/
 # cni_args test plugin and network config
 sudo mv /tmp/linux/cni/cni_args.conflist /opt/cni/config/
 sudo mv /tmp/linux/cni/cni_args.sh /opt/cni/bin/
+
+echo "Installing additional CNI network configs"
+# copy of nomad's "bridge" for connect+cni test (e2e/connect/)
+sudo mv /tmp/linux/cni/nomad_bridge_copy.conflist /opt/cni/config/
+
+echo "Installing CPI test plugins"
+mkdir_for_root /opt/nomad/data/common_plugins/secrets
+sudo mv /tmp/linux/common-plugins/test_secret_plugin.sh /opt/nomad/data/common_plugins/secrets/test_secret_plugin
 
 # Podman
 echo "Installing Podman"
@@ -127,44 +135,13 @@ sudo chmod +x /usr/local/bin/pledge
 
 # Exec2
 echo "Installing Exec2 Driver"
-sudo hc-install install --path ${NOMAD_PLUGIN_DIR} --version v0.1.0-alpha.2 nomad-driver-exec2
+sudo hc-install install --path ${NOMAD_PLUGIN_DIR} --version v0.1.0 nomad-driver-exec2
 sudo chmod +x ${NOMAD_PLUGIN_DIR}/nomad-driver-exec2
 
 # Envoy
 echo "Installing Envoy"
-sudo curl -s -S -L -o /opt/bin/envoy https://github.com/envoyproxy/envoy/releases/download/v1.29.4/envoy-1.29.4-linux-x86_64
+sudo curl -s -S -L -o /opt/bin/envoy https://github.com/envoyproxy/envoy/releases/download/v1.34.1/envoy-1.34.1-linux-x86_64
 sudo chmod +x /opt/bin/envoy
-
-# ECS
-if [ -a "/tmp/linux/nomad-driver-ecs" ]; then
-    echo "Installing nomad-driver-ecs"
-    sudo install --mode=0755 --owner=ubuntu /tmp/linux/nomad-driver-ecs "$NOMAD_PLUGIN_DIR"
-else
-    echo "nomad-driver-ecs not found: skipping install"
-fi
-
-echo "Configuring dnsmasq"
-
-# disable systemd stub resolver
-sudo sed -i 's|#DNSStubListener=yes|DNSStubListener=no|g' /etc/systemd/resolved.conf
-
-# disable systemd-resolved and configure dnsmasq to forward local requests to
-# consul. the resolver files need to dynamic configuration based on the VPC
-# address and docker bridge IP, so those will be rewritten at boot time.
-sudo systemctl disable systemd-resolved.service
-sudo systemctl stop systemd-resolved.service
-sudo mv /tmp/linux/dnsmasq /etc/dnsmasq.d/default
-sudo chown root:root /etc/dnsmasq.d/default
-
-# this is going to be overwritten at provisioning time, but we need something
-# here or we can't fetch binaries to do the provisioning
-echo 'nameserver 8.8.8.8' > /tmp/resolv.conf
-sudo mv /tmp/resolv.conf /etc/resolv.conf
-
-sudo mv /tmp/linux/dnsmasq.service /etc/systemd/system/dnsmasq.service
-sudo mv /tmp/linux/dnsconfig.sh /usr/local/bin/dnsconfig.sh
-sudo chmod +x /usr/local/bin/dnsconfig.sh
-sudo systemctl daemon-reload
 
 echo "Updating boot parameters"
 

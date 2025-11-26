@@ -25,6 +25,7 @@ import (
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/testlog"
 	"github.com/hashicorp/nomad/helper/uuid"
+	"github.com/hashicorp/nomad/nomad/auth"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
@@ -40,6 +41,13 @@ var (
 		WorkloadIdentifier: "web",
 		WorkloadType:       structs.WorkloadTypeTask,
 	}
+)
+
+// Assert that the Encrypter implements the claimSigner and auth.Encrypter
+// interfaces.
+var (
+	_ claimSigner    = &Encrypter{}
+	_ auth.Encrypter = &Encrypter{}
 )
 
 type mockSigner struct {
@@ -697,10 +705,12 @@ func TestEncrypter_Upgrade17(t *testing.T) {
 
 	// Create a 1.6 style workload identity
 	claims := &structs.IdentityClaims{
-		Namespace:    "default",
-		JobID:        "fakejob",
-		AllocationID: uuid.Generate(),
-		TaskName:     "faketask",
+		WorkloadIdentityClaims: &structs.WorkloadIdentityClaims{
+			Namespace:    "default",
+			JobID:        "fakejob",
+			AllocationID: uuid.Generate(),
+			TaskName:     "faketask",
+		},
 	}
 
 	// Sign the claims and assert they were signed with EdDSA (the 1.6 signing
@@ -807,11 +817,15 @@ func TestEncrypter_TransitConfigFallback(t *testing.T) {
 				},
 				{
 					Provider: "transit",
-					Name:     "fallback-to-vault-block",
+					Name:     "use-vault-config-if-set",
 				},
 				{
 					Provider: "transit",
-					Name:     "fallback-to-env",
+					Name:     "use-env-if-no-config",
+				},
+				{
+					Provider: "transit",
+					Name:     "use-fallback-if-no-env",
 				},
 			},
 		},
@@ -836,6 +850,10 @@ func TestEncrypter_TransitConfigFallback(t *testing.T) {
 
 	fallbackVaultConfig(providers[2], &config.VaultConfig{})
 	must.Eq(t, expect, providers[2].Config, must.Sprint("expected fallback to env"))
+
+	t.Setenv("VAULT_SKIP_VERIFY", "")
+	fallbackVaultConfig(providers[3], &config.VaultConfig{})
+	must.Eq(t, "false", providers[3].Config["tls_skip_verify"])
 }
 
 func TestEncrypter_IsReady_noTasks(t *testing.T) {

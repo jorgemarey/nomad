@@ -20,12 +20,14 @@ import (
 	"github.com/hashicorp/go-memdb"
 	metrics "github.com/hashicorp/go-metrics/compat"
 	"github.com/hashicorp/go-set/v3"
+	"github.com/hashicorp/nomad/acl"
 	policy "github.com/hashicorp/nomad/acl"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/lib/auth"
 	"github.com/hashicorp/nomad/lib/auth/jwt"
 	"github.com/hashicorp/nomad/lib/auth/oidc"
+	"github.com/hashicorp/nomad/nomad/peers"
 	"github.com/hashicorp/nomad/nomad/state"
 	"github.com/hashicorp/nomad/nomad/state/paginator"
 	"github.com/hashicorp/nomad/nomad/structs"
@@ -191,35 +193,15 @@ func (a *ACL) ListPolicies(args *structs.ACLPolicyListRequest, reply *structs.AC
 	}
 	defer metrics.MeasureSince([]string{"nomad", "acl", "list_policies"}, time.Now())
 
-	// Check management level permissions
-	acl, err := a.srv.ResolveACL(args)
+	aclObj, err := a.srv.ResolveACL(args)
 	if err != nil {
 		return err
-	} else if acl == nil {
-		return structs.ErrPermissionDenied
 	}
 
 	// If it is not a management token determine the policies that may be listed
-	mgt := acl.IsManagement()
-	tokenPolicyNames := set.New[string](0)
-	if !mgt {
-		token, err := a.requestACLToken(args.AuthToken)
-		if err != nil {
-			return err
-		}
-		if token == nil {
-			return structs.ErrTokenNotFound
-		}
-
-		// Generate a set of policy names. This is initially generated from the
-		// ACL role links.
-		tokenPolicyNames, err = a.policyNamesFromRoleLinks(token.Roles)
-		if err != nil {
-			return err
-		}
-
-		// Add the token policies which are directly referenced into the set.
-		tokenPolicyNames.InsertSlice(token.Policies)
+	allowedPolicyFn, err := a.getPolicyAuthorizationFunc(aclObj, *args.GetIdentity())
+	if err != nil {
+		return err
 	}
 
 	// Setup the blocking query
@@ -227,7 +209,6 @@ func (a *ACL) ListPolicies(args *structs.ACLPolicyListRequest, reply *structs.AC
 		queryOpts: &args.QueryOptions,
 		queryMeta: &reply.QueryMeta,
 		run: func(ws memdb.WatchSet, state *state.StateStore) error {
-			// Iterate over all the policies
 			var err error
 			var iter memdb.ResultIterator
 			if prefix := args.QueryOptions.Prefix; prefix != "" {
@@ -238,7 +219,6 @@ func (a *ACL) ListPolicies(args *structs.ACLPolicyListRequest, reply *structs.AC
 			if err != nil {
 				return err
 			}
-
 			// Convert all the policies to a list stub
 			reply.Policies = nil
 			for {
@@ -247,7 +227,7 @@ func (a *ACL) ListPolicies(args *structs.ACLPolicyListRequest, reply *structs.AC
 					break
 				}
 				realPolicy := raw.(*structs.ACLPolicy)
-				if mgt || tokenPolicyNames.Contains(realPolicy.Name) {
+				if allowedPolicyFn(realPolicy.Name) {
 					reply.Policies = append(reply.Policies, realPolicy.Stub())
 				}
 			}
@@ -285,39 +265,20 @@ func (a *ACL) GetPolicy(args *structs.ACLPolicySpecificRequest, reply *structs.S
 	}
 	defer metrics.MeasureSince([]string{"nomad", "acl", "get_policy"}, time.Now())
 
-	// Check management level permissions
-	acl, err := a.srv.ResolveACL(args)
+	aclObj, err := a.srv.ResolveACL(args)
 	if err != nil {
 		return err
-	} else if acl == nil {
-		return structs.ErrPermissionDenied
 	}
 
-	// If the policy is the anonymous one, anyone can get it
-	// If it is not a management token determine if it can get this policy
-	mgt := acl.IsManagement()
-	if !mgt && args.Name != "anonymous" {
-		token, err := a.requestACLToken(args.AuthToken)
-		if err != nil {
-			return err
-		}
-		if token == nil {
-			return structs.ErrTokenNotFound
-		}
-
-		// Generate a set of policy names. This is initially generated from the
-		// ACL role links.
-		tokenPolicyNames, err := a.policyNamesFromRoleLinks(token.Roles)
-		if err != nil {
-			return err
-		}
-
-		// Add the token policies which are directly referenced into the set.
-		tokenPolicyNames.InsertSlice(token.Policies)
-
-		if !tokenPolicyNames.Contains(args.Name) {
-			return structs.ErrPermissionDenied
-		}
+	// If the policy is the anonymous one, anyone can get it. Otherwise
+	// management tokens or tokens that have the policy can get it. If it is not
+	// a management token determine the policies that may be listed
+	allowedPolicyFn, err := a.getPolicyAuthorizationFunc(aclObj, *args.GetIdentity())
+	if err != nil {
+		return err
+	}
+	if args.Name != "anonymous" && !allowedPolicyFn(args.Name) {
+		return structs.ErrPermissionDenied
 	}
 
 	// Setup the blocking query
@@ -325,7 +286,6 @@ func (a *ACL) GetPolicy(args *structs.ACLPolicySpecificRequest, reply *structs.S
 		queryOpts: &args.QueryOptions,
 		queryMeta: &reply.QueryMeta,
 		run: func(ws memdb.WatchSet, state *state.StateStore) error {
-			// Look for the policy
 			out, err := state.ACLPolicyByName(ws, args.Name)
 			if err != nil {
 				return err
@@ -335,7 +295,7 @@ func (a *ACL) GetPolicy(args *structs.ACLPolicySpecificRequest, reply *structs.S
 			reply.Policy = out
 			if out != nil {
 				reply.Index = out.ModifyIndex
-				rules, err := policy.Parse(out.Rules)
+				rules, err := policy.Parse(out.Rules, acl.PolicyParseLenient)
 
 				if err != nil {
 					return err
@@ -382,23 +342,19 @@ func (a *ACL) GetPolicies(args *structs.ACLPolicySetRequest, reply *structs.ACLP
 	}
 	defer metrics.MeasureSince([]string{"nomad", "acl", "get_policies"}, time.Now())
 
-	// For client typed tokens, allow them to query any policies associated with that token.
-	// This is used by clients which are resolving the policies to enforce. Any associated
-	// policies need to be fetched so that the client can determine what to allow.
-	token := args.GetIdentity().GetACLToken()
-	if token == nil {
-		return structs.ErrPermissionDenied
-	}
-
-	// Generate a set of policy names. This is initially generated from the
-	// ACL role links.
-	tokenPolicyNames, err := a.policyNamesFromRoleLinks(token.Roles)
+	aclObj, err := a.srv.ResolveACL(args)
 	if err != nil {
 		return err
 	}
 
-	// Add the token policies which are directly referenced into the set.
-	tokenPolicyNames.InsertSlice(token.Policies)
+	// For client-typed tokens, allow them to query any policies associated with
+	// that token. This is used by Nomad clients which are resolving the
+	// policies to enforce. Any associated policies need to be fetched so that
+	// the client can determine what to allow.
+	allowedPolicyFn, err := a.getPolicyAuthorizationFunc(aclObj, *args.GetIdentity())
+	if err != nil {
+		return err
+	}
 
 	// Setup the blocking query
 	opts := blockingOptions{
@@ -423,7 +379,7 @@ func (a *ACL) GetPolicies(args *structs.ACLPolicySetRequest, reply *structs.ACLP
 					continue
 				}
 
-				if token.Type != structs.ACLManagementToken && !tokenPolicyNames.Contains(policyName) {
+				if !allowedPolicyFn(policyName) {
 					return structs.ErrPermissionDenied
 				}
 				reply.Policies[policyName] = out
@@ -1108,8 +1064,15 @@ func (a *ACL) UpsertOneTimeToken(args *structs.OneTimeTokenUpsertRequest, reply 
 	defer metrics.MeasureSince(
 		[]string{"nomad", "acl", "upsert_one_time_token"}, time.Now())
 
-	if !ServersMeetMinimumVersion(a.srv.Members(), a.srv.Region(), minOneTimeAuthenticationTokenVersion, false) {
-		return fmt.Errorf("All servers should be running version %v or later to use one-time authentication tokens", minOneTimeAuthenticationTokenVersion)
+	if !a.srv.peersCache.ServersMeetMinimumVersion(
+		a.srv.Region(),
+		minOneTimeAuthenticationTokenVersion,
+		false,
+	) {
+		return fmt.Errorf(
+			"All servers should be running version %v or later to use one-time authentication tokens",
+			minOneTimeAuthenticationTokenVersion,
+		)
 	}
 
 	// Snapshot the state
@@ -1160,8 +1123,15 @@ func (a *ACL) ExchangeOneTimeToken(args *structs.OneTimeTokenExchangeRequest, re
 	defer metrics.MeasureSince(
 		[]string{"nomad", "acl", "exchange_one_time_token"}, time.Now())
 
-	if !ServersMeetMinimumVersion(a.srv.Members(), a.srv.Region(), minOneTimeAuthenticationTokenVersion, false) {
-		return fmt.Errorf("All servers should be running version %v or later to use one-time authentication tokens", minOneTimeAuthenticationTokenVersion)
+	if !a.srv.peersCache.ServersMeetMinimumVersion(
+		a.srv.Region(),
+		minOneTimeAuthenticationTokenVersion,
+		false,
+	) {
+		return fmt.Errorf(
+			"All servers should be running version %v or later to use one-time authentication tokens",
+			minOneTimeAuthenticationTokenVersion,
+		)
 	}
 
 	// Snapshot the state
@@ -1222,8 +1192,15 @@ func (a *ACL) ExpireOneTimeTokens(args *structs.OneTimeTokenExpireRequest, reply
 	defer metrics.MeasureSince(
 		[]string{"nomad", "acl", "expire_one_time_tokens"}, time.Now())
 
-	if !ServersMeetMinimumVersion(a.srv.Members(), a.srv.Region(), minOneTimeAuthenticationTokenVersion, false) {
-		return fmt.Errorf("All servers should be running version %v or later to use one-time authentication tokens", minOneTimeAuthenticationTokenVersion)
+	if !a.srv.peersCache.ServersMeetMinimumVersion(
+		a.srv.Region(),
+		minOneTimeAuthenticationTokenVersion,
+		false,
+	) {
+		return fmt.Errorf(
+			"All servers should be running version %v or later to use one-time authentication tokens",
+			minOneTimeAuthenticationTokenVersion,
+		)
 	}
 
 	// Check management level permissions
@@ -1272,7 +1249,7 @@ func (a *ACL) UpsertRoles(
 
 	// ACL roles can only be used once all servers, in all federated regions
 	// have been upgraded to 1.4.0 or greater.
-	if !ServersMeetMinimumVersion(a.srv.Members(), AllRegions, minACLRoleVersion, false) {
+	if !a.srv.peersCache.ServersMeetMinimumVersion(peers.AllRegions, minACLRoleVersion, false) {
 		return fmt.Errorf("all servers should be running version %v or later to use ACL roles",
 			minACLRoleVersion)
 	}
@@ -1416,7 +1393,7 @@ func (a *ACL) DeleteRolesByID(
 
 	// ACL roles can only be used once all servers, in all federated regions
 	// have been upgraded to 1.4.0 or greater.
-	if !ServersMeetMinimumVersion(a.srv.Members(), AllRegions, minACLRoleVersion, false) {
+	if !a.srv.peersCache.ServersMeetMinimumVersion(peers.AllRegions, minACLRoleVersion, false) {
 		return fmt.Errorf("all servers should be running version %v or later to use ACL roles",
 			minACLRoleVersion)
 	}
@@ -1778,6 +1755,65 @@ func (a *ACL) GetRoleByName(
 	})
 }
 
+// getPolicyAuthorizationFunc returns a function that can be used to test
+// whether a given ACL object / identity has access to a given policy.  For
+// client-typed tokens, we allow them to query any policies associated with that
+// token. This is used by Nomad clients which are resolving the policies to
+// enforce. Any associated policies need to be fetched so that the client can
+// determine what to allow.
+func (a *ACL) getPolicyAuthorizationFunc(
+	aclObj *acl.ACL,
+	identity structs.AuthenticatedIdentity,
+) (func(string) bool, error) {
+	if aclObj.IsManagement() {
+		return func(string) bool { return true }, nil
+	}
+
+	tokenPolicyNames, err := a.getPoliciesForIdentity(identity)
+	if err != nil {
+		return nil, err
+	}
+
+	return func(policy string) bool {
+		return tokenPolicyNames.Contains(policy)
+	}, nil
+}
+
+// getPoliciesForIdentity resolves the policy names which are linked to the
+// identity, whether that identity comes from a workload identity or ACL
+// token. We'll always return an empty set (not nil), even on error.
+func (a *ACL) getPoliciesForIdentity(identity structs.AuthenticatedIdentity) (*set.Set[string], error) {
+	tokenPolicyNames := set.New[string](0)
+	token := identity.GetACLToken()
+	if token == nil {
+		claims := identity.GetClaims()
+		if claims == nil {
+			return tokenPolicyNames, structs.ErrPermissionDenied
+		}
+		if claims.IsNode() || claims.IsNodeIntroduction() {
+			return tokenPolicyNames, nil
+		}
+		policies, err := a.srv.auth.ResolvePoliciesForClaims(claims)
+		if err != nil {
+			return tokenPolicyNames, err
+		}
+		for _, policy := range policies {
+			tokenPolicyNames.Insert(policy.Name)
+		}
+	} else {
+		// role-linked policies
+		var err error
+		tokenPolicyNames, err = a.policyNamesFromRoleLinks(token.Roles)
+		if err != nil {
+			return tokenPolicyNames, err
+		}
+
+		// directly referenced policies
+		tokenPolicyNames.InsertSlice(token.Policies)
+	}
+	return tokenPolicyNames, nil
+}
+
 // policyNamesFromRoleLinks resolves the policy names which are linked via the
 // passed role links. This is useful when you need to understand what polices
 // an ACL token has access to and need to include role links. The function will
@@ -1857,7 +1893,7 @@ func (a *ACL) UpsertAuthMethods(
 
 	// ACL auth methods can only be used once all servers in all federated
 	// regions have been upgraded to 1.5.0 or greater.
-	if !ServersMeetMinimumVersion(a.srv.Members(), AllRegions, minACLAuthMethodVersion, false) {
+	if !a.srv.peersCache.ServersMeetMinimumVersion(peers.AllRegions, minACLAuthMethodVersion, false) {
 		return fmt.Errorf("all servers should be running version %v or later to use ACL auth methods",
 			minACLAuthMethodVersion)
 	}
@@ -1972,7 +2008,7 @@ func (a *ACL) DeleteAuthMethods(
 
 	// ACL auth methods can only be used once all servers in all federated
 	// regions have been upgraded to 1.5.0 or greater.
-	if !ServersMeetMinimumVersion(a.srv.Members(), AllRegions, minACLRoleVersion, false) {
+	if !a.srv.peersCache.ServersMeetMinimumVersion(peers.AllRegions, minACLRoleVersion, false) {
 		return fmt.Errorf("all servers should be running version %v or later to use ACL auth methods",
 			minACLAuthMethodVersion)
 	}
@@ -2232,9 +2268,15 @@ func (a *ACL) UpsertBindingRules(
 
 	// ACL binding rules can only be used once all servers in all federated
 	// regions have been upgraded to 1.5.0 or greater.
-	if !ServersMeetMinimumVersion(a.srv.Members(), AllRegions, minACLBindingRuleVersion, false) {
-		return fmt.Errorf("all servers should be running version %v or later to use ACL binding rules",
-			minACLBindingRuleVersion)
+	if !a.srv.peersCache.ServersMeetMinimumVersion(
+		peers.AllRegions,
+		minACLBindingRuleVersion,
+		false,
+	) {
+		return fmt.Errorf(
+			"all servers should be running version %v or later to use ACL binding rules",
+			minACLBindingRuleVersion,
+		)
 	}
 
 	// Check management level permissions
@@ -2359,7 +2401,7 @@ func (a *ACL) DeleteBindingRules(
 
 	// ACL binding rules can only be used once all servers in all federated
 	// regions have been upgraded to 1.5.0 or greater.
-	if !ServersMeetMinimumVersion(a.srv.Members(), AllRegions, minACLBindingRuleVersion, false) {
+	if !a.srv.peersCache.ServersMeetMinimumVersion(peers.AllRegions, minACLBindingRuleVersion, false) {
 		return fmt.Errorf("all servers should be running version %v or later to use ACL binding rules",
 			minACLBindingRuleVersion)
 	}
@@ -2877,9 +2919,15 @@ func (a *ACL) Login(args *structs.ACLLoginRequest, reply *structs.ACLLoginRespon
 	// This endpoint can only be used once all servers in all federated regions
 	// have been upgraded to minACLJWTAuthMethodVersion or greater, since JWT Auth
 	// method was introduced then.
-	if !ServersMeetMinimumVersion(a.srv.Members(), AllRegions, minACLJWTAuthMethodVersion, false) {
-		return fmt.Errorf("all servers should be running version %v or later to use JWT ACL auth methods",
-			minACLJWTAuthMethodVersion)
+	if !a.srv.peersCache.ServersMeetMinimumVersion(
+		peers.AllRegions,
+		minACLJWTAuthMethodVersion,
+		false,
+	) {
+		return fmt.Errorf(
+			"all servers should be running version %v or later to use JWT ACL auth methods",
+			minACLJWTAuthMethodVersion,
+		)
 	}
 
 	// Validate the request arguments to ensure it contains all the data it
@@ -3121,4 +3169,67 @@ func (a *ACL) oidcClientAssertion(config *structs.ACLAuthMethodConfig) (*cass.JW
 		a.logger.Debug("example client_assertion", "oidc_client_id", config.OIDCClientID, "jwt", token)
 	}
 	return j, nil
+}
+
+func (a *ACL) CreateClientIntroductionToken(
+	args *structs.ACLCreateClientIntroductionTokenRequest,
+	reply *structs.ACLCreateClientIntroductionTokenResponse) error {
+
+	authErr := a.srv.Authenticate(a.ctx, args)
+
+	if done, err := a.srv.forward(structs.ACLCreateClientIntroductionTokenRPCMethod, args, args, reply); done {
+		return err
+	}
+	a.srv.MeasureRPCRate("acl", structs.RateMetricWrite, args)
+
+	// This endpoint can only be used once all servers in the local region have
+	// been upgraded to minVersionNodeIntro or greater.
+	if !a.srv.peersCache.ServersMeetMinimumVersion(a.srv.Region(), minVersionNodeIntro, false) {
+		return fmt.Errorf(
+			"all servers should be running version %v or later to use client intro tokens",
+			minVersionNodeIntro)
+	}
+
+	if authErr != nil {
+		return structs.ErrPermissionDenied
+	}
+	defer metrics.MeasureSince([]string{
+		"nomad", "acl", "create_node_introduction_identity"}, time.Now())
+
+	// Unlike the other ACL RPCs, this accepts node write permissions rather
+	// than management. This allows cluster administrators to delegate node
+	// introduction identity operations to other users who can bring their own
+	// nodes to join the cluster.
+	if aclObj, err := a.srv.ResolveACL(args); err != nil {
+		return err
+	} else if !aclObj.AllowNodeWrite() {
+		return structs.ErrPermissionDenied
+	}
+
+	// Ensure the request is canonicalized, so we have a consistent experience
+	// on requests that use the CLI or HTTP API directly.
+	args.Canonicalize()
+
+	// Generate the node introduction identity TTL based on the server config
+	// and any possible user provided TTL.
+	identityTTL := args.IdentityTTL(
+		a.logger,
+		a.srv.config.NodeIntroductionConfig.DefaultIdentityTTL,
+		a.srv.config.NodeIntroductionConfig.MaxIdentityTTL,
+	)
+
+	introIdentity := structs.GenerateNodeIntroductionIdentityClaims(
+		args.NodeName,
+		args.NodePool,
+		args.Region,
+		identityTTL,
+	)
+
+	signedIdentity, _, err := a.srv.encrypter.SignClaims(introIdentity)
+	if err != nil {
+		return fmt.Errorf("failed to sign node introduction identity claims: %w", err)
+	}
+
+	reply.JWT = signedIdentity
+	return nil
 }

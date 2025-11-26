@@ -180,3 +180,7 @@ func (m *ErrDB) PutAllocConsulACLTokens(allocID string, tokens []*cstructs.Consu
 func (m *ErrDB) GetAllocConsulACLTokens(allocID string) ([]*cstructs.ConsulACLToken, error) {
 	return nil, fmt.Errorf("Error!")
 }
+
+func (m *ErrDB) PutNodeIdentity(_ string) error { return ErrDBError }
+
+func (m *ErrDB) GetNodeIdentity() (string, error) { return "", ErrDBError }

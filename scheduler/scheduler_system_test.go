@@ -5,6 +5,8 @@ package scheduler
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -16,13 +18,17 @@ import (
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
+	"github.com/hashicorp/nomad/scheduler/feasible"
+	"github.com/hashicorp/nomad/scheduler/reconciler"
+	"github.com/hashicorp/nomad/scheduler/tests"
+	"github.com/shoenig/test"
 	"github.com/shoenig/test/must"
 )
 
 func TestSystemSched_JobRegister(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	_ = createNodes(t, h, 10)
@@ -50,8 +56,10 @@ func TestSystemSched_JobRegister(t *testing.T) {
 	must.Len(t, 1, h.Plans)
 	plan := h.Plans[0]
 
-	// Ensure the plan does not have annotations
+	// Ensure the plan does not have annotations but the eval does
 	must.Nil(t, plan.Annotations, must.Sprint("expected no annotations"))
+	must.SliceNotEmpty(t, h.Evals)
+	must.Eq(t, 10, h.Evals[0].PlanAnnotations.DesiredTGUpdates["web"].Place)
 
 	// Ensure the plan allocated
 	var planned []*structs.Allocation
@@ -95,7 +103,7 @@ func TestSystemSched_JobRegister(t *testing.T) {
 func TestSystemSched_JobRegister_StickyAllocs(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	_ = createNodes(t, h, 10)
@@ -146,7 +154,7 @@ func TestSystemSched_JobRegister_StickyAllocs(t *testing.T) {
 		Status:      structs.EvalStatusPending,
 	}
 	must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
-	h1 := NewHarnessWithState(t, h.State)
+	h1 := tests.NewHarnessWithState(t, h.State)
 	if err := h1.Process(NewSystemScheduler, eval); err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -170,7 +178,7 @@ func TestSystemSched_JobRegister_StickyAllocs(t *testing.T) {
 func TestSystemSched_JobRegister_EphemeralDiskConstraint(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a node
 	node := mock.Node()
@@ -214,7 +222,7 @@ func TestSystemSched_JobRegister_EphemeralDiskConstraint(t *testing.T) {
 	}
 
 	// Create a new harness to test the scheduling result for the second job
-	h1 := NewHarnessWithState(t, h.State)
+	h1 := tests.NewHarnessWithState(t, h.State)
 	// Create a mock evaluation to register the job
 	eval1 := &structs.Evaluation{
 		Namespace:   structs.DefaultNamespace,
@@ -241,7 +249,7 @@ func TestSystemSched_JobRegister_EphemeralDiskConstraint(t *testing.T) {
 func TestSystemSched_ExhaustResources(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a node
 	node := mock.Node()
@@ -319,10 +327,10 @@ func TestSystemSched_ExhaustResources(t *testing.T) {
 func TestSystemSched_JobRegister_Annotate(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		node := mock.Node()
 		if i < 9 {
 			node.NodeClass = "foo"
@@ -356,15 +364,10 @@ func TestSystemSched_JobRegister_Annotate(t *testing.T) {
 	must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
 
 	// Process the evaluation
-	err := h.Process(NewSystemScheduler, eval)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
+	must.NoError(t, h.Process(NewSystemScheduler, eval))
 
 	// Ensure a single plan
-	if len(h.Plans) != 1 {
-		t.Fatalf("bad: %#v", h.Plans)
-	}
+	must.SliceLen(t, 1, h.Plans)
 	plan := h.Plans[0]
 
 	// Ensure the plan allocated
@@ -372,9 +375,7 @@ func TestSystemSched_JobRegister_Annotate(t *testing.T) {
 	for _, allocList := range plan.NodeAllocation {
 		planned = append(planned, allocList...)
 	}
-	if len(planned) != 9 {
-		t.Fatalf("bad: %#v %d", planned, len(planned))
-	}
+	must.SliceLen(t, 9, planned)
 
 	// Lookup the allocations by JobID
 	ws := memdb.NewWatchSet()
@@ -382,9 +383,7 @@ func TestSystemSched_JobRegister_Annotate(t *testing.T) {
 	must.NoError(t, err)
 
 	// Ensure all allocations placed
-	if len(out) != 9 {
-		t.Fatalf("bad: %#v", out)
-	}
+	must.SliceLen(t, 9, out)
 
 	// Check the available nodes
 	if count, ok := out[0].Metrics.NodesAvailable["dc1"]; !ok || count != 10 {
@@ -396,29 +395,20 @@ func TestSystemSched_JobRegister_Annotate(t *testing.T) {
 	h.AssertEvalStatus(t, structs.EvalStatusComplete)
 
 	// Ensure the plan had annotations.
-	if plan.Annotations == nil {
-		t.Fatalf("expected annotations")
-	}
+	must.NotNil(t, plan.Annotations)
 
 	desiredTGs := plan.Annotations.DesiredTGUpdates
-	if l := len(desiredTGs); l != 1 {
-		t.Fatalf("incorrect number of task groups; got %v; want %v", l, 1)
-	}
+	must.MapLen(t, 1, desiredTGs, must.Sprint("incorrect number of task groups"))
 
 	desiredChanges, ok := desiredTGs["web"]
-	if !ok {
-		t.Fatalf("expected task group web to have desired changes")
-	}
-
-	expected := &structs.DesiredUpdates{Place: 9}
-	must.Eq(t, desiredChanges, expected)
-
+	must.True(t, ok, must.Sprint("expected task group web to have desired changes"))
+	must.Eq(t, 9, desiredChanges.Place)
 }
 
 func TestSystemSched_JobRegister_AddNode(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	nodes := createNodes(t, h, 10)
@@ -498,7 +488,7 @@ func TestSystemSched_JobRegister_AddNode(t *testing.T) {
 func TestSystemSched_JobRegister_AllocFail(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create NO nodes
 	// Create a job
@@ -532,7 +522,7 @@ func TestSystemSched_JobRegister_AllocFail(t *testing.T) {
 func TestSystemSched_JobModify(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	nodes := createNodes(t, h, 10)
@@ -621,7 +611,7 @@ func TestSystemSched_JobModify(t *testing.T) {
 func TestSystemSched_JobModify_Rolling(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	nodes := createNodes(t, h, 10)
@@ -694,34 +684,12 @@ func TestSystemSched_JobModify_Rolling(t *testing.T) {
 	}
 
 	h.AssertEvalStatus(t, structs.EvalStatusComplete)
-
-	// Ensure a follow up eval was created
-	eval = h.Evals[0]
-	if eval.NextEval == "" {
-		t.Fatalf("missing next eval")
-	}
-
-	// Check for create
-	if len(h.CreateEvals) == 0 {
-		t.Fatalf("missing created eval")
-	}
-	create := h.CreateEvals[0]
-	if eval.NextEval != create.ID {
-		t.Fatalf("ID mismatch")
-	}
-	if create.PreviousEval != eval.ID {
-		t.Fatalf("missing previous eval")
-	}
-
-	if create.TriggeredBy != structs.EvalTriggerRollingUpdate {
-		t.Fatalf("bad: %#v", create)
-	}
 }
 
 func TestSystemSched_JobModify_InPlace(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	nodes := createNodes(t, h, 10)
@@ -803,7 +771,7 @@ func TestSystemSched_JobModify_InPlace(t *testing.T) {
 func TestSystemSched_JobModify_RemoveDC(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	node1 := mock.Node()
@@ -888,7 +856,7 @@ func TestSystemSched_JobModify_RemoveDC(t *testing.T) {
 func TestSystemSched_JobDeregister_Purged(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	nodes := createNodes(t, h, 10)
@@ -949,7 +917,7 @@ func TestSystemSched_JobDeregister_Purged(t *testing.T) {
 func TestSystemSched_JobDeregister_Stopped(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	nodes := createNodes(t, h, 10)
@@ -1012,7 +980,7 @@ func TestSystemSched_JobDeregister_Stopped(t *testing.T) {
 func TestSystemSched_NodeDown(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a down node
 	node := mock.Node()
@@ -1073,7 +1041,7 @@ func TestSystemSched_NodeDown(t *testing.T) {
 func TestSystemSched_NodeDrain_Down(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a draining node
 	node := mock.DrainNode()
@@ -1127,7 +1095,7 @@ func TestSystemSched_NodeDrain_Down(t *testing.T) {
 func TestSystemSched_NodeDrain(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a draining node
 	node := mock.DrainNode()
@@ -1184,7 +1152,7 @@ func TestSystemSched_NodeDrain(t *testing.T) {
 func TestSystemSched_NodeUpdate(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a node
 	node := mock.Node()
@@ -1228,8 +1196,8 @@ func TestSystemSched_NodeUpdate(t *testing.T) {
 func TestSystemSched_RetryLimit(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
-	h.Planner = &RejectPlan{h}
+	h := tests.NewHarness(t)
+	h.Planner = &tests.RejectPlan{h}
 
 	// Create some nodes
 	_ = createNodes(t, h, 10)
@@ -1274,7 +1242,7 @@ func TestSystemSched_RetryLimit(t *testing.T) {
 func TestSystemSched_Queued_With_Constraints(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a node
 	node := mock.Node()
@@ -1307,15 +1275,15 @@ func TestSystemSched_Queued_With_Constraints(t *testing.T) {
 	must.Zero(t, val)
 }
 
-// This test ensures that the scheduler correctly ignores ineligible
-// nodes when scheduling due to a new node being added. The job has two
-// task groups constrained to a particular node class. The desired behavior
-// should be that the TaskGroup constrained to the newly added node class is
-// added and that the TaskGroup constrained to the ineligible node is ignored.
+// This test ensures that the scheduler correctly ignores ineligible nodes when
+// scheduling due to a new node being added. The job has two task groups
+// constrained to a particular node class. The desired behavior should be that
+// the TaskGroup constrained to the newly added node class is added and that the
+// TaskGroup constrained to the ineligible node is ignored.
 func TestSystemSched_JobConstraint_AddNode(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create two nodes
 	var node *structs.Node
@@ -1457,7 +1425,7 @@ func TestSystemSched_JobConstraint_AddNode(t *testing.T) {
 
 func TestSystemSched_JobConstraint_AllFiltered(t *testing.T) {
 	ci.Parallel(t)
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create two nodes, one with a custom class
 	node := mock.Node()
@@ -1504,7 +1472,7 @@ func TestSystemSched_JobConstraint_AllFiltered(t *testing.T) {
 // subsequent runs, and report the outcome appropriately
 func TestSystemSched_JobConstraint_RunMultipleTimes(t *testing.T) {
 	ci.Parallel(t)
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create two nodes, one with a custom name
 	fooNode := mock.Node()
@@ -1544,14 +1512,14 @@ func TestSystemSched_JobConstraint_RunMultipleTimes(t *testing.T) {
 	testCases := []struct {
 		desc  string
 		job   func() *structs.Job
-		check func(*testing.T, *Harness)
+		check func(*testing.T, *tests.Harness)
 	}{
 		{
 			desc: "Rerunning the job with constraint shouldn't report failed allocations",
 			job: func() *structs.Job {
 				return job
 			},
-			check: func(t *testing.T, h *Harness) {
+			check: func(t *testing.T, h *tests.Harness) {
 				// Ensure a plan is not added, because no action should be taken
 				must.Len(t, 1, h.Plans)
 
@@ -1573,7 +1541,7 @@ func TestSystemSched_JobConstraint_RunMultipleTimes(t *testing.T) {
 				must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
 				return job
 			},
-			check: func(t *testing.T, h *Harness) {
+			check: func(t *testing.T, h *tests.Harness) {
 				// Ensure another plan is added for the updated alloc
 				must.Len(t, 2, h.Plans)
 
@@ -1600,7 +1568,7 @@ func TestSystemSched_JobConstraint_RunMultipleTimes(t *testing.T) {
 				must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
 				return job
 			},
-			check: func(t *testing.T, h *Harness) {
+			check: func(t *testing.T, h *tests.Harness) {
 				// Ensure another plan is added for the updated alloc
 				must.Len(t, 3, h.Plans)
 
@@ -1624,7 +1592,7 @@ func TestSystemSched_JobConstraint_RunMultipleTimes(t *testing.T) {
 				must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
 				return job
 			},
-			check: func(t *testing.T, h *Harness) {
+			check: func(t *testing.T, h *tests.Harness) {
 				// Ensure another Plan for the updated alloc
 				must.Len(t, 4, h.Plans)
 
@@ -1660,7 +1628,7 @@ func TestSystemSched_JobConstraint_RunMultipleTimes(t *testing.T) {
 func TestSystemSched_ExistingAllocNoNodes(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	var node *structs.Node
 	// Create a node
@@ -1741,7 +1709,7 @@ func TestSystemSched_ExistingAllocNoNodes(t *testing.T) {
 func TestSystemSched_ConstraintErrors(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	var node *structs.Node
 	// Register some nodes
@@ -1814,7 +1782,7 @@ func TestSystemSched_ConstraintErrors(t *testing.T) {
 func TestSystemSched_ChainedAlloc(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	_ = createNodes(t, h, 10)
@@ -1847,7 +1815,7 @@ func TestSystemSched_ChainedAlloc(t *testing.T) {
 	sort.Strings(allocIDs)
 
 	// Create a new harness to invoke the scheduler again
-	h1 := NewHarnessWithState(t, h.State)
+	h1 := tests.NewHarnessWithState(t, h.State)
 	job1 := mock.SystemJob()
 	job1.ID = job.ID
 	job1.TaskGroups[0].Tasks[0].Env = make(map[string]string)
@@ -1904,7 +1872,7 @@ func TestSystemSched_ChainedAlloc(t *testing.T) {
 func TestSystemSched_PlanWithDrainedNode(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register two nodes with two different classes
 	node := mock.DrainNode()
@@ -1986,7 +1954,7 @@ func TestSystemSched_PlanWithDrainedNode(t *testing.T) {
 func TestSystemSched_QueuedAllocsMultTG(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register two nodes with two different classes
 	node := mock.Node()
@@ -2044,25 +2012,14 @@ func TestSystemSched_QueuedAllocsMultTG(t *testing.T) {
 func TestSystemSched_Preemption(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
-	legacyCpuResources, processorResources := cpuResources(3072)
+	legacyCpuResources, processorResources := tests.CpuResources(3072)
 
 	// Create nodes
 	nodes := make([]*structs.Node, 0)
 	for i := 0; i < 2; i++ {
 		node := mock.Node()
-		// TODO: remove in 0.11
-		node.Resources = &structs.Resources{
-			CPU:      3072,
-			MemoryMB: 5034,
-			DiskMB:   20 * 1024,
-			Networks: []*structs.NetworkResource{{
-				Device: "eth0",
-				CIDR:   "192.168.0.100/32",
-				MBits:  1000,
-			}},
-		}
 		node.NodeResources = &structs.NodeResources{
 			Processors: processorResources,
 			Cpu:        legacyCpuResources,
@@ -2332,7 +2289,7 @@ func TestSystemSched_Preemption(t *testing.T) {
 func TestSystemSched_canHandle(t *testing.T) {
 	ci.Parallel(t)
 
-	s := SystemScheduler{sysbatch: false}
+	s := SystemScheduler{}
 	t.Run("system register", func(t *testing.T) {
 		must.True(t, s.canHandle(structs.EvalTriggerJobRegister))
 	})
@@ -3057,7 +3014,7 @@ func TestSystemSched_NodeDisconnected(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewHarness(t)
+			h := tests.NewHarness(t)
 
 			// Register a node
 			node := mock.Node()
@@ -3145,8 +3102,12 @@ func TestSystemSched_NodeDisconnected(t *testing.T) {
 			must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
 
 			// Process the evaluation
-			err := h.Process(NewSystemScheduler, eval)
-			must.NoError(t, err)
+			if tc.jobType == structs.JobTypeSystem {
+				must.NoError(t, h.Process(NewSystemScheduler, eval))
+			}
+			if tc.jobType == structs.JobTypeSysBatch {
+				must.NoError(t, h.Process(NewSysBatchScheduler, eval))
+			}
 
 			// Ensure a single plan
 			must.Len(t, tc.expectedPlanCount, h.Plans)
@@ -3202,7 +3163,7 @@ func TestSystemSched_NodeDisconnected(t *testing.T) {
 
 func TestSystemSched_CSITopology(t *testing.T) {
 	ci.Parallel(t)
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	zones := []string{"zone-0", "zone-1", "zone-2", "zone-3"}
 
@@ -3285,4 +3246,1208 @@ func TestSystemSched_CSITopology(t *testing.T) {
 	must.Eq(t, "", h.Evals[0].BlockedEval, must.Sprint("did not expect a blocked eval"))
 	must.Eq(t, structs.EvalStatusComplete, h.Evals[0].Status)
 
+}
+
+func TestEvictAndPlace(t *testing.T) {
+	ci.Parallel(t)
+
+	testCases := []struct {
+		name             string
+		allocsPerTG      map[string]int
+		maxParallelPerTG map[string]int
+		jobMaxParallel   int
+
+		expectLimited bool
+		expectPlace   int
+	}{
+		{
+			name:           "one group limit less than allocs",
+			allocsPerTG:    map[string]int{"a": 4},
+			jobMaxParallel: 2,
+			expectLimited:  true,
+			expectPlace:    2,
+		},
+		{
+			name:           "one group limit equals allocs",
+			allocsPerTG:    map[string]int{"a": 4},
+			jobMaxParallel: 4,
+			expectLimited:  false,
+			expectPlace:    4,
+		},
+		{
+			name:           "one group limit greater than allocs",
+			allocsPerTG:    map[string]int{"a": 2},
+			jobMaxParallel: 4,
+			expectLimited:  false,
+			expectPlace:    2,
+		},
+		{
+			name:             "group limit supercedes job limit",
+			allocsPerTG:      map[string]int{"a": 4},
+			maxParallelPerTG: map[string]int{"a": 2},
+			jobMaxParallel:   1,
+			expectLimited:    true,
+			expectPlace:      2,
+		},
+		{
+			name:             "two groups limit less than allocs on one",
+			allocsPerTG:      map[string]int{"a": 4, "b": 4},
+			maxParallelPerTG: map[string]int{"a": 2, "b": 4},
+			jobMaxParallel:   0,
+			expectLimited:    true,
+			expectPlace:      6,
+		},
+		{
+			name:             "two groups neither limited",
+			allocsPerTG:      map[string]int{"a": 2, "b": 2},
+			maxParallelPerTG: map[string]int{"a": 4, "b": 4},
+			jobMaxParallel:   0,
+			expectLimited:    false,
+			expectPlace:      4,
+		},
+		{
+			name:             "two groups one uses job limit",
+			allocsPerTG:      map[string]int{"a": 4, "b": 4},
+			maxParallelPerTG: map[string]int{"a": 4},
+			jobMaxParallel:   2,
+			expectLimited:    true,
+			expectPlace:      6,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			job := &structs.Job{Update: structs.UpdateStrategy{
+				MaxParallel: tc.jobMaxParallel, Stagger: time.Second}}
+
+			allocs := []reconciler.AllocTuple{}
+			for tg, count := range tc.allocsPerTG {
+				job.TaskGroups = append(job.TaskGroups, &structs.TaskGroup{Name: tg})
+				for range count {
+					allocs = append(allocs, reconciler.AllocTuple{
+						Alloc: &structs.Allocation{ID: uuid.Generate(), TaskGroup: tg}})
+				}
+			}
+			for tg, max := range tc.maxParallelPerTG {
+				for _, jtg := range job.TaskGroups {
+					if jtg.Name == tg {
+						jtg.Update = &structs.UpdateStrategy{
+							MaxParallel: max, Stagger: time.Second}
+					}
+				}
+			}
+			diff := &reconciler.NodeReconcileResult{Update: allocs}
+			_, ctx := feasible.MockContext(t)
+
+			s := SystemScheduler{ctx: ctx, job: job, plan: &structs.Plan{
+				EvalID:          uuid.Generate(),
+				NodeUpdate:      make(map[string][]*structs.Allocation),
+				NodeAllocation:  make(map[string][]*structs.Allocation),
+				NodePreemptions: make(map[string][]*structs.Allocation),
+			}}
+
+			s.evictAndPlace(diff, "")
+			must.Len(t, tc.expectPlace, diff.Place, must.Sprintf(
+				"evictAndReplace() didn't insert into diffResult properly: %v", diff.Place))
+		})
+	}
+
+}
+
+// TestSystemSched_UpdateBlock tests various permutations of the update block
+func TestSystemSched_UpdateBlock(t *testing.T) {
+	ci.Parallel(t)
+
+	collect := func(planned map[string][]*structs.Allocation) map[string]int {
+		if len(planned) == 0 {
+			return nil
+		}
+		counts := map[string]int{}
+		for _, node := range planned {
+			for _, alloc := range node {
+				counts[alloc.TaskGroup]++
+			}
+		}
+		return counts
+	}
+
+	assertDeploymentState := func(t *testing.T, expectDstates, gotDstates map[string]*structs.DeploymentState) {
+		t.Helper()
+		if expectDstates == nil {
+			return
+		}
+
+		must.SliceContainsAll(t,
+			slices.Collect(maps.Keys(expectDstates)),
+			slices.Collect(maps.Keys(gotDstates)),
+			must.Sprint("expected matching task groups in deployment state"))
+
+		for tg, expect := range expectDstates {
+			got := gotDstates[tg]
+			test.Eq(t, expect.DesiredCanaries, got.DesiredCanaries,
+				test.Sprintf("DesiredCanaries for %s", tg))
+			test.Eq(t, expect.DesiredTotal, got.DesiredTotal,
+				test.Sprintf("DesiredTotal for %s", tg))
+			test.Eq(t, expect.PlacedAllocs, got.PlacedAllocs,
+				test.Sprintf("PlacedAllocs for %s", tg))
+			test.Eq(t, len(expect.PlacedCanaries), len(got.PlacedCanaries),
+				test.Sprintf("len(PlacedCanaries) for %s", tg))
+		}
+	}
+
+	tg1, tg2 := "tg1", "tg2"
+
+	// note: all test cases assume that if there's an existing dstate that we're
+	// in the middle of the deployment, otherwise we're starting a new
+	// deployment (also noted in name of subtest)
+	testCases := []struct {
+		name                  string
+		tg1UpdateBlock        *structs.UpdateStrategy
+		tg2UpdateBlock        *structs.UpdateStrategy
+		existingCurrentDState map[string]*structs.DeploymentState
+		existingOldDState     map[string]*structs.DeploymentState
+
+		// these maps signify which nodes have allocs already, mapping
+		// group -> indexes in the `nodes` slice
+		existingPrevious map[string][]int // previous version of job
+		existingRunning  map[string][]int // current version of job (running)
+		existingFailed   map[string][]int // current verison of job (failed)
+		existingCanary   map[string][]int // canaries (must match running or failed)
+
+		expectAllocs map[string]int // plan NodeAllocations group -> count
+		expectStop   map[string]int // plan NodeUpdates group -> count
+		expectDState map[string]*structs.DeploymentState
+
+		nodesModify      func([]*structs.Node) // make custom modifications to nodes
+		initialJobModify func(*structs.Job)    // make custom modifications to initial job definition
+		updateJobModify  func(*structs.Job)    // make custom modifications to updated job definition
+	}{
+		{
+			name:         "legacy upgrade non-deployment",
+			expectAllocs: map[string]int{tg1: 10, tg2: 10},
+		},
+
+		{
+			name: "new deployment max_parallel vs no update block",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 2,
+			},
+			existingPrevious: map[string][]int{
+				tg1: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+				tg2: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			},
+			existingOldDState: map[string]*structs.DeploymentState{
+				tg1: {DesiredTotal: 10, PlacedAllocs: 10},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 10},
+			},
+			expectAllocs: map[string]int{tg1: 2, tg2: 10},
+			expectStop:   map[string]int{tg1: 2, tg2: 10},
+			expectDState: map[string]*structs.DeploymentState{
+				tg1: {DesiredTotal: 10, PlacedAllocs: 2},
+			},
+		},
+
+		{
+			name: "max_parallel mid-deployment",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 2,
+			},
+			tg2UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 3,
+			},
+			existingPrevious: map[string][]int{
+				tg1: {0, 1, 2, 3, 4, 5, 6, 7},
+				tg2: {0, 1, 2, 3, 4, 5, 6},
+			},
+			existingRunning: map[string][]int{
+				tg1: {8, 9},
+				tg2: {7, 8, 9},
+			},
+			existingCurrentDState: map[string]*structs.DeploymentState{
+				tg1: {DesiredTotal: 10, PlacedAllocs: 2, HealthyAllocs: 2},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 3, HealthyAllocs: 3},
+			},
+			expectAllocs: map[string]int{tg1: 2, tg2: 3},
+			expectStop:   map[string]int{tg1: 2, tg2: 3},
+			expectDState: map[string]*structs.DeploymentState{
+				tg1: {DesiredTotal: 10, PlacedAllocs: 4}, // 2 previous + 2 destructive
+				tg2: {DesiredTotal: 10, PlacedAllocs: 6}, // 3 previous + 3 destructive
+			},
+		},
+
+		{
+			name: "legacy upgrade max_parallel mid-rollout",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 2,
+			},
+			tg2UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 3,
+			},
+			existingPrevious: map[string][]int{
+				tg1: {0, 1, 2, 3, 4, 5, 6, 7},
+				tg2: {0, 1, 2, 3, 4, 5, 6},
+			},
+			existingRunning: map[string][]int{
+				tg1: {8, 9},
+				tg2: {7, 8, 9},
+			},
+			// expects no new deployment
+			expectAllocs: map[string]int{tg1: 2, tg2: 3},
+			expectStop:   map[string]int{tg1: 2, tg2: 3},
+		},
+
+		{
+			name: "max_parallel underprovisioned from failure",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 2,
+			},
+			tg2UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 3,
+			},
+			existingPrevious: map[string][]int{
+				tg1: {0, 1, 2, 3, 4, 5, 6, 7},
+				tg2: {0, 1, 2, 3, 4, 5, 6},
+			},
+			existingFailed: map[string][]int{
+				tg1: {8, 9},
+				tg2: {7, 8, 9},
+			},
+			existingCurrentDState: map[string]*structs.DeploymentState{
+				tg1: {DesiredTotal: 10, PlacedAllocs: 2, UnhealthyAllocs: 2},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 3, UnhealthyAllocs: 3},
+			},
+			expectAllocs: map[string]int{tg1: 4, tg2: 6}, // includes reschedules
+			expectStop:   map[string]int{tg1: 2, tg2: 3},
+			expectDState: map[string]*structs.DeploymentState{
+				tg1: {DesiredTotal: 10, PlacedAllocs: 6}, // includes reschedules
+				tg2: {DesiredTotal: 10, PlacedAllocs: 9},
+			},
+		},
+
+		{
+			name: "new deployment max_parallel with old underprovisioned",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 2,
+			},
+			tg2UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 3,
+			},
+			existingPrevious: map[string][]int{
+				tg1: {0, 1, 2, 3, 4},
+				tg2: {0, 1, 2},
+			},
+			existingOldDState: map[string]*structs.DeploymentState{
+				tg1: {DesiredTotal: 10, PlacedAllocs: 5},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 7},
+			},
+			// note: we immediately place on empty nodes
+			expectAllocs: map[string]int{tg1: 7, tg2: 10},
+			expectStop:   map[string]int{tg1: 2, tg2: 3},
+			expectDState: map[string]*structs.DeploymentState{
+				tg1: {DesiredTotal: 10, PlacedAllocs: 7},  // 2 destructive + 5 new
+				tg2: {DesiredTotal: 10, PlacedAllocs: 10}, // 3 destructive + 7 new
+			},
+		},
+
+		{
+			name: "new deployment with canaries",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 2,
+				Canary:      30,
+			},
+			tg2UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 5, // no canaries here
+			},
+			existingPrevious: map[string][]int{
+				tg1: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+				tg2: {0, 1, 2, 3, 4, 5, 6, 7}, // only 8 were previously eligible
+			},
+			existingOldDState: map[string]*structs.DeploymentState{
+				tg1: {DesiredTotal: 10, PlacedAllocs: 10},
+				tg2: {DesiredTotal: 8, PlacedAllocs: 8},
+			},
+			expectAllocs: map[string]int{tg1: 2, tg2: 7},
+			expectStop:   map[string]int{tg1: 2, tg2: 5},
+			expectDState: map[string]*structs.DeploymentState{
+				tg1: {
+					DesiredTotal:    10,
+					DesiredCanaries: 2,
+					PlacedCanaries:  []string{"0", "1"},
+					PlacedAllocs:    2, // want 3 canaries, limited by max_parallel
+				},
+				tg2: {
+					DesiredTotal: 10,
+					PlacedAllocs: 7, // 2 new + 5 destructive updates
+				},
+			},
+		},
+
+		{
+			name: "canaries failed",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 3,
+				Canary:      30,
+			},
+			tg2UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 5, // no canaries here
+			},
+			existingPrevious: map[string][]int{
+				tg1: {0, 1, 2, 3, 4, 5, 6},
+				tg2: {0, 1, 2, 3, 4},
+			},
+			existingRunning: map[string][]int{
+				tg1: {7},
+				tg2: {5, 6, 7, 8, 9},
+			},
+			existingFailed: map[string][]int{
+				tg1: {8},
+			},
+			existingCanary: map[string][]int{
+				tg1: {7, 8},
+			},
+			existingCurrentDState: map[string]*structs.DeploymentState{
+				tg1: {
+					Promoted:        false,
+					PlacedCanaries:  []string{"7", "8"},
+					DesiredCanaries: 3,
+					DesiredTotal:    10,
+					PlacedAllocs:    2,
+					HealthyAllocs:   1,
+					UnhealthyAllocs: 1,
+				},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 5, HealthyAllocs: 5},
+			},
+			expectAllocs: map[string]int{
+				tg1: 3, // replace 1 canary, add 2 missing allocs
+				tg2: 5, // add remaning 5 allocs
+			},
+			expectStop: map[string]int{
+				tg1: 1, // failed canary alloc being replaced
+				tg2: 5, // stop remaining 5 allocs
+			},
+			expectDState: map[string]*structs.DeploymentState{
+				tg1: {
+					DesiredTotal:    10,
+					DesiredCanaries: 3,
+					PlacedCanaries:  []string{"7", "8"},
+					PlacedAllocs:    5,
+				},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 10},
+			},
+		},
+
+		{
+			name: "canaries partial placement",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 2,
+				Canary:      30,
+			},
+			tg2UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 5, // no canaries here
+			},
+			existingPrevious: map[string][]int{
+				tg1: {0, 1, 2, 3, 4, 5, 6, 8, 9},
+				tg2: {0, 1, 2, 3, 4},
+			},
+			existingRunning: map[string][]int{
+				tg1: {7},
+				tg2: {5, 6, 7, 8, 9},
+			},
+			existingCanary: map[string][]int{
+				tg1: {7},
+			},
+			existingCurrentDState: map[string]*structs.DeploymentState{
+				tg1: {
+					Promoted:        false,
+					PlacedCanaries:  []string{"7"},
+					DesiredCanaries: 2,
+					DesiredTotal:    10,
+					PlacedAllocs:    1,
+					HealthyAllocs:   1,
+					UnhealthyAllocs: 0,
+				},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 5, HealthyAllocs: 5},
+			},
+			expectAllocs: map[string]int{tg1: 1, tg2: 5},
+			expectStop:   map[string]int{tg1: 1, tg2: 5},
+			expectDState: map[string]*structs.DeploymentState{
+				tg1: {
+					DesiredTotal:    10,
+					DesiredCanaries: 2,
+					PlacedCanaries:  []string{"7", "8"},
+					PlacedAllocs:    2, // 1 existing canary + 1 new canary
+				},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 10},
+			},
+		},
+
+		{
+			name: "canaries awaiting promotion",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 3,
+				Canary:      30,
+				AutoPromote: false,
+			},
+			tg2UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 5, // no canaries here
+			},
+			existingPrevious: map[string][]int{
+				tg1: {0, 1, 2, 3, 4, 5, 6},
+			},
+			existingRunning: map[string][]int{
+				tg1: {7, 8, 9},
+				tg2: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			},
+			existingCanary: map[string][]int{
+				tg1: {7, 8, 9},
+			},
+			existingCurrentDState: map[string]*structs.DeploymentState{
+				tg1: {
+					Promoted:        false,
+					PlacedCanaries:  []string{"7", "8", "9"},
+					DesiredCanaries: 3,
+					DesiredTotal:    10,
+					PlacedAllocs:    3,
+					HealthyAllocs:   3,
+					UnhealthyAllocs: 0,
+				},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 10, HealthyAllocs: 10},
+			},
+			expectAllocs: map[string]int{},
+			expectStop:   map[string]int{},
+			expectDState: map[string]*structs.DeploymentState{
+				tg1: {
+					DesiredTotal:    10,
+					DesiredCanaries: 3,
+					PlacedCanaries:  []string{"7", "8", "9"},
+					PlacedAllocs:    3, // unchanged because we're not promoted
+				},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 10},
+			},
+		},
+
+		{
+			name: "canaries promoted",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 2,
+				Canary:      30,
+				AutoPromote: true,
+			},
+			existingPrevious: map[string][]int{
+				tg1: {0, 1, 2, 3, 4, 5, 6},
+			},
+			existingRunning: map[string][]int{
+				tg1: {7, 8, 9},
+				tg2: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			},
+			existingCanary: map[string][]int{
+				tg1: {7, 8, 9},
+			},
+			existingCurrentDState: map[string]*structs.DeploymentState{
+				tg1: {
+					Promoted:        true,
+					PlacedCanaries:  []string{"7", "8", "9"},
+					DesiredCanaries: 3,
+					DesiredTotal:    10,
+					PlacedAllocs:    3,
+					HealthyAllocs:   3,
+					UnhealthyAllocs: 0,
+				},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 10, HealthyAllocs: 10},
+			},
+			expectAllocs: map[string]int{tg1: 2},
+			expectStop:   map[string]int{tg1: 2},
+			expectDState: map[string]*structs.DeploymentState{
+				tg1: {
+					DesiredTotal:    10,
+					DesiredCanaries: 3,
+					PlacedCanaries:  []string{"7", "8", "9"},
+					PlacedAllocs:    5, // 3 running canaries + 2 new limited by max_parallel
+				},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 10},
+			},
+		},
+
+		{
+			name: "deployment complete with ineligible nodes",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 10,
+				Canary:      30,
+				AutoPromote: true,
+			},
+			existingPrevious: map[string][]int{
+				tg1: {0, 1, 2, 3, 4, 5, 6},
+			},
+			existingRunning: map[string][]int{
+				tg1: {7, 8, 9},
+				tg2: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			},
+			existingCanary: map[string][]int{
+				tg1: {7, 8, 9},
+			},
+			existingCurrentDState: map[string]*structs.DeploymentState{
+				tg1: {
+					Promoted:        true,
+					PlacedCanaries:  []string{"7", "8", "9"},
+					DesiredCanaries: 3,
+					DesiredTotal:    10,
+					PlacedAllocs:    3,
+					HealthyAllocs:   3,
+					UnhealthyAllocs: 0,
+				},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 10, HealthyAllocs: 10},
+			},
+			expectAllocs: map[string]int{tg1: 5}, // 7 to replace minus 2 on ineligible nodes
+			expectStop:   map[string]int{tg1: 7}, // stop all previous versions
+			expectDState: map[string]*structs.DeploymentState{
+				tg1: {
+					DesiredTotal:    8, // 10 nodes minus 2 ineligble nodes
+					DesiredCanaries: 3,
+					PlacedCanaries:  []string{"7", "8", "9"},
+					PlacedAllocs:    8,
+				},
+				tg2: {
+					DesiredTotal: 10, // 10 nodes minus 2 ineligble nodes
+					PlacedAllocs: 10, // New allocations were already placed
+				},
+			},
+			nodesModify: func(nodes []*structs.Node) {
+				// Mark the first two nodes as ineligible
+				nodes[0].SchedulingEligibility = structs.NodeSchedulingIneligible
+				nodes[1].SchedulingEligibility = structs.NodeSchedulingIneligible
+			},
+		},
+
+		{
+			name: "deployment previous no placements",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 10,
+				Canary:      30,
+			},
+			existingCurrentDState: map[string]*structs.DeploymentState{
+				tg1: {},
+				tg2: {},
+			},
+			expectAllocs: map[string]int{
+				tg1: 10, // all allocations
+				tg2: 10, // all allocations
+			},
+			expectDState: map[string]*structs.DeploymentState{
+				tg1: {
+					DesiredTotal: 10, // no canaries because there are no destructive updates
+					PlacedAllocs: 10,
+				},
+				tg2: {
+					DesiredTotal: 10,
+					PlacedAllocs: 10,
+				},
+			},
+		},
+
+		{
+			name: "deployment with changing constriants",
+			tg1UpdateBlock: &structs.UpdateStrategy{
+				MaxParallel: 10,
+				Canary:      30,
+			},
+			existingPrevious: map[string][]int{
+				tg1: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			},
+			existingRunning: map[string][]int{
+				tg1: {},
+				tg2: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			},
+			existingCurrentDState: map[string]*structs.DeploymentState{
+				tg1: {},
+				tg2: {DesiredTotal: 10, PlacedAllocs: 10, HealthyAllocs: 10},
+			},
+			expectAllocs: map[string]int{
+				tg1: 3, // 3 canaries
+			},
+			expectStop: map[string]int{
+				tg1: 4, // 3 for canaries, 1 for infeasible
+			},
+			expectDState: map[string]*structs.DeploymentState{
+				tg1: {
+					DesiredTotal:    9, // one node will not match constraint
+					DesiredCanaries: 3,
+					PlacedCanaries:  []string{"1", "2", "3"},
+					PlacedAllocs:    3,
+				},
+				tg2: {
+					DesiredTotal: 10, // already deployed, constraint doesn't matter
+					PlacedAllocs: 10,
+				},
+			},
+			initialJobModify: func(job *structs.Job) {
+				job.Constraints = []*structs.Constraint{
+					{
+						LTarget: "${meta.testing}",
+						RTarget: "one",
+						Operand: "=",
+					},
+				}
+			},
+			updateJobModify: func(job *structs.Job) {
+				job.Constraints = []*structs.Constraint{
+					{
+						LTarget: "${meta.testing}",
+						RTarget: "two",
+						Operand: "=",
+					},
+				}
+			},
+			nodesModify: func(nodes []*structs.Node) {
+				for _, node := range nodes {
+					node.Meta["testing"] = "two"
+				}
+				nodes[0].Meta["testing"] = "one"
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+
+			h := tests.NewHarness(t)
+			nodes := createNodes(t, h, 10)
+
+			if tc.nodesModify != nil {
+				tc.nodesModify(nodes)
+				for _, node := range nodes {
+					must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
+				}
+			}
+
+			oldJob := mock.SystemJob()
+			oldJob.TaskGroups[0].Update = tc.tg1UpdateBlock
+			oldJob.TaskGroups[0].Name = tg1
+			taskGroup2 := oldJob.TaskGroups[0].Copy()
+			taskGroup2.Update = tc.tg2UpdateBlock
+			taskGroup2.Name = tg2
+			oldJob.TaskGroups = append(oldJob.TaskGroups, taskGroup2)
+
+			// make sure tg1 network matches AllocForNode
+			taskGroup1 := oldJob.TaskGroups[0]
+			taskGroup1.Networks = []*structs.NetworkResource{{
+				ReservedPorts: []structs.Port{{
+					Label: "admin", Value: 5000, HostNetwork: "default"}},
+				DynamicPorts: []structs.Port{{
+					Label: "http", Value: 9876, HostNetwork: "default"}},
+			}}
+
+			if tc.initialJobModify != nil {
+				tc.initialJobModify(oldJob)
+			}
+
+			must.NoError(t, h.State.UpsertJob(
+				structs.MsgTypeTestSetup, h.NextIndex(), nil, oldJob))
+
+			// destructively update both task groups of the job
+			job := oldJob.Copy()
+			job.TaskGroups[0].Tasks[0].Config["command"] = "/bin/other"
+			job.TaskGroups[1].Tasks[0].Config["command"] = "/bin/other"
+			idx := h.NextIndex()
+			job.CreateIndex = idx
+			job.JobModifyIndex = idx
+
+			if tc.updateJobModify != nil {
+				tc.updateJobModify(job)
+			}
+
+			must.NoError(t, h.State.UpsertJob(
+				structs.MsgTypeTestSetup, idx, nil, job))
+
+			expectedDeployments := 0
+			if len(tc.existingOldDState) > 0 {
+				d := mock.Deployment()
+				d.JobID = job.ID
+				d.JobVersion = oldJob.Version
+				d.JobCreateIndex = oldJob.CreateIndex
+				d.JobModifyIndex = oldJob.JobModifyIndex
+				h.State.UpsertDeployment(h.NextIndex(), d)
+				expectedDeployments++
+			}
+
+			dID := uuid.Generate()
+
+			existAllocs := []*structs.Allocation{}
+			for _, tg := range []string{tg1, tg2} {
+				nodesToAllocs := map[string]string{}
+				for _, nodeIdx := range tc.existingPrevious[tg] {
+					var alloc *structs.Allocation
+					if tg == tg2 {
+						alloc = mock.AllocForNodeWithoutReservedPort(nodes[nodeIdx])
+					} else {
+						// make sure alloc matches tg1.Networks
+						alloc = mock.AllocForNode(nodes[nodeIdx])
+						alloc.TaskResources["web"].Networks = nil
+					}
+					alloc.Job = oldJob
+					alloc.JobID = oldJob.ID
+					alloc.TaskGroup = tg
+					alloc.Name = fmt.Sprintf("my-job.%s[0]", tg)
+					alloc.ClientStatus = structs.AllocClientStatusRunning
+					nodesToAllocs[alloc.NodeID] = alloc.ID
+					existAllocs = append(existAllocs, alloc)
+				}
+				for _, nodeIdx := range tc.existingRunning[tg] {
+					var alloc *structs.Allocation
+					if tg == tg2 {
+						alloc = mock.AllocForNodeWithoutReservedPort(nodes[nodeIdx])
+					} else {
+						// make sure alloc matches tg1.Networks
+						alloc = mock.AllocForNode(nodes[nodeIdx])
+						alloc.TaskResources["web"].Networks = nil
+					}
+					alloc.Job = job
+					alloc.JobID = job.ID
+					alloc.TaskGroup = tg
+					alloc.Name = fmt.Sprintf("my-job.%s[0]", tg)
+					alloc.ClientStatus = structs.AllocClientStatusRunning
+					nodesToAllocs[alloc.NodeID] = alloc.ID
+
+					for _, canaryNodeIdx := range tc.existingCanary[tg] {
+						if nodeIdx == canaryNodeIdx {
+							alloc.DeploymentStatus = &structs.AllocDeploymentStatus{
+								Healthy:     pointer.Of(true),
+								Timestamp:   time.Time{},
+								Canary:      true,
+								ModifyIndex: 0,
+							}
+							alloc.DeploymentID = dID
+						}
+					}
+					existAllocs = append(existAllocs, alloc)
+				}
+				for _, nodeIdx := range tc.existingFailed[tg] {
+					var alloc *structs.Allocation
+					if tg == tg2 {
+						alloc = mock.AllocForNodeWithoutReservedPort(nodes[nodeIdx])
+					} else {
+						// make sure alloc matches tg1.Networks
+						alloc = mock.AllocForNode(nodes[nodeIdx])
+						alloc.TaskResources["web"].Networks = nil
+					}
+					alloc.Job = job
+					alloc.JobID = job.ID
+					alloc.TaskGroup = tg
+					alloc.Name = fmt.Sprintf("my-job.%s[0]", tg)
+					alloc.ClientStatus = structs.AllocClientStatusFailed
+					nodesToAllocs[alloc.NodeID] = alloc.ID
+
+					for _, canaryNodeIdx := range tc.existingCanary[tg] {
+						if nodeIdx == canaryNodeIdx {
+							alloc.DeploymentStatus = &structs.AllocDeploymentStatus{
+								Healthy:     pointer.Of(false),
+								Timestamp:   time.Time{},
+								Canary:      true,
+								ModifyIndex: 0,
+							}
+							alloc.DeploymentID = dID
+						}
+					}
+					existAllocs = append(existAllocs, alloc)
+				}
+				for i, nodeIdx := range tc.existingCanary[tg] {
+					nodeID := nodes[nodeIdx].ID
+					// find the correct alloc IDs for the PlaceCanaries
+					if dstate, ok := tc.existingCurrentDState[tg]; ok {
+						dstate.PlacedCanaries[i] = nodesToAllocs[nodeID]
+					}
+				}
+			}
+
+			if len(existAllocs) > 0 {
+				must.NoError(t, h.State.UpsertAllocs(structs.MsgTypeTestSetup, h.NextIndex(),
+					existAllocs))
+			}
+
+			if len(tc.existingCurrentDState) > 0 {
+				d := mock.Deployment()
+				d.ID = dID
+				d.JobID = job.ID
+				d.JobVersion = job.Version
+				d.JobCreateIndex = job.CreateIndex
+				d.JobModifyIndex = job.JobModifyIndex
+				d.TaskGroups = tc.existingCurrentDState
+				h.State.UpsertDeployment(h.NextIndex(), d)
+			}
+			if len(tc.expectDState) > 0 {
+				expectedDeployments++
+			}
+
+			eval := &structs.Evaluation{
+				Namespace:   job.Namespace,
+				ID:          uuid.Generate(),
+				Priority:    job.Priority,
+				TriggeredBy: structs.EvalTriggerJobRegister,
+				JobID:       job.ID,
+				Status:      structs.EvalStatusPending,
+			}
+			must.NoError(t, h.State.UpsertEvals(
+				structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
+
+			// Process the evaluation
+			err := h.Process(NewSystemScheduler, eval)
+			must.NoError(t, err)
+
+			// Ensure a single plan
+			must.Len(t, 1, h.Plans)
+			plan := h.Plans[0]
+
+			stopped := collect(plan.NodeUpdate)
+			test.Eq(t, tc.expectStop, stopped, test.Sprint("expected stop/evict"))
+
+			// note: includes existing allocs but not previous version allocs
+			nodeAllocs := collect(plan.NodeAllocation)
+			test.Eq(t, tc.expectAllocs, nodeAllocs, test.Sprint("expected keep/place"))
+
+			deployments, err := h.State.DeploymentsByJobID(nil, job.Namespace, job.ID, true)
+			must.NoError(t, err)
+			must.Len(t, expectedDeployments, deployments, must.Sprint("expected deployments"))
+
+			if tc.expectDState != nil {
+				deployment, err := h.State.LatestDeploymentByJobID(nil, job.Namespace, job.ID)
+				must.NoError(t, err)
+				assertDeploymentState(t, tc.expectDState, deployment.TaskGroups)
+			}
+		})
+	}
+
+}
+
+func TestSystemSched_evictUnneededCanaries(t *testing.T) {
+	tests := []struct {
+		name                    string
+		requiredCanaries        int
+		tgName                  string
+		nodeAllocation          map[string][]*structs.Allocation
+		expectedDesiredCanaries int
+		expectedNodeAllocation  []string
+	}{
+		{
+			name:                    "no required canaries",
+			requiredCanaries:        0,
+			tgName:                  "foo",
+			nodeAllocation:          nil,
+			expectedDesiredCanaries: 0,
+			expectedNodeAllocation:  nil,
+		},
+		{
+			name:             "existing allocs for 2 task groups: tg1 with no canaries, tg2 with canaries, calling for tg1",
+			requiredCanaries: 1,
+			tgName:           "tg1",
+			nodeAllocation: map[string][]*structs.Allocation{
+				"node1": {
+					{
+						ID:               "tg1_alloc1",
+						DeploymentStatus: &structs.AllocDeploymentStatus{Canary: false},
+						TaskGroup:        "tg1",
+					},
+					{
+						ID:               "tg1_alloc2",
+						DeploymentStatus: &structs.AllocDeploymentStatus{Canary: true},
+						TaskGroup:        "tg2",
+					},
+				},
+				"node2": {
+					{
+						ID:               "tg2_alloc1",
+						DeploymentStatus: &structs.AllocDeploymentStatus{Canary: false},
+						TaskGroup:        "tg1",
+					},
+					{
+						ID:               "tg2_alloc2",
+						DeploymentStatus: &structs.AllocDeploymentStatus{Canary: true},
+						TaskGroup:        "tg2",
+					},
+				},
+			},
+			expectedDesiredCanaries: 0,
+			expectedNodeAllocation:  []string{"tg1_alloc1", "tg1_alloc2", "tg2_alloc1", "tg2_alloc2"},
+		},
+		{
+			name:             "existing allocs for 2 task groups with canaries",
+			requiredCanaries: 1,
+			tgName:           "tg1",
+			nodeAllocation: map[string][]*structs.Allocation{
+				"node1": {
+					{
+						ID:               "tg1_alloc1",
+						DeploymentStatus: &structs.AllocDeploymentStatus{Canary: true},
+						TaskGroup:        "tg1",
+					},
+					{
+						ID:               "tg2_alloc1",
+						DeploymentStatus: &structs.AllocDeploymentStatus{Canary: true},
+						TaskGroup:        "tg2",
+					},
+				},
+				"node2": {
+					{
+						ID:               "tg1_alloc2",
+						DeploymentStatus: &structs.AllocDeploymentStatus{Canary: true},
+						TaskGroup:        "tg1",
+					},
+					{
+						ID:               "tg2_alloc2",
+						DeploymentStatus: &structs.AllocDeploymentStatus{Canary: true},
+						TaskGroup:        "tg2",
+					},
+				},
+			},
+			expectedDesiredCanaries: 1,
+			expectedNodeAllocation:  []string{"tg1_alloc1", "tg2_alloc1", "tg2_alloc2"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := SystemScheduler{
+				plan: mock.Plan(),
+			}
+			s.plan.NodeAllocation = tt.nodeAllocation
+
+			must.SliceLen(t, tt.expectedDesiredCanaries, s.evictUnneededCanaries(tt.requiredCanaries, tt.tgName, &reconciler.NodeReconcileResult{}), must.Sprint("unexpected desired canaries"))
+			allocsOnNodes := []*structs.Allocation{}
+			for _, a := range s.plan.NodeAllocation {
+				allocsOnNodes = append(allocsOnNodes, a...)
+			}
+			// TODO: this test is flaky since it depends on map ordering which is not supported
+			must.SliceContainsAllFunc(t, allocsOnNodes, tt.expectedNodeAllocation,
+				func(a *structs.Allocation, id string) bool {
+					return a.ID == id
+				})
+		})
+	}
+}
+
+func TestSystemSched_NoOpEvalWithInfeasibleNodes(t *testing.T) {
+	ci.Parallel(t)
+	h := tests.NewHarness(t)
+
+	nodes := make([]*structs.Node, 4)
+	eligible := []string{}
+	for i := range 4 {
+		node := mock.Node()
+		if i%2 == 0 {
+			node.Attributes["kernel.name"] = "not-linux"
+		} else {
+			eligible = append(eligible, node.ID)
+		}
+		nodes[i] = node
+		must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
+	}
+
+	job := mock.SystemJob()
+	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
+
+	existingAllocIDs := []string{}
+	allocs := []*structs.Allocation{}
+	for i := range 4 {
+		if i%2 != 0 {
+			alloc := mock.MinAllocForJob(job)
+			alloc.ClientStatus = structs.AllocClientStatusRunning
+			alloc.NodeID = nodes[i].ID
+			alloc.Name = structs.AllocName(job.Name, job.TaskGroups[0].Name, 0)
+			existingAllocIDs = append(existingAllocIDs, alloc.ID)
+			allocs = append(allocs, alloc)
+		}
+	}
+	must.NoError(t, h.State.UpsertAllocs(structs.MsgTypeTestSetup, h.NextIndex(), allocs))
+
+	d := mock.Deployment()
+	d.JobID = job.ID
+	d.JobVersion = job.Version
+	d.Status = structs.DeploymentStatusSuccessful
+	must.NoError(t, h.State.UpsertDeployment(h.NextIndex(), d))
+
+	eval := &structs.Evaluation{
+		Namespace:    job.Namespace,
+		ID:           uuid.Generate(),
+		Priority:     job.Priority,
+		TriggeredBy:  structs.EvalTriggerJobRegister,
+		JobID:        job.ID,
+		Status:       structs.EvalStatusPending,
+		AnnotatePlan: true,
+	}
+	must.NoError(t, h.State.UpsertEvals(
+		structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
+
+	job = job.Copy()
+	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
+
+	err := h.Process(NewSystemScheduler, eval)
+	must.NoError(t, err)
+	must.Len(t, 1, h.Plans)
+	plan := h.Plans[0]
+	must.NotNil(t, plan.Deployment, must.Sprintf("expected a deployment"))
+	must.Eq(t, d.ID, plan.Deployment.ID, must.Sprintf("expected deployment to not be a new deployment"))
+	must.Eq(t, 2, plan.Annotations.DesiredTGUpdates["web"].InPlaceUpdate)
+	must.MapLen(t, 0, plan.NodeUpdate, must.Sprintf("expected no stops"))
+	must.MapLen(t, 2, plan.NodeAllocation)
+	for nodeID, allocs := range plan.NodeAllocation {
+		must.SliceContains(t, eligible, nodeID)
+		must.Len(t, 1, allocs)
+		must.SliceContains(t, existingAllocIDs, allocs[0].ID,
+			must.Sprintf("expected existing alloc to be updated in-place"))
+	}
+}
+
+func TestSystemSched_CanariesWithInfeasibleNodes(t *testing.T) {
+	ci.Parallel(t)
+	h := tests.NewHarness(t)
+
+	nodes := make([]*structs.Node, 4)
+	eligible := []string{}
+	for i := range 4 {
+		node := mock.Node()
+		if i%2 == 0 {
+			node.Attributes["kernel.name"] = "not-linux"
+		} else {
+			eligible = append(eligible, node.ID)
+		}
+		nodes[i] = node
+		must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
+	}
+
+	job := mock.SystemJob()
+	job.TaskGroups[0].Update = &structs.UpdateStrategy{
+		MaxParallel: 4,
+		Canary:      100, // blue-green
+	}
+	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
+
+	existingAllocIDs := []string{}
+	allocs := []*structs.Allocation{}
+	for _, eligibleNode := range eligible {
+		alloc := mock.MinAllocForJob(job)
+		alloc.ClientStatus = structs.AllocClientStatusRunning
+		alloc.NodeID = eligibleNode
+		alloc.Name = structs.AllocName(job.Name, job.TaskGroups[0].Name, 0)
+		existingAllocIDs = append(existingAllocIDs, alloc.ID)
+		allocs = append(allocs, alloc)
+	}
+	must.NoError(t, h.State.UpsertAllocs(structs.MsgTypeTestSetup, h.NextIndex(), allocs))
+
+	d := mock.Deployment()
+	d.JobID = job.ID
+	d.JobVersion = job.Version
+	d.Status = structs.DeploymentStatusSuccessful
+	must.NoError(t, h.State.UpsertDeployment(h.NextIndex(), d))
+
+	// destructively update the job
+
+	job = job.Copy()
+	job.TaskGroups[0].Tasks[0].Resources.CPU++
+	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
+
+	eval := &structs.Evaluation{
+		Namespace:    job.Namespace,
+		ID:           uuid.Generate(),
+		Priority:     job.Priority,
+		TriggeredBy:  structs.EvalTriggerJobRegister,
+		JobID:        job.ID,
+		Status:       structs.EvalStatusPending,
+		AnnotatePlan: true,
+	}
+	must.NoError(t, h.State.UpsertEvals(
+		structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
+
+	err := h.Process(NewSystemScheduler, eval)
+	must.NoError(t, err)
+	must.Len(t, 1, h.Plans)
+	plan := h.Plans[0]
+	must.NotNil(t, plan.Deployment, must.Sprintf("expected a new deployment"))
+
+	dstate := plan.Deployment.TaskGroups["web"]
+	test.Len(t, 2, dstate.PlacedCanaries)
+	test.Eq(t, 2, dstate.DesiredCanaries)
+	test.Eq(t, 2, dstate.DesiredTotal)
+
+	must.Eq(t, 2, plan.Annotations.DesiredTGUpdates["web"].Canary,
+		must.Sprintf("expected canaries: %#v", plan.Annotations.DesiredTGUpdates))
+}
+
+func TestSystemSched_CanariesWithInfeasibleNodesLimit(t *testing.T) {
+	ci.Parallel(t)
+	h := tests.NewHarness(t)
+
+	nodes := make([]*structs.Node, 2)
+	feasible := []string{}
+	for i := range 2 {
+		node := mock.Node()
+		feasible = append(feasible, node.ID)
+		nodes[i] = node
+		must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
+	}
+
+	job := mock.SystemJob()
+	job.TaskGroups[0].Update = &structs.UpdateStrategy{
+		MaxParallel: 1,
+		Canary:      50, // blue-green
+	}
+	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
+
+	existingAllocIDs := []string{}
+	allocs := []*structs.Allocation{}
+	for _, feasibleNode := range feasible {
+		alloc := mock.MinAllocForJob(job)
+		alloc.ClientStatus = structs.AllocClientStatusRunning
+		alloc.NodeID = feasibleNode
+		alloc.Name = structs.AllocName(job.Name, job.TaskGroups[0].Name, 0)
+		existingAllocIDs = append(existingAllocIDs, alloc.ID)
+		allocs = append(allocs, alloc)
+	}
+	must.NoError(t, h.State.UpsertAllocs(structs.MsgTypeTestSetup, h.NextIndex(), allocs))
+
+	d := mock.Deployment()
+	d.JobID = job.ID
+	d.JobVersion = job.Version
+	d.Status = structs.DeploymentStatusSuccessful
+	must.NoError(t, h.State.UpsertDeployment(h.NextIndex(), d))
+
+	// make one node infeasible
+	node := nodes[1].Copy()
+	node.Attributes["kernel.name"] = "not-linux"
+	must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
+
+	// destructively update the job
+
+	job = job.Copy()
+	job.TaskGroups[0].Tasks[0].Resources.CPU++
+	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
+
+	eval := &structs.Evaluation{
+		Namespace:    job.Namespace,
+		ID:           uuid.Generate(),
+		Priority:     job.Priority,
+		TriggeredBy:  structs.EvalTriggerJobRegister,
+		JobID:        job.ID,
+		Status:       structs.EvalStatusPending,
+		AnnotatePlan: true,
+	}
+	must.NoError(t, h.State.UpsertEvals(
+		structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
+
+	err := h.Process(NewSystemScheduler, eval)
+	must.NoError(t, err)
+	must.Len(t, 1, h.Plans)
+	plan := h.Plans[0]
+	must.NotNil(t, plan.Deployment, must.Sprintf("expected a new deployment"))
+
+	dstate := plan.Deployment.TaskGroups["web"]
+	test.Len(t, 1, dstate.PlacedCanaries, test.Sprint("placed canaries"))
+	test.Eq(t, 1, dstate.DesiredCanaries, test.Sprint("desired canaries"))
+	test.Eq(t, 1, dstate.DesiredTotal, test.Sprint("desired total"))
+
+	// feasible node should get canary
+	test.Len(t, 1, plan.NodeAllocation[nodes[0].ID], test.Sprint("placed on feasible node"))
+	test.Len(t, 1, plan.NodeUpdate[nodes[0].ID], test.Sprint("stopped on feasible node"))
+
+	// infeasible node should have its alloc stopped
+	test.Len(t, 0, plan.NodeAllocation[nodes[1].ID], test.Sprint("placed on infeasible node"))
+	test.Len(t, 1, plan.NodeUpdate[nodes[1].ID], test.Sprint("stopped on infeasible node"))
+
+	must.Eq(t, 1, plan.Annotations.DesiredTGUpdates["web"].Canary,
+		must.Sprintf("expected canaries: %#v", plan.Annotations.DesiredTGUpdates))
 }

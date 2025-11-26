@@ -1263,13 +1263,14 @@ func TestStateStore_UpsertNode_NodePool(t *testing.T) {
 	nodeWithoutPoolID := uuid.Generate()
 
 	testCases := []struct {
-		name               string
-		nodeID             string
-		pool               string
-		createPool         bool
-		expectedPool       string
-		expectedPoolExists bool
-		validateFn         func(*testing.T, *structs.Node, *structs.NodePool)
+		name                        string
+		nodeID                      string
+		pool                        string
+		createPool                  bool
+		expectedPool                string
+		expectedPoolNodeIdentityTTL time.Duration
+		expectedPoolExists          bool
+		validateFn                  func(*testing.T, *structs.Node, *structs.NodePool)
 	}{
 		{
 			name:               "register new node in new node pool",
@@ -1285,11 +1286,12 @@ func TestStateStore_UpsertNode_NodePool(t *testing.T) {
 			},
 		},
 		{
-			name:               "register new node in existing node pool",
-			nodeID:             "",
-			pool:               devPoolName,
-			expectedPool:       devPoolName,
-			expectedPoolExists: true,
+			name:                        "register new node in existing node pool",
+			nodeID:                      "",
+			pool:                        devPoolName,
+			expectedPool:                devPoolName,
+			expectedPoolNodeIdentityTTL: 720 * time.Hour,
+			expectedPoolExists:          true,
 			validateFn: func(t *testing.T, node *structs.Node, pool *structs.NodePool) {
 				// Verify node pool was not modified.
 				must.NotEq(t, pool.CreateIndex, node.ModifyIndex)
@@ -1320,11 +1322,12 @@ func TestStateStore_UpsertNode_NodePool(t *testing.T) {
 			},
 		},
 		{
-			name:               "move existing node to existing node pool",
-			nodeID:             nodeWithPoolID,
-			pool:               devPoolName,
-			expectedPool:       devPoolName,
-			expectedPoolExists: true,
+			name:                        "move existing node to existing node pool",
+			nodeID:                      nodeWithPoolID,
+			pool:                        devPoolName,
+			expectedPool:                devPoolName,
+			expectedPoolNodeIdentityTTL: 720 * time.Hour,
+			expectedPoolExists:          true,
 		},
 		{
 			name:               "move existing node to built-in node pool",
@@ -1342,11 +1345,12 @@ func TestStateStore_UpsertNode_NodePool(t *testing.T) {
 			expectedPoolExists: true,
 		},
 		{
-			name:               "update node without pool to existing node pool",
-			nodeID:             nodeWithoutPoolID,
-			pool:               devPoolName,
-			expectedPool:       devPoolName,
-			expectedPoolExists: true,
+			name:                        "update node without pool to existing node pool",
+			nodeID:                      nodeWithoutPoolID,
+			pool:                        devPoolName,
+			expectedPool:                devPoolName,
+			expectedPoolNodeIdentityTTL: 720 * time.Hour,
+			expectedPoolExists:          true,
 		},
 		{
 			name:               "update node without pool with empty string to default",
@@ -1419,6 +1423,15 @@ func TestStateStore_UpsertNode_NodePool(t *testing.T) {
 			must.NoError(t, err)
 			if tc.expectedPoolExists {
 				must.NotNil(t, pool)
+
+				// Ensure the pool identitiy TTL is correctly set depending on
+				// whether a custom value was expected, or whether the default
+				// should be applied.
+				if tc.expectedPoolNodeIdentityTTL == 0 {
+					must.Eq(t, structs.DefaultNodePoolNodeIdentityTTL, pool.NodeIdentityTTL)
+				} else {
+					must.Eq(t, tc.expectedPoolNodeIdentityTTL, pool.NodeIdentityTTL)
+				}
 			} else {
 				must.Nil(t, pool)
 			}
@@ -1497,7 +1510,17 @@ func TestStateStore_UpdateNodeStatus_Node(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
-	must.NoError(t, state.UpdateNodeStatus(structs.MsgTypeTestSetup, 801, node.ID, structs.NodeStatusReady, 70, event))
+	signingKeyID := uuid.Generate()
+
+	stateReq := structs.NodeUpdateStatusRequest{
+		NodeID:               node.ID,
+		Status:               structs.NodeStatusReady,
+		IdentitySigningKeyID: signingKeyID,
+		NodeEvent:            event,
+		UpdatedAt:            70,
+	}
+
+	must.NoError(t, state.UpdateNodeStatus(structs.MsgTypeTestSetup, 801, &stateReq))
 	must.True(t, watchFired(ws))
 
 	ws = memdb.NewWatchSet()
@@ -1508,11 +1531,31 @@ func TestStateStore_UpdateNodeStatus_Node(t *testing.T) {
 	must.Eq(t, 70, out.StatusUpdatedAt)
 	must.Len(t, 2, out.Events)
 	must.Eq(t, event.Message, out.Events[1].Message)
+	must.Eq(t, signingKeyID, out.IdentitySigningKeyID)
 
-	index, err := state.Index("nodes")
+	index, err := state.Index(TableNodes)
 	must.NoError(t, err)
 	must.Eq(t, 801, index)
 	must.False(t, watchFired(ws))
+
+	// Send another update, but the signing key ID is empty, this should not
+	// overwrite the existing signing key ID.
+	stateReq = structs.NodeUpdateStatusRequest{
+		NodeID:               node.ID,
+		Status:               structs.NodeStatusReady,
+		IdentitySigningKeyID: "",
+		NodeEvent: &structs.NodeEvent{
+			Message:   "Node even more ready foo",
+			Subsystem: structs.NodeEventSubsystemCluster,
+			Timestamp: time.Now(),
+		},
+		UpdatedAt: 80,
+	}
+
+	must.NoError(t, state.UpdateNodeStatus(structs.MsgTypeTestSetup, 802, &stateReq))
+	out, err = state.NodeByID(ws, node.ID)
+	must.NoError(t, err)
+	must.Eq(t, signingKeyID, out.IdentitySigningKeyID)
 }
 
 func TestStatStore_UpdateNodeStatus_LastMissedHeartbeatIndex(t *testing.T) {
@@ -1598,7 +1641,12 @@ func TestStatStore_UpdateNodeStatus_LastMissedHeartbeatIndex(t *testing.T) {
 
 			for i, status := range tc.transitions {
 				now := time.Now().UnixNano()
-				err := state.UpdateNodeStatus(structs.MsgTypeTestSetup, uint64(1000+i), node.ID, status, now, nil)
+				req := structs.NodeUpdateStatusRequest{
+					NodeID:    node.ID,
+					Status:    status,
+					UpdatedAt: now,
+				}
+				err := state.UpdateNodeStatus(structs.MsgTypeTestSetup, uint64(1000+i), &req)
 				must.NoError(t, err)
 
 				ws := memdb.NewWatchSet()
@@ -2498,6 +2546,84 @@ func TestStateStore_UpdateUpsertJob_JobVersion(t *testing.T) {
 	}
 
 	must.False(t, watchFired(ws), must.Sprint("watch should not have fired"))
+}
+
+func TestStateStore_UpsertJobWithRequest(t *testing.T) {
+	ci.Parallel(t)
+
+	state := testStateStore(t)
+	job := mock.Job()
+
+	// Create a watchset so we can test that upsert fires the watch
+	ws := memdb.NewWatchSet()
+	_, err := state.JobByID(ws, job.Namespace, job.ID)
+	must.NoError(t, err)
+
+	must.NoError(t, state.UpsertJobWithRequest(structs.MsgTypeTestSetup, 1000, &structs.JobRegisterRequest{Job: job}))
+	must.True(t, watchFired(ws), must.Sprint("expected watch to fire"))
+
+	ws = memdb.NewWatchSet()
+	out, err := state.JobByID(ws, job.Namespace, job.ID)
+	must.NoError(t, err)
+	must.Eq(t, job, out)
+
+	index, err := state.Index("jobs")
+	must.NoError(t, err)
+	must.Eq(t, 1000, index)
+
+	summary, err := state.JobSummaryByID(ws, job.Namespace, job.ID)
+	must.NoError(t, err)
+	must.NotNil(t, summary)
+	must.Eq(t, job.ID, summary.JobID, must.Sprint("bad summary id"))
+	_, ok := summary.Summary["web"]
+	must.True(t, ok, must.Sprint("nil summary for task group"))
+	must.False(t, watchFired(ws), must.Sprint("watch should not have fired"))
+
+	// Check the job versions
+	allVersions, err := state.JobVersionsByID(ws, job.Namespace, job.ID)
+	must.NoError(t, err)
+	must.Len(t, 1, allVersions)
+
+	a := allVersions[0]
+	must.Eq(t, a.ID, job.ID)
+	must.Eq(t, a.Version, 0)
+
+	// Test the looking up the job by version returns the same results
+	vout, err := state.JobByIDAndVersion(ws, job.Namespace, job.ID, 0)
+	must.NoError(t, err)
+	must.Eq(t, out, vout)
+}
+
+func TestStateStore_UpsertJobWithRequest_PreserveCount(t *testing.T) {
+	ci.Parallel(t)
+
+	state := testStateStore(t)
+
+	// Create a job
+	job := mock.Job()
+	job.TaskGroups[0].Count = 10
+	job.TaskGroups[0].Tasks[0].Resources = &structs.Resources{
+		CPU:      500,
+		MemoryMB: 256,
+	}
+
+	must.NoError(t, state.UpsertJob(structs.MsgTypeTestSetup, 1000, nil, job))
+
+	job2 := job.Copy()
+	job2.TaskGroups[0].Count = 5
+	job2.TaskGroups[0].Tasks[0].Resources = &structs.Resources{
+		CPU:      750,
+		MemoryMB: 500,
+	}
+
+	must.NoError(t, state.UpsertJobWithRequest(structs.MsgTypeTestSetup, 1001, &structs.JobRegisterRequest{PreserveCounts: true, PreserveResources: true, Job: job2}))
+
+	out, err := state.JobByID(nil, job.Namespace, job.ID)
+	must.NoError(t, err)
+
+	must.Eq(t, 10, out.TaskGroups[0].Count)
+	must.Eq(t, out.TaskGroups[0].Tasks[0].Resources.CPU, 500)
+	must.Eq(t, out.TaskGroups[0].Tasks[0].Resources.MemoryMB, 256)
 }
 
 func TestStateStore_DeleteJob_Job(t *testing.T) {
@@ -3645,6 +3771,8 @@ func TestStateStore_CSIVolume(t *testing.T) {
 	must.NoError(t, err)
 	vs = slurp(iter)
 	must.False(t, vs[0].HasFreeWriteClaims())
+	must.MapLen(t, 1, vs[0].ReadClaims)
+	must.MapLen(t, 0, vs[0].PastClaims)
 
 	claim2 := new(structs.CSIVolumeClaim)
 	*claim2 = *claim0
@@ -3657,7 +3785,20 @@ func TestStateStore_CSIVolume(t *testing.T) {
 	vs = slurp(iter)
 	must.True(t, vs[0].ReadSchedulable())
 
-	// deregistration is an error when the volume is in use
+	// alloc finishes, so we should see a past claim
+	a0 = a0.Copy()
+	a0.ClientStatus = structs.AllocClientStatusComplete
+	index++
+	err = state.UpsertAllocs(structs.MsgTypeTestSetup, index, []*structs.Allocation{a0})
+	must.NoError(t, err)
+
+	v0, err = state.CSIVolumeByID(nil, ns, vol0)
+	must.NoError(t, err)
+	must.MapLen(t, 1, v0.ReadClaims)
+	must.MapLen(t, 1, v0.PastClaims)
+
+	// but until this claim is freed the volume is in use, so deregistration is
+	// still an error
 	index++
 	err = state.CSIVolumeDeregister(index, ns, []string{vol0}, false)
 	must.Error(t, err, must.Sprint("volume deregistered while in use"))

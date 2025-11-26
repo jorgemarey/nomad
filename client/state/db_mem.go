@@ -6,6 +6,7 @@ package state
 import (
 	"maps"
 	"sync"
+	"sync/atomic"
 
 	"github.com/hashicorp/go-hclog"
 	arstate "github.com/hashicorp/nomad/client/allocrunner/state"
@@ -65,6 +66,9 @@ type MemDB struct {
 
 	dynamicHostVolumes map[string]*cstructs.HostVolumeState
 
+	// clientIdentity is the persisted identity of the client.
+	clientIdentity atomic.Value
+
 	logger hclog.Logger
 
 	mu sync.RWMutex
@@ -83,6 +87,7 @@ func NewMemDB(logger hclog.Logger) *MemDB {
 		identities:         make(map[string][]*structs.SignedWorkloadIdentity),
 		consulACLTokens:    make(map[string][]*cstructs.ConsulACLToken),
 		dynamicHostVolumes: make(map[string]*cstructs.HostVolumeState),
+		clientIdentity:     atomic.Value{},
 		logger:             logger,
 	}
 }
@@ -395,6 +400,19 @@ func (m *MemDB) DeleteDynamicHostVolume(s string) error {
 	defer m.mu.Unlock()
 	delete(m.dynamicHostVolumes, s)
 	return nil
+}
+
+func (m *MemDB) PutNodeIdentity(identity string) error {
+	m.clientIdentity.Store(identity)
+	return nil
+}
+
+func (m *MemDB) GetNodeIdentity() (string, error) {
+	if obj := m.clientIdentity.Load(); obj == nil {
+		return "", nil
+	} else {
+		return obj.(string), nil
+	}
 }
 
 func (m *MemDB) Close() error {

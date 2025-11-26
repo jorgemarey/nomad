@@ -4,6 +4,7 @@
 package structs
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -258,7 +259,9 @@ func TestAuthenticatedIdentity_String(t *testing.T) {
 			name: "alloc claim",
 			inputAuthenticatedIdentity: &AuthenticatedIdentity{
 				Claims: &IdentityClaims{
-					AllocationID: "my-testing-alloc-id",
+					WorkloadIdentityClaims: &WorkloadIdentityClaims{
+						AllocationID: "my-testing-alloc-id",
+					},
 				},
 			},
 			expectedOutput: "alloc:my-testing-alloc-id",
@@ -277,6 +280,29 @@ func TestAuthenticatedIdentity_String(t *testing.T) {
 				RemoteIP: net.IPv4(192, 168, 135, 232),
 			},
 			expectedOutput: "my-testing-tls-name:192.168.135.232",
+		},
+		{
+			name: "client introduction node pool",
+			inputAuthenticatedIdentity: &AuthenticatedIdentity{
+				Claims: &IdentityClaims{
+					NodeIntroductionIdentityClaims: &NodeIntroductionIdentityClaims{
+						NodePool: "my-testing-node-pool",
+					},
+				},
+			},
+			expectedOutput: "client-introduction:my-testing-node-pool",
+		},
+		{
+			name: "client introduction node pool and name",
+			inputAuthenticatedIdentity: &AuthenticatedIdentity{
+				Claims: &IdentityClaims{
+					NodeIntroductionIdentityClaims: &NodeIntroductionIdentityClaims{
+						NodeName: "my-testing-node-name",
+						NodePool: "my-testing-node-pool",
+					},
+				},
+			},
+			expectedOutput: "client-introduction:my-testing-node-pool:my-testing-node-name",
 		},
 	}
 
@@ -1512,7 +1538,7 @@ func TestTaskGroup_Validate(t *testing.T) {
 				},
 			},
 			expErr: []string{
-				"System jobs should not have a reschedule policy",
+				"System or sysbatch jobs should not have a reschedule policy",
 			},
 			jobType: JobTypeSystem,
 		},
@@ -2211,6 +2237,10 @@ func TestTask_Validate(t *testing.T) {
 		"task level: distinct_hosts",
 		"task level: distinct_property",
 	)
+
+	// Ensure the task name "alloc" is invalid.
+	invalidAllocName := &Task{Name: "alloc"}
+	must.ErrorContains(t, invalidAllocName.Validate(JobTypeBatch, tg), "Task cannot be named")
 }
 
 func TestTask_Validate_Resources(t *testing.T) {
@@ -6434,6 +6464,186 @@ func TestVault_Canonicalize(t *testing.T) {
 	require.Equal(t, VaultChangeModeRestart, v.ChangeMode)
 }
 
+func TestTask_Validate_Secret(t *testing.T) {
+	cases := []struct {
+		name   string
+		task   *Task
+		expErr bool
+	}{
+		{
+			name: "errors with vault provider and no vault block",
+			task: &Task{
+				Secrets: []*Secret{
+					{
+						Name:     "test",
+						Provider: "vault",
+					},
+				},
+			},
+			expErr: true,
+		},
+		{
+			name: "succeeds with vault provider and vault block",
+			task: &Task{
+				Vault: &Vault{},
+				Secrets: []*Secret{
+					{
+						Name:     "test",
+						Provider: "vault",
+					},
+				},
+			},
+			expErr: false,
+		},
+	}
+
+	vaultProviderErr := "has provider \"vault\" but no vault block"
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.task.Validate(JobTypeService, &TaskGroup{})
+
+			// Validate will return errors here, we just want to validate
+			// it contains the above vaultProviderErr or not
+			if tc.expErr {
+				must.ErrorContains(t, err, vaultProviderErr)
+			} else {
+				// no ErrorNotContains so use string matching
+				must.StrNotContains(t, err.Error(), vaultProviderErr)
+			}
+		})
+	}
+}
+
+func TestSecrets_Copy(t *testing.T) {
+	ci.Parallel(t)
+	s := &Secret{
+		Name:     "test-secret",
+		Provider: "test-provider",
+		Path:     "/test/path",
+		Config: map[string]any{
+			"some-key": map[string]any{
+				"nested-key": "nested-value",
+			},
+		},
+	}
+	ns := s.Copy()
+
+	must.Eq(t, s.Name, ns.Name)
+	must.Eq(t, s.Provider, ns.Provider)
+	must.Eq(t, s.Path, ns.Path)
+	must.Eq(t, s.Config, ns.Config)
+
+	// make sure nested maps are copied correctly
+	s.Config["some-key"].(map[string]any)["nested-key"] = "new-value"
+
+	must.NotEq(t, s.Config, ns.Config)
+}
+
+func TestSecrets_Validate(t *testing.T) {
+	ci.Parallel(t)
+	testCases := []struct {
+		name      string
+		secret    *Secret
+		expectErr error
+	}{
+		{
+			name: "valid secret",
+			secret: &Secret{
+				Name:     "testsecret",
+				Provider: "test-provier",
+				Path:     "test-path",
+			},
+			expectErr: nil,
+		},
+		{
+			name: "missing name",
+			secret: &Secret{
+				Path:     "test-path",
+				Provider: "test-provider",
+			},
+			expectErr: errors.New("secret name cannot be empty"),
+		},
+		{
+			name: "missing provider",
+			secret: &Secret{
+				Name: "testsecret",
+				Path: "test-path",
+			},
+			expectErr: errors.New("secret provider cannot be empty"),
+		},
+		{
+			name: "missing path",
+			secret: &Secret{
+				Name:     "testsecret",
+				Provider: "test-provier",
+			},
+			expectErr: errors.New("secret path cannot be empty"),
+		},
+		{
+			name: "nomad provider fails with env",
+			secret: &Secret{
+				Name:     "test-secret",
+				Provider: "nomad",
+				Path:     "test",
+				Env: map[string]string{
+					"test": "test",
+				},
+			},
+			expectErr: errors.New("nomad provider cannot use the env block"),
+		},
+		{
+			name: "vault provider fails with env",
+			secret: &Secret{
+				Name:     "test-secret",
+				Provider: "vault",
+				Path:     "test",
+				Env: map[string]string{
+					"test": "test",
+				},
+			},
+			expectErr: errors.New("vault provider cannot use the env block"),
+		},
+		{
+			name: "custom provider fails with config",
+			secret: &Secret{
+				Name:     "test-secret",
+				Provider: "test",
+				Path:     "test",
+				Config: map[string]any{
+					"test": "test",
+				},
+			},
+			expectErr: errors.New("custom plugin provider test cannot use the config block"),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.secret.Validate()
+			if tc.expectErr != nil {
+				must.ErrorContains(t, err, tc.expectErr.Error())
+			} else {
+				must.NoError(t, err)
+			}
+		})
+	}
+
+}
+
+func TestSecrets_Canonicalize(t *testing.T) {
+	ci.Parallel(t)
+	s := &Secret{
+		Name:     "test-secret",
+		Provider: "test-provider",
+		Path:     "/test/path",
+		Config:   make(map[string]any),
+	}
+
+	s.Canonicalize()
+
+	must.Nil(t, s.Config)
+}
+
 func TestParameterizedJobConfig_Validate(t *testing.T) {
 	ci.Parallel(t)
 
@@ -7080,8 +7290,6 @@ func TestNode_Copy(t *testing.T) {
 	node2 := node.Copy()
 
 	must.Eq(t, node.Attributes, node2.Attributes)
-	must.Eq(t, node.Resources, node2.Resources)
-	must.Eq(t, node.Reserved, node2.Reserved)
 	must.Eq(t, node.Links, node2.Links)
 	must.Eq(t, node.Meta, node2.Meta)
 	must.Eq(t, node.Events, node2.Events)
@@ -8244,7 +8452,7 @@ func TestTaskIdentity_Canonicalize(t *testing.T) {
 	// to the original field.
 	must.NotNil(t, task.Identity)
 	must.Eq(t, WorkloadIdentityDefaultName, task.Identity.Name)
-	must.Eq(t, []string{WorkloadIdentityDefaultAud}, task.Identity.Audience)
+	must.Eq(t, []string{IdentityDefaultAud}, task.Identity.Audience)
 	must.False(t, task.Identity.Env)
 	must.False(t, task.Identity.File)
 

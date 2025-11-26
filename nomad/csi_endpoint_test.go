@@ -1137,12 +1137,13 @@ func TestCSIVolumeEndpoint_List_PaginationFiltering(t *testing.T) {
 func TestCSIVolumeEndpoint_Create(t *testing.T) {
 	ci.Parallel(t)
 	var err error
-	srv, rootToken, shutdown := TestACLServer(t, func(c *Config) {
+	srv, _, shutdown := TestACLServer(t, func(c *Config) {
 		c.NumSchedulers = 0 // Prevent automatic dequeue
 	})
 	defer shutdown()
 
 	testutil.WaitForLeader(t, srv.RPC)
+	testutil.WaitForKeyring(t, srv.RPC, srv.Region())
 
 	fake := newMockClientCSI()
 	fake.NextValidateError = nil
@@ -1159,6 +1160,7 @@ func TestCSIVolumeEndpoint_Create(t *testing.T) {
 	client, cleanup := client.TestClientWithRPCs(t,
 		func(c *cconfig.Config) {
 			c.Servers = []string{srv.config.RPCAddr.String()}
+			c.TLSConfig = srv.config.TLSConfig
 		},
 		map[string]interface{}{"CSI": fake},
 	)
@@ -1170,8 +1172,11 @@ func TestCSIVolumeEndpoint_Create(t *testing.T) {
 	}).Node
 
 	req0 := &structs.NodeRegisterRequest{
-		Node:         node,
-		WriteRequest: structs.WriteRequest{Region: "global", AuthToken: rootToken.SecretID},
+		Node: node,
+		WriteRequest: structs.WriteRequest{
+			Region:    "global",
+			AuthToken: node.SecretID,
+		},
 	}
 	var resp0 structs.NodeUpdateResponse
 	err = client.RPC("Node.Register", req0, &resp0)

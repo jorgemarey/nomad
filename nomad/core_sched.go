@@ -17,7 +17,7 @@ import (
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/state"
 	"github.com/hashicorp/nomad/nomad/structs"
-	"github.com/hashicorp/nomad/scheduler"
+	sstructs "github.com/hashicorp/nomad/scheduler/structs"
 	"golang.org/x/time/rate"
 )
 
@@ -37,7 +37,7 @@ type CoreScheduler struct {
 }
 
 // NewCoreScheduler is used to return a new system scheduler instance
-func NewCoreScheduler(srv *Server, snap *state.StateSnapshot) scheduler.Scheduler {
+func NewCoreScheduler(srv *Server, snap *state.StateSnapshot) sstructs.Scheduler {
 	s := &CoreScheduler{
 		srv:                      srv,
 		snap:                     snap,
@@ -216,8 +216,10 @@ OUTER:
 
 // jobReap contacts the leader and issues a reap on the passed jobs
 func (c *CoreScheduler) jobReap(jobs []*structs.Job, leaderACL string) error {
-	// Call to the leader to issue the reap
-	for _, req := range c.partitionJobReap(jobs, leaderACL, structs.MaxUUIDsPerWriteRequest) {
+	// Call to the leader to issue the reap with a batch size intended to be
+	// similar to the GC by batches of UUIDs for evals, allocs, and nodes
+	// (limited by structs.MaxUUIDsPerWriteRequest)
+	for _, req := range c.partitionJobReap(jobs, leaderACL, 2048) {
 		var resp structs.JobBatchDeregisterResponse
 		if err := c.srv.RPC(structs.JobBatchDeregisterRPCMethod, req, &resp); err != nil {
 			c.logger.Error("batch job reap failed", "error", err)
@@ -530,7 +532,11 @@ OUTER:
 func (c *CoreScheduler) nodeReap(eval *structs.Evaluation, nodeIDs []string) error {
 	// For old clusters, send single deregistration messages COMPAT(0.11)
 	minVersionBatchNodeDeregister := version.Must(version.NewVersion("0.9.4"))
-	if !ServersMeetMinimumVersion(c.srv.Members(), c.srv.Region(), minVersionBatchNodeDeregister, true) {
+	if !c.srv.peersCache.ServersMeetMinimumVersion(
+		c.srv.Region(),
+		minVersionBatchNodeDeregister,
+		true,
+	) {
 		for _, id := range nodeIDs {
 			req := structs.NodeDeregisterRequest{
 				NodeID: id,
@@ -1068,8 +1074,8 @@ func (c *CoreScheduler) rootKeyGC(eval *structs.Evaluation, now time.Time) error
 //
 // COMPAT(1.12.0): remove this function in 1.12.0 LTS
 func (c *CoreScheduler) rootKeyMigrate(eval *structs.Evaluation) (bool, error) {
-	if !ServersMeetMinimumVersion(
-		c.srv.serf.Members(), c.srv.Region(), minVersionKeyringInRaft, true) {
+	if !c.srv.peersCache.ServersMeetMinimumVersion(
+		c.srv.Region(), minVersionKeyringInRaft, true) {
 		return false, nil
 	}
 

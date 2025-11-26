@@ -31,6 +31,7 @@ import (
 	"github.com/hashicorp/nomad/helper/tlsutil"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
+	"github.com/hashicorp/nomad/nomad/peers"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/nomad/testutil"
@@ -254,6 +255,7 @@ func TestRPC_PlaintextRPCSucceedsWhenInUpgradeMode(t *testing.T) {
 
 	s1, cleanupS1 := TestServer(t, func(c *Config) {
 		c.DataDir = path.Join(dir, "node1")
+		c.Region = "regionFoo"
 		c.TLSConfig = &config.TLSConfig{
 			EnableRPC:            true,
 			VerifyServerHostname: true,
@@ -264,18 +266,19 @@ func TestRPC_PlaintextRPCSucceedsWhenInUpgradeMode(t *testing.T) {
 		}
 	})
 	defer cleanupS1()
+	testutil.WaitForKeyring(t, s1.RPC, s1.Region())
 
-	codec := rpcClient(t, s1)
+	tlsCodec := rpcClientWithTLS(t, s1, s1.config.TLSConfig)
 
 	// Create the register request
 	node := mock.Node()
 	req := &structs.NodeRegisterRequest{
 		Node:         node,
-		WriteRequest: structs.WriteRequest{Region: "global"},
+		WriteRequest: structs.WriteRequest{Region: s1.Region()},
 	}
 
 	var resp structs.GenericResponse
-	err := msgpackrpc.CallWithCodec(codec, "Node.Register", req, &resp)
+	err := msgpackrpc.CallWithCodec(tlsCodec, "Node.Register", req, &resp)
 	assert.Nil(err)
 
 	// Check that heartbeatTimers has the heartbeat ID
@@ -336,7 +339,7 @@ func TestRPC_streamingRpcConn_badMethod(t *testing.T) {
 	testutil.WaitForLeader(t, s2.RPC)
 
 	s1.peerLock.RLock()
-	ok, parts := isNomadServer(s2.LocalMember())
+	ok, parts := peers.IsNomadServer(s2.LocalMember())
 	require.True(ok)
 	server := s1.localPeers[raft.ServerAddress(parts.Addr.String())]
 	require.NotNil(server)
@@ -395,7 +398,7 @@ func TestRPC_streamingRpcConn_badMethod_TLS(t *testing.T) {
 	testutil.WaitForLeader(t, s1.RPC)
 
 	s1.peerLock.RLock()
-	ok, parts := isNomadServer(s2.LocalMember())
+	ok, parts := peers.IsNomadServer(s2.LocalMember())
 	require.True(ok)
 	server := s1.localPeers[raft.ServerAddress(parts.Addr.String())]
 	require.NotNil(server)
@@ -432,7 +435,7 @@ func TestRPC_streamingRpcConn_goodMethod_Plaintext(t *testing.T) {
 	testutil.WaitForLeader(t, s1.RPC)
 
 	s1.peerLock.RLock()
-	ok, parts := isNomadServer(s2.LocalMember())
+	ok, parts := peers.IsNomadServer(s2.LocalMember())
 	require.True(ok)
 	server := s1.localPeers[raft.ServerAddress(parts.Addr.String())]
 	require.NotNil(server)
@@ -505,7 +508,7 @@ func TestRPC_streamingRpcConn_goodMethod_TLS(t *testing.T) {
 	testutil.WaitForLeader(t, s1.RPC)
 
 	s1.peerLock.RLock()
-	ok, parts := isNomadServer(s2.LocalMember())
+	ok, parts := peers.IsNomadServer(s2.LocalMember())
 	require.True(ok)
 	server := s1.localPeers[raft.ServerAddress(parts.Addr.String())]
 	require.NotNil(server)

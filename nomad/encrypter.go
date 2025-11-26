@@ -33,6 +33,7 @@ import (
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/crypto"
 	"github.com/hashicorp/nomad/helper/joseutil"
+	"github.com/hashicorp/nomad/nomad/peers"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/raft"
@@ -44,8 +45,6 @@ const nomadKeystoreExtension = ".nks.json"
 type claimSigner interface {
 	SignClaims(*structs.IdentityClaims) (string, string, error)
 }
-
-var _ claimSigner = &Encrypter{}
 
 // Encrypter is the keyring for encrypting variables and signing workload
 // identities.
@@ -120,31 +119,34 @@ func NewEncrypter(srv *Server, keystorePath string) (*Encrypter, error) {
 // fields
 func fallbackVaultConfig(provider *structs.KEKProviderConfig, vaultcfg *config.VaultConfig) {
 
-	setFallback := func(key, fallback, env string) {
+	setFallback := func(key, cfg, env, fallback string) {
 		if provider.Config == nil {
 			provider.Config = map[string]string{}
 		}
 		if _, ok := provider.Config[key]; !ok {
-			if fallback != "" {
-				provider.Config[key] = fallback
+			if cfg != "" {
+				provider.Config[key] = cfg
+			} else if envVal := os.Getenv(env); envVal != "" {
+				provider.Config[key] = envVal
 			} else {
-				provider.Config[key] = os.Getenv(env)
+				provider.Config[key] = fallback
 			}
 		}
 	}
 
-	setFallback("address", vaultcfg.Addr, "VAULT_ADDR")
-	setFallback("token", vaultcfg.Token, "VAULT_TOKEN")
-	setFallback("tls_ca_cert", vaultcfg.TLSCaPath, "VAULT_CACERT")
-	setFallback("tls_client_cert", vaultcfg.TLSCertFile, "VAULT_CLIENT_CERT")
-	setFallback("tls_client_key", vaultcfg.TLSKeyFile, "VAULT_CLIENT_KEY")
-	setFallback("tls_server_name", vaultcfg.TLSServerName, "VAULT_TLS_SERVER_NAME")
+	setFallback("address", vaultcfg.Addr, "VAULT_ADDR", "")
+	setFallback("token", vaultcfg.Token, "VAULT_TOKEN", "")
+	setFallback("tls_ca_cert", vaultcfg.TLSCaPath, "VAULT_CACERT", "")
+	setFallback("tls_client_cert", vaultcfg.TLSCertFile, "VAULT_CLIENT_CERT", "")
+	setFallback("tls_client_key", vaultcfg.TLSKeyFile, "VAULT_CLIENT_KEY", "")
+	setFallback("tls_server_name", vaultcfg.TLSServerName, "VAULT_TLS_SERVER_NAME", "")
 
+	// default to false as this will be parsed by the go-kms-wrapping package
 	skipVerify := ""
 	if vaultcfg.TLSSkipVerify != nil {
 		skipVerify = fmt.Sprintf("%v", *vaultcfg.TLSSkipVerify)
 	}
-	setFallback("tls_skip_verify", skipVerify, "VAULT_SKIP_VERIFY")
+	setFallback("tls_skip_verify", skipVerify, "VAULT_SKIP_VERIFY", "false")
 }
 
 func (e *Encrypter) loadKeystore() error {
@@ -305,11 +307,12 @@ func (e *Encrypter) Decrypt(ciphertext []byte, keyID string) ([]byte, error) {
 // header name.
 const keyIDHeader = "kid"
 
-// SignClaims signs the identity claim for the task and returns an encoded JWT
-// (including both the claim and its signature) and the key ID of the key used
-// to sign it, or an error.
+// SignClaims signs the identity claim and returns an encoded JWT (including
+// both the claim and its signature) and the key ID of the key used to sign it,
+// or an error.
 //
-// SignClaims adds the Issuer claim prior to signing.
+// SignClaims adds the Issuer claim prior to signing if it is unset by the
+// caller.
 func (e *Encrypter) SignClaims(claims *structs.IdentityClaims) (string, string, error) {
 
 	if claims == nil {
@@ -326,7 +329,7 @@ func (e *Encrypter) SignClaims(claims *structs.IdentityClaims) (string, string, 
 		claims.Issuer = e.issuer
 	}
 
-	opts := (&jose.SignerOptions{}).WithHeader("kid", cs.rootKey.Meta.KeyID).WithType("JWT")
+	opts := (&jose.SignerOptions{}).WithHeader(keyIDHeader, cs.rootKey.Meta.KeyID).WithType("JWT")
 
 	var sig jose.Signer
 	if cs.rsaPrivateKey != nil {
@@ -351,8 +354,8 @@ func (e *Encrypter) SignClaims(claims *structs.IdentityClaims) (string, string, 
 	return raw, cs.rootKey.Meta.KeyID, nil
 }
 
-// VerifyClaim accepts a previously-signed encoded claim and validates
-// it before returning the claim
+// VerifyClaim accepts a previously signed encoded claim and validates
+// it before returning the claim.
 func (e *Encrypter) VerifyClaim(tokenString string) (*structs.IdentityClaims, error) {
 
 	token, err := jwt.ParseSigned(tokenString)
@@ -377,21 +380,21 @@ func (e *Encrypter) VerifyClaim(tokenString string) (*structs.IdentityClaims, er
 		return nil, err
 	}
 
+	claims := structs.IdentityClaims{}
+
 	// Validate the claims.
-	claims := &structs.IdentityClaims{}
-	if err := token.Claims(typedPubKey, claims); err != nil {
+	if err := token.Claims(typedPubKey, &claims); err != nil {
 		return nil, fmt.Errorf("invalid signature: %w", err)
 	}
 
-	//COMPAT Until we can guarantee there are no pre-1.7 JWTs in use we can only
-	//       validate the signature and have no further expectations of the
-	//       claims.
-	expect := jwt.Expected{}
-	if err := claims.Validate(expect); err != nil {
+	// COMPAT: Until we can guarantee there are no pre-1.7 JWTs in use, we can
+	// only validate the signature and have no further expectations of the
+	// claims.
+	if err := claims.Validate(jwt.Expected{}); err != nil {
 		return nil, fmt.Errorf("invalid claims: %w", err)
 	}
 
-	return claims, nil
+	return &claims, nil
 }
 
 // AddUnwrappedKey stores the key in the keystore and creates a new cipher for
@@ -1206,8 +1209,8 @@ func (krr *KeyringReplicator) replicateKey(ctx context.Context, wrappedKeys *str
 		return fmt.Errorf("failed to fetch key from any peer: %v", err)
 	}
 
-	isClusterUpgraded := ServersMeetMinimumVersion(
-		krr.srv.serf.Members(), krr.srv.Region(), minVersionKeyringInRaft, true)
+	isClusterUpgraded := krr.srv.peersCache.ServersMeetMinimumVersion(
+		krr.srv.Region(), minVersionKeyringInRaft, true)
 
 	// In the legacy replication, we toss out the wrapped key because it's
 	// always persisted to disk
@@ -1220,10 +1223,10 @@ func (krr *KeyringReplicator) replicateKey(ctx context.Context, wrappedKeys *str
 	return nil
 }
 
-func (krr *KeyringReplicator) getAllPeers() []*serverParts {
+func (krr *KeyringReplicator) getAllPeers() []*peers.Parts {
 	krr.srv.peerLock.RLock()
 	defer krr.srv.peerLock.RUnlock()
-	peers := make([]*serverParts, 0, len(krr.srv.localPeers))
+	peers := make([]*peers.Parts, 0, len(krr.srv.localPeers))
 	for _, peer := range krr.srv.localPeers {
 		peers = append(peers, peer.Copy())
 	}

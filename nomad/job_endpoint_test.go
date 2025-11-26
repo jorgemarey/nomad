@@ -356,6 +356,75 @@ func TestJobEndpoint_Register_PreserveCounts(t *testing.T) {
 	require.Equal(2, out.TaskGroups[1].Count)  // should be as in job spec
 }
 
+func TestJobEndpoint_Register_PreserveResources(t *testing.T) {
+	ci.Parallel(t)
+
+	s1, cleanupS1 := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0 // Prevent automatic dequeue
+	})
+	defer cleanupS1()
+	codec := rpcClient(t, s1)
+	testutil.WaitForLeader(t, s1.RPC)
+
+	// Create the register request
+	job := mock.Job()
+	job.TaskGroups[0].Name = "group1"
+	job.TaskGroups = append(job.TaskGroups, job.TaskGroups[0].Copy())
+	job.TaskGroups[1].Name = "group2"
+	job.TaskGroups[1].Tasks[0].Resources = &structs.Resources{
+		CPU:      300,
+		MemoryMB: 128,
+	}
+	job.Canonicalize()
+
+	// Register the job
+	must.NoError(t, msgpackrpc.CallWithCodec(codec, "Job.Register", &structs.JobRegisterRequest{
+		Job: job,
+		WriteRequest: structs.WriteRequest{
+			Region:    "global",
+			Namespace: job.Namespace,
+		},
+	}, &structs.JobRegisterResponse{}))
+
+	// Check the job in the FSM state
+	state := s1.fsm.State()
+	out, err := state.JobByID(nil, job.Namespace, job.ID)
+	must.NoError(t, err)
+	must.NotNil(t, out)
+	must.Eq(t, 10, out.TaskGroups[0].Count)
+
+	// New version:
+	job = job.Copy()
+	task := job.TaskGroups[0].Tasks[0]
+	task.Resources.CPU = 200
+	task.Resources.MemoryMB = 400
+
+	job.TaskGroups[1].Tasks[0].Resources = &structs.Resources{
+		CPU:      250,
+		MemoryMB: 64,
+	}
+
+	// Perform the update
+	must.NoError(t, msgpackrpc.CallWithCodec(codec, "Job.Register", &structs.JobRegisterRequest{
+		Job:               job,
+		PreserveResources: true,
+		WriteRequest: structs.WriteRequest{
+			Region:    "global",
+			Namespace: job.Namespace,
+		},
+	}, &structs.JobRegisterResponse{}))
+
+	// Check the job in the FSM state
+	out, err = state.JobByID(nil, job.Namespace, job.ID)
+	must.NoError(t, err)
+	must.NotNil(t, out)
+	must.Eq(t, 500, out.TaskGroups[0].Tasks[0].Resources.CPU)      // should not change
+	must.Eq(t, 256, out.TaskGroups[0].Tasks[0].Resources.MemoryMB) // should be as in job spec
+
+	must.Eq(t, 300, out.TaskGroups[1].Tasks[0].Resources.CPU)      // should not change
+	must.Eq(t, 128, out.TaskGroups[1].Tasks[0].Resources.MemoryMB) // should be as in job spec
+}
+
 func TestJobEndpoint_Register_EvalPriority(t *testing.T) {
 	ci.Parallel(t)
 	requireAssert := require.New(t)
@@ -6291,6 +6360,17 @@ func TestJobEndpoint_ValidateJob_ConsulConnect(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	t.Run("valid consul connect with cni", func(t *testing.T) {
+		j := mock.Job()
+
+		tg := j.TaskGroups[0]
+		tg.Services = tgServices
+		tg.Networks[0].Mode = "cni/test-net"
+
+		err := validateJob(j)
+		must.NoError(t, err)
+	})
+
 	t.Run("consul connect but missing network", func(t *testing.T) {
 		j := mock.Job()
 
@@ -6299,8 +6379,7 @@ func TestJobEndpoint_ValidateJob_ConsulConnect(t *testing.T) {
 		tg.Networks = nil
 
 		err := validateJob(j)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), `Consul Connect sidecars require exactly 1 network`)
+		must.ErrorContains(t, err, ErrConnectRequireOneNetwork.Error())
 	})
 
 	t.Run("consul connect but non bridge network", func(t *testing.T) {
@@ -6314,8 +6393,7 @@ func TestJobEndpoint_ValidateJob_ConsulConnect(t *testing.T) {
 		}
 
 		err := validateJob(j)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), `Consul Connect sidecar requires bridge network, found "host" in group "web"`)
+		must.ErrorContains(t, err, ErrConnectInvalidNetworkMode.Error())
 	})
 
 }
@@ -7605,7 +7683,7 @@ func TestJobEndpoint_Scale_Invalid(t *testing.T) {
 	require.Contains(err.Error(), "should not contain count if error is true")
 }
 
-func TestJobEndpoint_Scale_OutOfBounds(t *testing.T) {
+func TestJobEndpoint_Scale_TaskGroupOutOfBounds(t *testing.T) {
 	ci.Parallel(t)
 	require := require.New(t)
 
@@ -7646,6 +7724,44 @@ func TestJobEndpoint_Scale_OutOfBounds(t *testing.T) {
 	err = msgpackrpc.CallWithCodec(codec, "Job.Scale", scale, &resp)
 	require.Error(err)
 	require.Contains(err.Error(), "group count was less than scaling policy minimum: 2 < 3")
+}
+
+func TestJobEndpoint_Scale_JobOutOfBounds(t *testing.T) {
+	ci.Parallel(t)
+
+	s1, cleanupS1 := TestServer(t, func(config *Config) {
+		config.JobMaxCount = 4
+	})
+	defer cleanupS1()
+	codec := rpcClient(t, s1)
+	testutil.WaitForLeader(t, s1.RPC)
+	state := s1.fsm.State()
+
+	const requestedCount = 6
+	job := mock.Job()
+	job.TaskGroups[0].Count = requestedCount
+
+	// register the job
+	err := state.UpsertJob(structs.MsgTypeTestSetup, 1000, nil, job)
+	must.NoError(t, err)
+
+	var resp structs.JobRegisterResponse
+	scale := &structs.JobScaleRequest{
+		JobID: job.ID,
+		Target: map[string]string{
+			structs.ScalingTargetGroup: job.TaskGroups[0].Name,
+		},
+		Count:          pointer.Of(int64(requestedCount)),
+		Message:        "count too high",
+		PolicyOverride: false,
+		WriteRequest: structs.WriteRequest{
+			Region:    "global",
+			Namespace: job.Namespace,
+		},
+	}
+	err = msgpackrpc.CallWithCodec(codec, "Job.Scale", scale, &resp)
+	must.Error(t, err)
+	must.ErrorContains(t, err, "total count was greater than configured job_max_count: 6 > 4")
 }
 
 func TestJobEndpoint_Scale_NoEval(t *testing.T) {

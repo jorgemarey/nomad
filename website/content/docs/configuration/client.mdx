@@ -154,17 +154,22 @@ client {
 - `gc_interval` `(string: "1m")` - Specifies the interval at which Nomad
   attempts to garbage collect terminal allocation directories.
 
-- `gc_disk_usage_threshold` `(float: 80)` - Specifies the disk usage percent which
-  Nomad tries to maintain by garbage collecting terminal allocations.
+- `gc_disk_usage_threshold` `(float: 80)` - Specifies the disk usage percent
+  which Nomad tries to maintain by garbage collecting terminal allocations. Note
+  that Nomad immediately garbage collects terminal allocations if garbage
+  collected on the server.
 
 - `gc_inode_usage_threshold` `(float: 70)` - Specifies the inode usage percent
-  which Nomad tries to maintain by garbage collecting terminal allocations.
+  which Nomad tries to maintain by garbage collecting terminal allocations. Note
+  that Nomad immediately garbage collects terminal allocations if garbage
+  collected on the server.
 
 - `gc_max_allocs` `(int: 50)` - Specifies the maximum number of allocations
   which a client will track before triggering a garbage collection of terminal
   allocations. This will _not_ limit the number of allocations a node can run at
   a time, however after `gc_max_allocs` every new allocation will cause terminal
-  allocations to be GC'd.
+  allocations to be GC'd. Note that Nomad immediately garbage collects terminal
+  allocations if garbage collected on the server.
 
 - `gc_parallel_destroys` `(int: 2)` - Specifies the maximum number of
   parallel destroys allowed by the garbage collector. This value should be
@@ -215,6 +220,12 @@ client {
 - `template` <code>([Template](#template-parameters): nil)</code> - Specifies
   controls on the behavior of task
   [`template`](/nomad/docs/job-specification/template) blocks.
+
+- `common_plugin_dir` `(string: "")` - Specifies the directory where you should
+  place plugins that conform to the [common plugins interface][common_plugins_interface]. When this
+  parameter is empty, Nomad generates the path using the [top-level
+  `data-dir`][top_level_data_dir] suffixed with `common_plugins`, like
+  `"/opt/nomad/common_plugins"`. This must be an absolute path.
 
 - `host_volume` <code>([host_volume](#host_volume-block): nil)</code> - Exposes
   paths from the host as volumes that can be mounted into jobs.
@@ -847,3 +858,4 @@ client {
 [dynamic host volumes]: /nomad/docs/other-specifications/volume/host
 [`volume create`]: /nomad/commands/volume/create
 [`volume register`]: /nomad/commands/volume/register
+[common_plugins_interface]: /nomad/plugins/author#common-plugin-interface

@@ -108,6 +108,10 @@ type Config struct {
 	// should be owned  by root with file mode 0o755.
 	AllocMountsDir string
 
+	// IntroToken is the signed JWT token that should be used to introduce this
+	// client to the servers on first registration.
+	IntroToken string
+
 	// Logger provides a logger to the client
 	Logger log.InterceptLogger
 
@@ -335,6 +339,10 @@ type Config struct {
 
 	// HostNetworks is a map of the conigured host networks by name.
 	HostNetworks map[string]*structs.ClientHostNetworkConfig
+
+	// CommonPluginDir is the root directory for plugins that implement
+	// the common plugin interface
+	CommonPluginDir string
 
 	// BindWildcardDefaultHostNetwork toggles if the default host network should accept all
 	// destinations (true) or only filter on the IP of the default host network (false) when

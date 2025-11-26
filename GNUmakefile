@@ -54,7 +54,7 @@ PROTO_COMPARE_TAG ?= v1.0.3$(if $(findstring ent,$(GO_TAGS)),+ent,)
 # or backport version, without the leading "v". main should have the latest
 # published release here, and release branches should point to the latest
 # published release in their X.Y release line.
-LAST_RELEASE ?= 1.10.4
+LAST_RELEASE ?= 1.10.5
 
 default: help
 
@@ -145,7 +145,7 @@ deps:  ## Install build and development dependencies
 	go install gotest.tools/gotestsum@v1.10.0
 	go install github.com/hashicorp/hcl/v2/cmd/hclfmt@d0c4fa8b0bbc2e4eeccd1ed2a32c2089ed8c5cf1
 	go install github.com/golang/protobuf/protoc-gen-go@v1.3.4
-	go install github.com/hashicorp/go-msgpack/v2/codec/codecgen@v2.1.2
+	go install github.com/hashicorp/go-msgpack/v2/codec/codecgen@v2.1.5
 	go install github.com/bufbuild/buf/cmd/buf@v0.36.0
 	go install github.com/hashicorp/go-changelog/cmd/changelog-build@latest
 	go install golang.org/x/tools/cmd/stringer@v0.30.0
@@ -155,7 +155,7 @@ deps:  ## Install build and development dependencies
 .PHONY: lint-deps
 lint-deps: ## Install linter dependencies
 	@echo "==> Updating linter dependencies..."
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.3.0
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.5.0
 	go install github.com/client9/misspell/cmd/misspell@v0.3.4
 	go install github.com/hashicorp/go-hclog/hclogvet@bd6194f1f5b126dbad2a3fdf3b9b6556cc3496c3
 
@@ -336,7 +336,7 @@ e2e-test: dev ## Run the Nomad e2e test suite
 .PHONY: integration-test
 integration-test: dev ## Run Nomad integration tests
 	@echo "==> Running Nomad integration test suites:"
-	NOMAD_E2E_VAULTCOMPAT=1 go test \
+	NOMAD_E2E_VAULTCOMPAT=1 gotestsum --format=testname -- \
 		-v \
 		-race \
 		-timeout=900s \
@@ -347,13 +347,24 @@ integration-test: dev ## Run Nomad integration tests
 .PHONY: integration-test-consul
 integration-test-consul: dev ## Run Nomad integration tests
 	@echo "==> Running Nomad integration test suite for Consul:"
-	NOMAD_E2E_CONSULCOMPAT=1 go test \
+	NOMAD_E2E_CONSULCOMPAT=1 gotestsum --format=testname -- \
 		-v \
 		-race \
 		-timeout=900s \
 		-count=1 \
 		-tags "$(GO_TAGS)" \
 		github.com/hashicorp/nomad/e2e/consulcompat
+
+.PHONY: integration-test-client-intro
+integration-test-client-intro: dev ## Run Nomad's Client Intro integration tests
+	@echo "==> Running Nomad integration test suite for Client Introduction:"
+	NOMAD_E2E_CLIENT_INTRO=1 gotestsum --format=testname -- \
+		-v \
+		-race \
+		-timeout=120s \
+		-count=1 \
+		-tags "$(GO_TAGS)" \
+		github.com/hashicorp/nomad/e2e/client_intro
 
 .PHONY: clean
 clean: GOPATH=$(shell go env GOPATH)
@@ -400,7 +411,7 @@ ember-dist: ## Build the static UI assets from source
 dev-ui: ember-dist static-assets ## Build a dev UI binary
 	@$(MAKE) NOMAD_UI_TAG="ui" dev ## Build a dev binary with the UI baked in
 
-HELP_FORMAT="    \033[36m%-25s\033[0m %s\n"
+HELP_FORMAT="    \033[36m%-32s\033[0m %s\n"
 .PHONY: help
 help: ## Display this usage information
 	@echo "Valid targets:"
@@ -470,6 +481,8 @@ copywriteheaders:
 
 .PHONY: cni
 cni: ## Install CNI plugins. Run this as root.
+	@# Detect architecture: x86_64 -> amd64, aarch64 -> arm64
+	$(eval CNI_ARCH := $(shell if [ "$(THIS_ARCH)" = "aarch64" ]; then echo "arm64"; else echo "amd64"; fi))
 	mkdir -p /opt/cni/bin
-	curl --fail -LsO "https://github.com/containernetworking/plugins/releases/download/v1.3.0/cni-plugins-linux-amd64-v1.3.0.tgz"
-	tar -C /opt/cni/bin -xf cni-plugins-linux-amd64-v1.3.0.tgz
+	curl --fail -LsO "https://github.com/containernetworking/plugins/releases/download/v1.3.0/cni-plugins-linux-$(CNI_ARCH)-v1.3.0.tgz"
+	tar -C /opt/cni/bin -xf cni-plugins-linux-$(CNI_ARCH)-v1.3.0.tgz

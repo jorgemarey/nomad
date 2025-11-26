@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
+	"github.com/hashicorp/nomad/scheduler/tests"
 	"github.com/kr/pretty"
 	"github.com/shoenig/test/must"
 )
@@ -22,7 +23,7 @@ import (
 func TestSysBatch_JobRegister(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	_ = createNodes(t, h, 10)
@@ -90,12 +91,17 @@ func TestSysBatch_JobRegister(t *testing.T) {
 	must.Eq(t, 0, queued, must.Sprint("unexpected queued allocations"))
 
 	h.AssertEvalStatus(t, structs.EvalStatusComplete)
+
+	// sysbatch jobs never create a deployment
+	deployments, err := h.State.DeploymentsByJobID(nil, job.Namespace, job.ID, true)
+	must.NoError(t, err)
+	must.Len(t, 0, deployments)
 }
 
 func TestSysBatch_JobRegister_AddNode_Running(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	nodes := createNodes(t, h, 10)
@@ -172,7 +178,7 @@ func TestSysBatch_JobRegister_AddNode_Running(t *testing.T) {
 func TestSysBatch_JobRegister_AddNode_Dead(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	nodes := createNodes(t, h, 10)
@@ -250,7 +256,7 @@ func TestSysBatch_JobRegister_AddNode_Dead(t *testing.T) {
 func TestSysBatch_JobModify(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	nodes := createNodes(t, h, 10)
@@ -340,7 +346,7 @@ func TestSysBatch_JobModify(t *testing.T) {
 func TestSysBatch_JobModify_InPlace(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	nodes := createNodes(t, h, 10)
@@ -414,7 +420,7 @@ func TestSysBatch_JobModify_InPlace(t *testing.T) {
 func TestSysBatch_JobDeregister_Purged(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	nodes := createNodes(t, h, 10)
@@ -475,7 +481,7 @@ func TestSysBatch_JobDeregister_Purged(t *testing.T) {
 func TestSysBatch_JobDeregister_Stopped(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	nodes := createNodes(t, h, 10)
@@ -538,7 +544,7 @@ func TestSysBatch_JobDeregister_Stopped(t *testing.T) {
 func TestSysBatch_NodeDown(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a down node
 	node := mock.Node()
@@ -599,7 +605,7 @@ func TestSysBatch_NodeDown(t *testing.T) {
 func TestSysBatch_NodeDrain_Down(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a draining node
 	node := mock.DrainNode()
@@ -653,7 +659,7 @@ func TestSysBatch_NodeDrain_Down(t *testing.T) {
 func TestSysBatch_NodeDrain(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a draining node
 	node := mock.DrainNode()
@@ -710,7 +716,7 @@ func TestSysBatch_NodeDrain(t *testing.T) {
 func TestSysBatch_NodeUpdate(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a node
 	node := mock.Node()
@@ -754,8 +760,8 @@ func TestSysBatch_NodeUpdate(t *testing.T) {
 func TestSysBatch_RetryLimit(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
-	h.Planner = &RejectPlan{h}
+	h := tests.NewHarness(t)
+	h.Planner = &tests.RejectPlan{h}
 
 	// Create some nodes
 	_ = createNodes(t, h, 10)
@@ -800,7 +806,7 @@ func TestSysBatch_RetryLimit(t *testing.T) {
 func TestSysBatch_Queued_With_Constraints(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	nodes := createNodes(t, h, 3)
 
@@ -847,7 +853,7 @@ func TestSysBatch_Queued_With_Constraints(t *testing.T) {
 func TestSysBatch_Queued_With_Constraints_PartialMatch(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// linux machines
 	linux := createNodes(t, h, 3)
@@ -897,7 +903,7 @@ func TestSysBatch_Queued_With_Constraints_PartialMatch(t *testing.T) {
 func TestSysBatch_JobConstraint_AddNode(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create two nodes
 	var node *structs.Node
@@ -1037,7 +1043,7 @@ func TestSysBatch_JobConstraint_AddNode(t *testing.T) {
 
 func TestSysBatch_JobConstraint_AllFiltered(t *testing.T) {
 	ci.Parallel(t)
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create two nodes, one with a custom class
 	node := mock.Node()
@@ -1083,7 +1089,7 @@ func TestSysBatch_JobConstraint_AllFiltered(t *testing.T) {
 
 func TestSysBatch_JobConstraint_RunMultiple(t *testing.T) {
 	ci.Parallel(t)
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create two nodes, one with a custom class
 	fooNode := mock.Node()
@@ -1116,7 +1122,7 @@ func TestSysBatch_JobConstraint_RunMultiple(t *testing.T) {
 	must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
 
 	// Process the evaluation
-	err := h.Process(NewSystemScheduler, eval)
+	err := h.Process(NewSysBatchScheduler, eval)
 	must.NoError(t, err)
 
 	// Create a mock evaluation to run the job again, which will not place any
@@ -1132,7 +1138,7 @@ func TestSysBatch_JobConstraint_RunMultiple(t *testing.T) {
 	}
 	must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval2}))
 
-	err = h.Process(NewSystemScheduler, eval2)
+	err = h.Process(NewSysBatchScheduler, eval2)
 	must.NoError(t, err)
 
 	// Ensure a single plan
@@ -1153,7 +1159,7 @@ func TestSysBatch_JobConstraint_RunMultiple(t *testing.T) {
 func TestSysBatch_ExistingAllocNoNodes(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	var node *structs.Node
 	// Create a node
@@ -1234,7 +1240,7 @@ func TestSysBatch_ExistingAllocNoNodes(t *testing.T) {
 func TestSysBatch_ConstraintErrors(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	var node *structs.Node
 	// Register some nodes
@@ -1309,7 +1315,7 @@ func TestSysBatch_ConstraintErrors(t *testing.T) {
 func TestSysBatch_ChainedAlloc(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	_ = createNodes(t, h, 10)
@@ -1342,7 +1348,7 @@ func TestSysBatch_ChainedAlloc(t *testing.T) {
 	sort.Strings(allocIDs)
 
 	// Create a new harness to invoke the scheduler again
-	h1 := NewHarnessWithState(t, h.State)
+	h1 := tests.NewHarnessWithState(t, h.State)
 	job1 := mock.SystemBatchJob()
 	job1.ID = job.ID
 	job1.TaskGroups[0].Tasks[0].Env = make(map[string]string)
@@ -1398,7 +1404,7 @@ func TestSysBatch_ChainedAlloc(t *testing.T) {
 func TestSysBatch_PlanWithDrainedNode(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register two nodes with two different classes
 	node := mock.DrainNode()
@@ -1480,7 +1486,7 @@ func TestSysBatch_PlanWithDrainedNode(t *testing.T) {
 func TestSysBatch_QueuedAllocsMultTG(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register two nodes with two different classes
 	node := mock.Node()
@@ -1538,25 +1544,14 @@ func TestSysBatch_QueuedAllocsMultTG(t *testing.T) {
 func TestSysBatch_Preemption(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
-	legacyCpuResources, processorResources := cpuResources(3072)
+	legacyCpuResources, processorResources := tests.CpuResources(3072)
 
 	// Create nodes
 	nodes := make([]*structs.Node, 0)
 	for i := 0; i < 2; i++ {
 		node := mock.Node()
-		// TODO: remove in 0.11
-		node.Resources = &structs.Resources{
-			CPU:      3072,
-			MemoryMB: 5034,
-			DiskMB:   20 * 1024,
-			Networks: []*structs.NetworkResource{{
-				Device: "eth0",
-				CIDR:   "192.168.0.100/32",
-				MBits:  1000,
-			}},
-		}
 		node.NodeResources = &structs.NodeResources{
 			Processors: processorResources,
 			Cpu:        legacyCpuResources,
@@ -1827,7 +1822,7 @@ func TestSysBatch_Preemption(t *testing.T) {
 func TestSysBatch_canHandle(t *testing.T) {
 	ci.Parallel(t)
 
-	s := SystemScheduler{sysbatch: true}
+	s := SysBatchScheduler{}
 	t.Run("sysbatch register", func(t *testing.T) {
 		must.True(t, s.canHandle(structs.EvalTriggerJobRegister))
 	})
@@ -1838,9 +1833,10 @@ func TestSysBatch_canHandle(t *testing.T) {
 		must.True(t, s.canHandle(structs.EvalTriggerPeriodicJob))
 	})
 }
-func createNodes(t *testing.T, h *Harness, n int) []*structs.Node {
+
+func createNodes(t *testing.T, h *tests.Harness, n int) []*structs.Node {
 	nodes := make([]*structs.Node, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		node := mock.Node()
 		nodes[i] = node
 		must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))

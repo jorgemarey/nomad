@@ -144,6 +144,7 @@ server {
   event_buffer_size             = 200
   job_default_priority          = 100
   job_max_priority              = 200
+  job_max_count                 = 1000
   start_timeout                 = "1m"
 
   plan_rejection_tracker {
@@ -166,6 +167,12 @@ server {
       system_scheduler_enabled  = true
       service_scheduler_enabled = true
     }
+  }
+
+  client_introduction {
+    enforcement          = "warn"
+    default_identity_ttl = "5m"
+    max_identity_ttl     = "30m"
   }
 
   license_path = "/tmp/nomad.hclic"

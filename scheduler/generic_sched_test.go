@@ -18,6 +18,9 @@ import (
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
+	"github.com/hashicorp/nomad/scheduler/reconciler"
+	sstructs "github.com/hashicorp/nomad/scheduler/structs"
+	"github.com/hashicorp/nomad/scheduler/tests"
 	"github.com/shoenig/test"
 	"github.com/shoenig/test/must"
 )
@@ -25,7 +28,7 @@ import (
 func TestServiceSched_JobRegister(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	for range 10 {
@@ -61,10 +64,12 @@ func TestServiceSched_JobRegister(t *testing.T) {
 	}
 	plan := h.Plans[0]
 
-	// Ensure the plan doesn't have annotations.
+	// Ensure the plan doesn't have annotations but the eval does
 	if plan.Annotations != nil {
 		t.Fatalf("expected no annotations")
 	}
+	must.SliceNotEmpty(t, h.Evals)
+	must.Eq(t, 10, h.Evals[0].PlanAnnotations.DesiredTGUpdates["web"].Place)
 
 	// Ensure the eval has no spawned blocked eval
 	if len(h.CreateEvals) != 0 {
@@ -122,104 +127,251 @@ func TestServiceSched_JobRegister(t *testing.T) {
 	h.AssertEvalStatus(t, structs.EvalStatusComplete)
 }
 
-func TestServiceSched_JobRegister_StickyAllocs(t *testing.T) {
+func TestServiceSched_JobRegister_EphemeralDisk(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	createEphemeralJob := func(t *testing.T, h *tests.Harness, sticky, migrate bool) *structs.Job {
+		job := mock.Job()
+		job.TaskGroups[0].EphemeralDisk.Sticky = sticky
+		job.TaskGroups[0].EphemeralDisk.Migrate = migrate
+		must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
 
-	// Create some nodes
-	for i := 0; i < 10; i++ {
+		// Create a mock evaluation to register the job
+		eval := &structs.Evaluation{
+			Namespace:   structs.DefaultNamespace,
+			ID:          uuid.Generate(),
+			Priority:    job.Priority,
+			TriggeredBy: structs.EvalTriggerJobRegister,
+			JobID:       job.ID,
+			Status:      structs.EvalStatusPending,
+		}
+		must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
+
+		// Process the evaluation
+		must.NoError(t, h.Process(NewServiceScheduler, eval))
+
+		return job
+	}
+
+	t.Run("sticky ephemeral allocs in same node pool does not change nodes", func(t *testing.T) {
+		h := tests.NewHarness(t)
+
+		// Create some nodes
+		for range 10 {
+			node := mock.Node()
+			must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
+		}
+
+		// create a job
+		job := createEphemeralJob(t, h, true, false)
+
+		// Ensure the plan allocated
+		plan := h.Plans[0]
+		planned := make(map[string]*structs.Allocation)
+		for _, allocList := range plan.NodeAllocation {
+			for _, alloc := range allocList {
+				planned[alloc.ID] = alloc
+			}
+		}
+		must.MapLen(t, 10, planned)
+
+		// Update the job to force a rolling upgrade
+		updated := job.Copy()
+		updated.TaskGroups[0].Tasks[0].Resources.CPU += 10
+		must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, updated))
+
+		// Create a mock evaluation to handle the update
+		eval := &structs.Evaluation{
+			Namespace:   structs.DefaultNamespace,
+			ID:          uuid.Generate(),
+			Priority:    job.Priority,
+			TriggeredBy: structs.EvalTriggerNodeUpdate,
+			JobID:       job.ID,
+			Status:      structs.EvalStatusPending,
+		}
+		must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
+		h1 := tests.NewHarnessWithState(t, h.State)
+		must.NoError(t, h1.Process(NewServiceScheduler, eval))
+
+		// Ensure we have created only one new allocation
+		// Ensure a single plan
+		must.SliceLen(t, 1, h1.Plans)
+
+		plan = h1.Plans[0]
+		var newPlanned []*structs.Allocation
+		for _, allocList := range plan.NodeAllocation {
+			newPlanned = append(newPlanned, allocList...)
+		}
+		must.SliceLen(t, 10, newPlanned)
+		// Ensure that the new allocations were placed on the same node as the older
+		// ones
+		for _, new := range newPlanned {
+			// new alloc should have a previous allocation
+			must.NotEq(t, new.PreviousAllocation, "")
+
+			// new allocs PreviousAllocation must be a valid previously placed alloc
+			old, ok := planned[new.PreviousAllocation]
+			must.True(t, ok)
+
+			// new alloc should be placed in the same node
+			must.Eq(t, new.NodeID, old.NodeID)
+		}
+	})
+
+	t.Run("ephemeral alloc should migrate if node pool changes", func(t *testing.T) {
+		h := tests.NewHarness(t)
+
+		// Create some nodes
+		for range 5 {
+			node := mock.Node()
+			must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
+		}
+
+		testNodePool := "test"
 		node := mock.Node()
+		node.NodePool = testNodePool
 		must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
-	}
 
-	// Create a job
-	job := mock.Job()
-	job.TaskGroups[0].EphemeralDisk.Sticky = true
-	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
+		// Create test node pools with different scheduler algorithms.
+		testPool := mock.NodePool()
+		testPool.Name = "test"
 
-	// Create a mock evaluation to register the job
-	eval := &structs.Evaluation{
-		Namespace:   structs.DefaultNamespace,
-		ID:          uuid.Generate(),
-		Priority:    job.Priority,
-		TriggeredBy: structs.EvalTriggerJobRegister,
-		JobID:       job.ID,
-		Status:      structs.EvalStatusPending,
-	}
-	must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
-
-	// Process the evaluation
-	if err := h.Process(NewServiceScheduler, eval); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	// Ensure the plan allocated
-	plan := h.Plans[0]
-	planned := make(map[string]*structs.Allocation)
-	for _, allocList := range plan.NodeAllocation {
-		for _, alloc := range allocList {
-			planned[alloc.ID] = alloc
+		nodePools := []*structs.NodePool{
+			testPool,
 		}
-	}
-	if len(planned) != 10 {
-		t.Fatalf("bad: %#v", plan)
-	}
+		h.State.UpsertNodePools(structs.MsgTypeTestSetup, h.NextIndex(), nodePools)
 
-	// Update the job to force a rolling upgrade
-	updated := job.Copy()
-	updated.TaskGroups[0].Tasks[0].Resources.CPU += 10
-	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, updated))
+		// Create a job
+		job := createEphemeralJob(t, h, true, true)
 
-	// Create a mock evaluation to handle the update
-	eval = &structs.Evaluation{
-		Namespace:   structs.DefaultNamespace,
-		ID:          uuid.Generate(),
-		Priority:    job.Priority,
-		TriggeredBy: structs.EvalTriggerNodeUpdate,
-		JobID:       job.ID,
-		Status:      structs.EvalStatusPending,
-	}
-	must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
-	h1 := NewHarnessWithState(t, h.State)
-	if err := h1.Process(NewServiceScheduler, eval); err != nil {
-		t.Fatalf("err: %v", err)
-	}
+		// Ensure the plan allocated
+		plan := h.Plans[0]
+		planned := make(map[string]*structs.Allocation)
+		for _, allocList := range plan.NodeAllocation {
+			for _, alloc := range allocList {
+				planned[alloc.ID] = alloc
+			}
+		}
+		must.MapLen(t, 10, planned)
 
-	// Ensure we have created only one new allocation
-	// Ensure a single plan
-	if len(h1.Plans) != 1 {
-		t.Fatalf("bad: %#v", h1.Plans)
-	}
-	plan = h1.Plans[0]
-	var newPlanned []*structs.Allocation
-	for _, allocList := range plan.NodeAllocation {
-		newPlanned = append(newPlanned, allocList...)
-	}
-	if len(newPlanned) != 10 {
-		t.Fatalf("bad plan: %#v", plan)
-	}
-	// Ensure that the new allocations were placed on the same node as the older
-	// ones
-	for _, new := range newPlanned {
-		if new.PreviousAllocation == "" {
-			t.Fatalf("new alloc %q doesn't have a previous allocation", new.ID)
+		// Update the job to force a rolling upgrade
+		updated := job.Copy()
+		updated.NodePool = "test"
+		must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, updated))
+
+		// Create a mock evaluation to handle the update
+		eval := &structs.Evaluation{
+			Namespace:   structs.DefaultNamespace,
+			ID:          uuid.Generate(),
+			Priority:    job.Priority,
+			TriggeredBy: structs.EvalTriggerNodeUpdate,
+			JobID:       job.ID,
+			Status:      structs.EvalStatusPending,
+		}
+		must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
+		h1 := tests.NewHarnessWithState(t, h.State)
+		must.NoError(t, h1.Process(NewServiceScheduler, eval))
+
+		// Ensure we have created only one new allocation
+		// Ensure a single plan
+		must.SliceLen(t, 1, h1.Plans)
+
+		plan = h1.Plans[0]
+		var newPlanned []*structs.Allocation
+		for _, allocList := range plan.NodeAllocation {
+			newPlanned = append(newPlanned, allocList...)
+		}
+		must.SliceLen(t, 10, newPlanned)
+
+		// ensure new allocation has expected fields
+		for _, new := range newPlanned {
+			// new alloc should have a previous allocation
+			must.NotEq(t, new.PreviousAllocation, "")
+
+			// new allocs PreviousAllocation must be a valid previously placed alloc
+			_, ok := planned[new.PreviousAllocation]
+			must.True(t, ok)
+
+			// new alloc should be placed in the correct node pool
+			must.Eq(t, new.Job.NodePool, testNodePool)
+		}
+	})
+
+	t.Run("ephemeral alloc should migrate if datacenter changes", func(t *testing.T) {
+		h := tests.NewHarness(t)
+
+		// Create some nodes
+		for range 5 {
+			node := mock.Node()
+			must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
 		}
 
-		old, ok := planned[new.PreviousAllocation]
-		if !ok {
-			t.Fatalf("new alloc %q previous allocation doesn't match any prior placed alloc (%q)", new.ID, new.PreviousAllocation)
+		testDatacenter := "test"
+		node := mock.Node()
+		node.Datacenter = testDatacenter
+		must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
+
+		// Create a job
+		job := createEphemeralJob(t, h, true, true)
+
+		// Ensure the plan allocated
+		plan := h.Plans[0]
+		planned := make(map[string]*structs.Allocation)
+		for _, allocList := range plan.NodeAllocation {
+			for _, alloc := range allocList {
+				planned[alloc.ID] = alloc
+			}
 		}
-		if new.NodeID != old.NodeID {
-			t.Fatalf("new alloc and old alloc node doesn't match; got %q; want %q", new.NodeID, old.NodeID)
+		must.MapLen(t, 10, planned)
+
+		// Update the job to force a rolling upgrade
+		updated := job.Copy()
+		updated.Datacenters = []string{"test"}
+		must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, updated))
+
+		// Create a mock evaluation to handle the update
+		eval := &structs.Evaluation{
+			Namespace:   structs.DefaultNamespace,
+			ID:          uuid.Generate(),
+			Priority:    job.Priority,
+			TriggeredBy: structs.EvalTriggerNodeUpdate,
+			JobID:       job.ID,
+			Status:      structs.EvalStatusPending,
 		}
-	}
+		must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
+		h1 := tests.NewHarnessWithState(t, h.State)
+		must.NoError(t, h1.Process(NewServiceScheduler, eval))
+
+		// Ensure we have created only one new allocation
+		// Ensure a single plan
+		must.SliceLen(t, 1, h1.Plans)
+
+		plan = h1.Plans[0]
+		var newPlanned []*structs.Allocation
+		for _, allocList := range plan.NodeAllocation {
+			newPlanned = append(newPlanned, allocList...)
+		}
+		must.SliceLen(t, 10, newPlanned)
+
+		// ensure new allocation has expected fields
+		for _, new := range newPlanned {
+			// new alloc should have a previous allocation
+			must.NotEq(t, new.PreviousAllocation, "")
+
+			// new allocs PreviousAllocation must be a valid previously placed alloc
+			_, ok := planned[new.PreviousAllocation]
+			must.True(t, ok)
+
+			// new alloc should be placed in the correct node pool
+			must.Eq(t, new.NodeID, node.ID)
+		}
+	})
 }
 
 func TestServiceSched_JobRegister_StickyHostVolumes(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	nodes := []*structs.Node{
 		mock.Node(),
@@ -328,7 +480,7 @@ func TestServiceSched_JobRegister_StickyHostVolumes(t *testing.T) {
 func TestServiceSched_JobRegister_DiskConstraints(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a node
 	node := mock.Node()
@@ -404,7 +556,7 @@ func TestServiceSched_JobRegister_DiskConstraints(t *testing.T) {
 func TestServiceSched_JobRegister_DistinctHosts(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	for i := 0; i < 10; i++ {
@@ -488,7 +640,7 @@ func TestServiceSched_JobRegister_DistinctHosts(t *testing.T) {
 func TestServiceSched_JobRegister_DistinctProperty(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	for i := 0; i < 10; i++ {
@@ -587,7 +739,7 @@ func TestServiceSched_JobRegister_DistinctProperty(t *testing.T) {
 func TestServiceSched_JobRegister_DistinctProperty_TaskGroup(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	for i := 0; i < 2; i++ {
@@ -668,7 +820,7 @@ func TestServiceSched_JobRegister_DistinctProperty_TaskGroup(t *testing.T) {
 func TestServiceSched_JobRegister_DistinctProperty_TaskGroup_Incr(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a job that uses distinct property over the node-id
 	job := mock.Job()
@@ -757,7 +909,7 @@ func TestServiceSched_Spread(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		name := fmt.Sprintf("%d%% in dc1", start)
 		t.Run(name, func(t *testing.T) {
-			h := NewHarness(t)
+			h := tests.NewHarness(t)
 			remaining := uint8(100 - start)
 			// Create a job that uses spread over data center
 			job := mock.Job()
@@ -852,7 +1004,7 @@ func TestServiceSched_Spread(t *testing.T) {
 func TestServiceSched_JobRegister_Datacenter_Downgrade(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create 5 nodes in each datacenter.
 	// Use two loops so nodes are separated by datacenter.
@@ -962,7 +1114,7 @@ func TestServiceSched_JobRegister_Datacenter_Downgrade(t *testing.T) {
 func TestServiceSched_JobRegister_NodePool_Downgrade(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Set global scheduler configuration.
 	h.State.SchedulerSetConfig(h.NextIndex(), &structs.SchedulerConfiguration{
@@ -1093,7 +1245,7 @@ func TestServiceSched_JobRegister_NodePool_Downgrade(t *testing.T) {
 func TestServiceSched_EvenSpread(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 	// Create a job that uses even spread over data center
 	job := mock.Job()
 	job.Datacenters = []string{"dc1", "dc2"}
@@ -1166,7 +1318,7 @@ func TestServiceSched_EvenSpread(t *testing.T) {
 func TestServiceSched_JobRegister_Annotate(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	for i := 0; i < 10; i++ {
@@ -1246,7 +1398,7 @@ func TestServiceSched_JobRegister_Annotate(t *testing.T) {
 func TestServiceSched_JobRegister_CountZero(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	for i := 0; i < 10; i++ {
@@ -1297,7 +1449,7 @@ func TestServiceSched_JobRegister_CountZero(t *testing.T) {
 func TestServiceSched_JobRegister_AllocFail(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create NO nodes
 	// Create a job
@@ -1375,7 +1527,7 @@ func TestServiceSched_JobRegister_AllocFail(t *testing.T) {
 func TestServiceSched_JobRegister_CreateBlockedEval(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a full node
 	node := mock.Node()
@@ -1477,7 +1629,7 @@ func TestServiceSched_JobRegister_CreateBlockedEval(t *testing.T) {
 func TestServiceSched_JobRegister_FeasibleAndInfeasibleTG(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create one node
 	node := mock.Node()
@@ -1625,7 +1777,7 @@ func TestServiceSched_JobRegister_SchedulerAlgorithm(t *testing.T) {
 	for _, jobType := range jobTypes {
 		for _, tc := range testCases {
 			t.Run(fmt.Sprintf("%s/%s", jobType, tc.name), func(t *testing.T) {
-				h := NewHarness(t)
+				h := tests.NewHarness(t)
 
 				// Create node pools.
 				nodePools := []*structs.NodePool{
@@ -1677,14 +1829,14 @@ func TestServiceSched_JobRegister_SchedulerAlgorithm(t *testing.T) {
 				}
 				must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
 
-				var scheduler Factory
+				var sched sstructs.Factory
 				switch jobType {
 				case "batch":
-					scheduler = NewBatchScheduler
+					sched = NewBatchScheduler
 				case "service":
-					scheduler = NewServiceScheduler
+					sched = NewServiceScheduler
 				}
-				err := h.Process(scheduler, eval)
+				err := h.Process(sched, eval)
 				must.NoError(t, err)
 
 				must.Len(t, 1, h.Plans)
@@ -1702,7 +1854,7 @@ func TestServiceSched_JobRegister_SchedulerAlgorithm(t *testing.T) {
 					Status:      structs.EvalStatusPending,
 				}
 				must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup, h.NextIndex(), []*structs.Evaluation{eval}))
-				err = h.Process(scheduler, eval)
+				err = h.Process(sched, eval)
 				must.NoError(t, err)
 
 				must.Len(t, 2, h.Plans)
@@ -1735,7 +1887,7 @@ func TestServiceSched_JobRegister_SchedulerAlgorithm(t *testing.T) {
 func TestServiceSched_EvaluateMaxPlanEval(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a job and set the task group count to zero.
 	job := mock.Job()
@@ -1772,10 +1924,10 @@ func TestServiceSched_EvaluateMaxPlanEval(t *testing.T) {
 func TestServiceSched_Plan_Partial_Progress(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a node of limited resources
-	legacyCpuResources4000, processorResources4000 := cpuResources(4000)
+	legacyCpuResources4000, processorResources4000 := tests.CpuResources(4000)
 	node := mock.Node()
 	node.NodeResources.Processors = processorResources4000
 	node.NodeResources.Cpu = legacyCpuResources4000
@@ -1835,7 +1987,7 @@ func TestServiceSched_Plan_Partial_Progress(t *testing.T) {
 func TestServiceSched_EvaluateBlockedEval(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a job
 	job := mock.Job()
@@ -1882,7 +2034,7 @@ func TestServiceSched_EvaluateBlockedEval(t *testing.T) {
 func TestServiceSched_EvaluateBlockedEval_Finished(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	for i := 0; i < 10; i++ {
@@ -1969,7 +2121,7 @@ func TestServiceSched_EvaluateBlockedEval_Finished(t *testing.T) {
 func TestServiceSched_JobModify(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -2074,7 +2226,7 @@ func TestServiceSched_JobModify(t *testing.T) {
 func TestServiceSched_JobModify_ExistingDuplicateAllocIndex(t *testing.T) {
 	ci.Parallel(t)
 
-	testHarness := NewHarness(t)
+	testHarness := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -2151,7 +2303,7 @@ func TestServiceSched_JobModify_ExistingDuplicateAllocIndex(t *testing.T) {
 func TestServiceSched_JobModify_ProposedDuplicateAllocIndex(t *testing.T) {
 	ci.Parallel(t)
 
-	testHarness := NewHarness(t)
+	testHarness := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -2283,7 +2435,7 @@ func TestServiceSched_JobModify_ProposedDuplicateAllocIndex(t *testing.T) {
 func TestServiceSched_JobModify_ExistingDuplicateAllocIndexNonDestructive(t *testing.T) {
 	ci.Parallel(t)
 
-	testHarness := NewHarness(t)
+	testHarness := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -2373,7 +2525,7 @@ func TestServiceSched_JobModify_ExistingDuplicateAllocIndexNonDestructive(t *tes
 func TestServiceSched_JobModify_Datacenters(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes in 3 DCs
 	var nodes []*structs.Node
@@ -2453,7 +2605,7 @@ func TestServiceSched_JobModify_Datacenters(t *testing.T) {
 func TestServiceSched_JobModify_IncrCount_NodeLimit(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create one node
 	node := mock.Node()
@@ -2547,34 +2699,36 @@ func TestServiceSched_JobModify_IncrCount_NodeLimit(t *testing.T) {
 func TestServiceSched_JobModify_CountZero(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
-	// Create some nodes
 	var nodes []*structs.Node
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		node := mock.Node()
 		nodes = append(nodes, node)
 		must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
 	}
 
-	// Generate a fake job with allocations
 	job := mock.Job()
 	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
 
+	// allocations w/ DesiredStatus=run that we expect to stop
 	var allocs []*structs.Allocation
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		alloc := mock.Alloc()
 		alloc.Job = job
 		alloc.JobID = job.ID
 		alloc.NodeID = nodes[i].ID
 		alloc.Name = structs.AllocName(alloc.JobID, alloc.TaskGroup, uint(i))
+		if i%2 == 0 {
+			alloc.ClientStatus = structs.AllocClientStatusFailed
+		}
 		allocs = append(allocs, alloc)
 	}
 	must.NoError(t, h.State.UpsertAllocs(structs.MsgTypeTestSetup, h.NextIndex(), allocs))
 
-	// Add a few terminal status allocations, these should be ignored
+	// Add a few server-terminal status allocations, these should be ignored
 	var terminal []*structs.Allocation
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		alloc := mock.Alloc()
 		alloc.Job = job
 		alloc.JobID = job.ID
@@ -2604,44 +2758,31 @@ func TestServiceSched_JobModify_CountZero(t *testing.T) {
 
 	// Process the evaluation
 	err := h.Process(NewServiceScheduler, eval)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
+	must.NoError(t, err)
 
-	// Ensure a single plan
-	if len(h.Plans) != 1 {
-		t.Fatalf("bad: %#v", h.Plans)
-	}
+	must.Len(t, 1, h.Plans)
 	plan := h.Plans[0]
 
-	// Ensure the plan evicted all allocs
+	// Ensure the plan evicted all non-server-terminal allocs
 	var update []*structs.Allocation
 	for _, updateList := range plan.NodeUpdate {
 		update = append(update, updateList...)
 	}
-	if len(update) != len(allocs) {
-		t.Fatalf("bad: %#v", plan)
-	}
+	must.Eq(t, len(allocs), len(update), must.Sprintf("expected all stopped: %#v", plan))
 
-	// Ensure the plan didn't allocated
+	// Ensure the plan didn't place any allocations
 	var planned []*structs.Allocation
 	for _, allocList := range plan.NodeAllocation {
 		planned = append(planned, allocList...)
 	}
-	if len(planned) != 0 {
-		t.Fatalf("bad: %#v", plan)
-	}
+	must.Len(t, 0, planned, must.Sprintf("expected no placements: %#v", plan))
 
-	// Lookup the allocations by JobID
 	ws := memdb.NewWatchSet()
 	out, err := h.State.AllocsByJob(ws, job.Namespace, job.ID, false)
 	must.NoError(t, err)
 
-	// Ensure all allocations placed
 	out, _ = structs.FilterTerminalAllocs(out)
-	if len(out) != 0 {
-		t.Fatalf("bad: %#v", out)
-	}
+	must.Len(t, 0, out, must.Sprintf("expected no non-terminal allocs: %#v", out))
 
 	h.AssertEvalStatus(t, structs.EvalStatusComplete)
 }
@@ -2649,7 +2790,7 @@ func TestServiceSched_JobModify_CountZero(t *testing.T) {
 func TestServiceSched_JobModify_Rolling(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -2757,7 +2898,7 @@ func TestServiceSched_JobModify_Rolling(t *testing.T) {
 func TestServiceSched_JobModify_Rolling_FullNode(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a node and clear the reserved resources
 	node := mock.Node()
@@ -2879,7 +3020,7 @@ func TestServiceSched_JobModify_Rolling_FullNode(t *testing.T) {
 func TestServiceSched_JobModify_Canaries(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -3003,7 +3144,7 @@ func TestServiceSched_JobModify_Canaries(t *testing.T) {
 func TestServiceSched_JobModify_InPlace(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -3153,7 +3294,7 @@ func TestServiceSched_JobModify_InPlace(t *testing.T) {
 func TestServiceSched_JobModify_InPlace08(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create node
 	node := mock.Node()
@@ -3232,7 +3373,7 @@ func TestServiceSched_JobModify_InPlace08(t *testing.T) {
 func TestServiceSched_JobModify_DistinctProperty(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -3346,7 +3487,7 @@ func TestServiceSched_JobModify_DistinctProperty(t *testing.T) {
 func TestServiceSched_JobModify_NodeReschedulePenalty(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -3474,7 +3615,7 @@ func TestServiceSched_JobModify_NodeReschedulePenalty(t *testing.T) {
 func TestServiceSched_JobDeregister_Purged(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Generate a fake job with allocations
 	job := mock.Job()
@@ -3543,7 +3684,7 @@ func TestServiceSched_JobDeregister_Purged(t *testing.T) {
 func TestServiceSched_JobDeregister_Stopped(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Generate a fake job with allocations
 	job := mock.Job()
@@ -3670,7 +3811,7 @@ func TestServiceSched_NodeDown(t *testing.T) {
 
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewHarness(t)
+			h := tests.NewHarness(t)
 
 			// Register a node
 			node := mock.Node()
@@ -3788,7 +3929,7 @@ func TestServiceSched_StopOnClientAfter(t *testing.T) {
 
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewHarness(t)
+			h := tests.NewHarness(t)
 
 			// Node, which is down
 			node := mock.Node()
@@ -3905,7 +4046,7 @@ func TestServiceSched_StopOnClientAfter(t *testing.T) {
 func TestServiceSched_NodeUpdate(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a node
 	node := mock.Node()
@@ -3961,7 +4102,7 @@ func TestServiceSched_NodeUpdate(t *testing.T) {
 func TestServiceSched_NodeDrain(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a draining node
 	node := mock.DrainNode()
@@ -4044,7 +4185,7 @@ func TestServiceSched_NodeDrain(t *testing.T) {
 func TestServiceSched_NodeDrain_Down(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a draining node
 	node := mock.DrainNode()
@@ -4157,24 +4298,23 @@ func TestServiceSched_NodeDrain_Down(t *testing.T) {
 
 func TestServiceSched_NodeDrain_Canaries(t *testing.T) {
 	ci.Parallel(t)
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
-	n1 := mock.Node()
-	n2 := mock.DrainNode()
-	must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), n1))
-	must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), n2))
+	node := mock.Node()
+	drainedNode := mock.DrainNode()
+	must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
+	must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), drainedNode))
 
 	job := mock.Job()
 	job.TaskGroups[0].Count = 2
+	job.TaskGroups[0].Update = &structs.UpdateStrategy{Canary: 2}
 	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
 
 	// previous version allocations
 	var allocs []*structs.Allocation
-	for i := 0; i < 2; i++ {
-		alloc := mock.Alloc()
-		alloc.Job = job
-		alloc.JobID = job.ID
-		alloc.NodeID = n1.ID
+	for i := range 2 {
+		alloc := mock.MinAllocForJob(job)
+		alloc.NodeID = node.ID
 		alloc.Name = fmt.Sprintf("my-job.web[%d]", i)
 		allocs = append(allocs, alloc)
 		t.Logf("prev alloc=%q", alloc.ID)
@@ -4185,14 +4325,11 @@ func TestServiceSched_NodeDrain_Canaries(t *testing.T) {
 	job.Meta["owner"] = "changed"
 	job.Version++
 	var canaries []string
-	for i := 0; i < 2; i++ {
-		alloc := mock.Alloc()
-		alloc.Job = job
-		alloc.JobID = job.ID
-		alloc.NodeID = n2.ID
+
+	for i := range 2 {
+		alloc := mock.MinAllocForJob(job)
+		alloc.NodeID = drainedNode.ID
 		alloc.Name = fmt.Sprintf("my-job.web[%d]", i)
-		alloc.DesiredStatus = structs.AllocDesiredStatusStop
-		alloc.ClientStatus = structs.AllocClientStatusComplete
 		alloc.DeploymentStatus = &structs.AllocDeploymentStatus{
 			Healthy: pointer.Of(false),
 			Canary:  true,
@@ -4202,24 +4339,30 @@ func TestServiceSched_NodeDrain_Canaries(t *testing.T) {
 		}
 		allocs = append(allocs, alloc)
 		canaries = append(canaries, alloc.ID)
-		t.Logf("stopped canary alloc=%q", alloc.ID)
+		t.Logf("canary on draining node=%q", alloc.ID)
 	}
 
-	// first canary placed from previous drainer eval
-	alloc := mock.Alloc()
-	alloc.Job = job
-	alloc.JobID = job.ID
-	alloc.NodeID = n2.ID
-	alloc.Name = fmt.Sprintf("my-job.web[0]")
-	alloc.ClientStatus = structs.AllocClientStatusRunning
-	alloc.PreviousAllocation = canaries[0]
-	alloc.DeploymentStatus = &structs.AllocDeploymentStatus{
+	deadCanary := allocs[2]
+	deadCanary.DesiredStatus = structs.AllocDesiredStatusStop
+	deadCanary.ClientStatus = structs.AllocClientStatusComplete
+
+	canaryToDrain := allocs[3]
+	canaryToDrain.DesiredStatus = structs.AllocDesiredStatusRun
+	canaryToDrain.ClientStatus = structs.AllocClientStatusRunning
+
+	// replacement canary placed from previous eval
+	replacement := mock.MinAllocForJob(job)
+	replacement.NodeID = node.ID
+	replacement.Name = fmt.Sprintf("my-job.web[0]")
+	replacement.ClientStatus = structs.AllocClientStatusRunning
+	replacement.PreviousAllocation = canaries[0]
+	replacement.DeploymentStatus = &structs.AllocDeploymentStatus{
 		Healthy: pointer.Of(false),
 		Canary:  true,
 	}
-	allocs = append(allocs, alloc)
-	canaries = append(canaries, alloc.ID)
-	t.Logf("new canary alloc=%q", alloc.ID)
+	allocs = append(allocs, replacement)
+	canaries = append(canaries, replacement.ID)
+	t.Logf("replacement canary alloc=%q", replacement.ID)
 
 	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
 	must.NoError(t, h.State.UpsertAllocs(structs.MsgTypeTestSetup, h.NextIndex(), allocs))
@@ -4243,13 +4386,14 @@ func TestServiceSched_NodeDrain_Canaries(t *testing.T) {
 	must.NoError(t, h.State.UpsertDeployment(h.NextIndex(), deployment))
 
 	eval := &structs.Evaluation{
-		Namespace:   structs.DefaultNamespace,
-		ID:          uuid.Generate(),
-		Priority:    50,
-		TriggeredBy: structs.EvalTriggerNodeUpdate,
-		JobID:       job.ID,
-		NodeID:      n2.ID,
-		Status:      structs.EvalStatusPending,
+		Namespace:    structs.DefaultNamespace,
+		ID:           uuid.Generate(),
+		Priority:     50,
+		TriggeredBy:  structs.EvalTriggerNodeUpdate,
+		JobID:        job.ID,
+		NodeID:       drainedNode.ID,
+		Status:       structs.EvalStatusPending,
+		AnnotatePlan: true,
 	}
 	must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup,
 		h.NextIndex(), []*structs.Evaluation{eval}))
@@ -4257,19 +4401,20 @@ func TestServiceSched_NodeDrain_Canaries(t *testing.T) {
 	must.NoError(t, h.Process(NewServiceScheduler, eval))
 	must.Len(t, 1, h.Plans)
 	h.AssertEvalStatus(t, structs.EvalStatusComplete)
-	must.MapLen(t, 0, h.Plans[0].NodeAllocation)
-	must.MapLen(t, 1, h.Plans[0].NodeUpdate)
-	must.Len(t, 2, h.Plans[0].NodeUpdate[n2.ID])
 
-	for _, alloc := range h.Plans[0].NodeUpdate[n2.ID] {
-		must.SliceContains(t, canaries, alloc.ID)
-	}
+	must.MapLen(t, 1, h.Plans[0].NodeAllocation)
+	must.Len(t, 1, h.Plans[0].NodeAllocation[node.ID])
+	must.Eq(t, 1, h.Plans[0].Annotations.DesiredTGUpdates["web"].Canary)
+
+	must.MapLen(t, 1, h.Plans[0].NodeUpdate)
+	must.Len(t, 1, h.Plans[0].NodeUpdate[drainedNode.ID])
+	must.Eq(t, canaryToDrain.ID, h.Plans[0].NodeUpdate[drainedNode.ID][0].ID)
 }
 
 func TestServiceSched_NodeDrain_Queued_Allocations(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a draining node
 	node := mock.Node()
@@ -4322,8 +4467,8 @@ func TestServiceSched_NodeDrain_Queued_Allocations(t *testing.T) {
 func TestServiceSched_RetryLimit(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
-	h.Planner = &RejectPlan{h}
+	h := tests.NewHarness(t)
+	h.Planner = &tests.RejectPlan{h}
 
 	// Create some nodes
 	for i := 0; i < 10; i++ {
@@ -4374,7 +4519,7 @@ func TestServiceSched_RetryLimit(t *testing.T) {
 func TestServiceSched_Reschedule_OnceNow(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -4487,7 +4632,7 @@ func TestServiceSched_Reschedule_OnceNow(t *testing.T) {
 func TestServiceSched_Reschedule_Later(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 	// Create some nodes
 	var nodes []*structs.Node
 	for i := 0; i < 10; i++ {
@@ -4576,7 +4721,7 @@ func TestServiceSched_Reschedule_Later(t *testing.T) {
 func TestServiceSched_Reschedule_MultipleNow(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -4717,7 +4862,7 @@ func TestServiceSched_Reschedule_MultipleNow(t *testing.T) {
 func TestServiceSched_BlockedReschedule(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 	node := mock.Node()
 	must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
 
@@ -4913,7 +5058,7 @@ func TestServiceSched_BlockedReschedule(t *testing.T) {
 func TestServiceSched_BlockedDisconnectReplace(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 	node := mock.Node()
 	node.Status = structs.NodeStatusDisconnected
 	must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
@@ -5007,7 +5152,7 @@ func TestServiceSched_BlockedDisconnectReplace(t *testing.T) {
 func TestServiceSched_Reschedule_PruneEvents(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -5141,7 +5286,7 @@ func TestDeployment_FailedAllocs_Reschedule(t *testing.T) {
 
 	for _, failedDeployment := range []bool{false, true} {
 		t.Run(fmt.Sprintf("Failed Deployment: %v", failedDeployment), func(t *testing.T) {
-			h := NewHarness(t)
+			h := tests.NewHarness(t)
 			// Create some nodes
 			var nodes []*structs.Node
 			for i := 0; i < 10; i++ {
@@ -5226,7 +5371,7 @@ func TestDeployment_FailedAllocs_Reschedule(t *testing.T) {
 func TestBatchSched_Run_CompleteAlloc(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a node
 	node := mock.Node()
@@ -5285,7 +5430,7 @@ func TestBatchSched_Run_CompleteAlloc(t *testing.T) {
 func TestBatchSched_Run_FailedAlloc(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a node
 	node := mock.Node()
@@ -5357,7 +5502,7 @@ func TestBatchSched_Run_FailedAlloc(t *testing.T) {
 func TestBatchSched_Run_LostAlloc(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a node
 	node := mock.Node()
@@ -5446,7 +5591,7 @@ func TestBatchSched_Run_LostAlloc(t *testing.T) {
 func TestBatchSched_Run_FailedAllocQueuedAllocations(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	node := mock.DrainNode()
 	must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node))
@@ -5500,7 +5645,7 @@ func TestBatchSched_Run_FailedAllocQueuedAllocations(t *testing.T) {
 func TestBatchSched_ReRun_SuccessfullyFinishedAlloc(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create two nodes, one that is drained and has a successfully finished
 	// alloc and a fresh undrained one
@@ -5575,7 +5720,7 @@ func TestBatchSched_ReRun_SuccessfullyFinishedAlloc(t *testing.T) {
 func TestBatchSched_JobModify_InPlace_Terminal(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -5629,7 +5774,7 @@ func TestBatchSched_JobModify_InPlace_Terminal(t *testing.T) {
 func TestBatchSched_JobModify_Destructive_Terminal(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	var nodes []*structs.Node
@@ -5715,7 +5860,7 @@ func TestBatchSched_JobModify_Destructive_Terminal(t *testing.T) {
 func TestBatchSched_NodeDrain_Running_OldJob(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create two nodes, one that is drained and has a successfully finished
 	// alloc and a fresh undrained one
@@ -5788,7 +5933,7 @@ func TestBatchSched_NodeDrain_Running_OldJob(t *testing.T) {
 func TestBatchSched_NodeDrain_Complete(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create two nodes, one that is drained and has a successfully finished
 	// alloc and a fresh undrained one
@@ -5854,7 +5999,7 @@ func TestBatchSched_NodeDrain_Complete(t *testing.T) {
 func TestBatchSched_ScaleDown_SameName(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a node
 	node := mock.Node()
@@ -6008,9 +6153,9 @@ func TestGenericSched_AllocFit_Lifecycle(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.Name, func(t *testing.T) {
-			h := NewHarness(t)
+			h := tests.NewHarness(t)
 
-			legacyCpuResources, processorResources := cpuResources(testCase.NodeCpu)
+			legacyCpuResources, processorResources := tests.CpuResources(testCase.NodeCpu)
 			node := mock.Node()
 			node.NodeResources.Processors = processorResources
 			node.NodeResources.Cpu = legacyCpuResources
@@ -6059,7 +6204,7 @@ func TestGenericSched_AllocFit_Lifecycle(t *testing.T) {
 func TestGenericSched_AllocFit_MemoryOversubscription(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 	node := mock.Node()
 	node.NodeResources.Cpu.CpuShares = 10000
 	node.NodeResources.Memory.MemoryMB = 1224
@@ -6106,7 +6251,7 @@ func TestGenericSched_AllocFit_MemoryOversubscription(t *testing.T) {
 func TestGenericSched_ChainedAlloc(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes
 	for i := 0; i < 10; i++ {
@@ -6142,7 +6287,7 @@ func TestGenericSched_ChainedAlloc(t *testing.T) {
 	sort.Strings(allocIDs)
 
 	// Create a new harness to invoke the scheduler again
-	h1 := NewHarnessWithState(t, h.State)
+	h1 := tests.NewHarnessWithState(t, h.State)
 	job1 := mock.Job()
 	job1.ID = job.ID
 	job1.TaskGroups[0].Tasks[0].Env["foo"] = "bar"
@@ -6197,7 +6342,7 @@ func TestGenericSched_ChainedAlloc(t *testing.T) {
 func TestServiceSched_NodeDrain_Sticky(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Register a draining node
 	node := mock.DrainNode()
@@ -6252,7 +6397,7 @@ func TestServiceSched_NodeDrain_Sticky(t *testing.T) {
 func TestServiceSched_CancelDeployment_Stopped(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Generate a fake job
 	job := mock.Job()
@@ -6328,7 +6473,7 @@ func TestServiceSched_CancelDeployment_Stopped(t *testing.T) {
 func TestServiceSched_CancelDeployment_NewerJob(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Generate a fake job
 	job := mock.Job()
@@ -6626,7 +6771,7 @@ func Test_updateRescheduleTracker(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			prevAlloc.RescheduleTracker = &structs.RescheduleTracker{Events: tc.prevAllocEvents}
 			prevAlloc.Job.LookupTaskGroup(prevAlloc.TaskGroup).ReschedulePolicy = tc.reschedPolicy
-			updateRescheduleTracker(alloc, prevAlloc, tc.reschedTime)
+			UpdateRescheduleTracker(alloc, prevAlloc, tc.reschedTime)
 			must.Eq(t, tc.expectedRescheduleEvents, alloc.RescheduleTracker.Events)
 		})
 	}
@@ -6636,14 +6781,12 @@ func Test_updateRescheduleTracker(t *testing.T) {
 func TestServiceSched_Preemption(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
-	legacyCpuResources, processorResources := cpuResources(1000)
+	legacyCpuResources, processorResources := tests.CpuResources(1000)
 
 	// Create a node
 	node := mock.Node()
-	node.Resources = nil
-	node.ReservedResources = nil
 	node.NodeResources = &structs.NodeResources{
 		Processors: processorResources,
 		Cpu:        legacyCpuResources,
@@ -6799,7 +6942,7 @@ func TestServiceSched_Preemption(t *testing.T) {
 func TestServiceSched_Migrate_NonCanary(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	node1 := mock.Node()
 	must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node1))
@@ -6871,7 +7014,7 @@ func TestServiceSched_Migrate_NonCanary(t *testing.T) {
 func TestServiceSched_Migrate_CanaryStatus(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	node1 := mock.Node()
 	must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node1))
@@ -7040,7 +7183,7 @@ func TestServiceSched_Migrate_CanaryStatus(t *testing.T) {
 func TestDowngradedJobForPlacement_PicksTheLatest(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// This test tests downgradedJobForPlacement directly to ease testing many different scenarios
 	// without invoking the full machinary of scheduling and updating deployment state tracking.
@@ -7141,9 +7284,8 @@ func TestDowngradedJobForPlacement_PicksTheLatest(t *testing.T) {
 
 			sched.job = nj
 			sched.deployment = deployment
-			placement := &allocPlaceResult{
-				taskGroup: nj.TaskGroups[0],
-			}
+			placement := &reconciler.AllocPlaceResult{}
+			placement.SetTaskGroup(nj.TaskGroups[0])
 
 			// Here, assert the downgraded job version
 			foundDeploymentID, foundJob, err := sched.downgradedJobForPlacement(placement)
@@ -7159,7 +7301,7 @@ func TestDowngradedJobForPlacement_PicksTheLatest(t *testing.T) {
 func TestServiceSched_RunningWithNextAllocation(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	node1 := mock.Node()
 	must.NoError(t, h.State.UpsertNode(structs.MsgTypeTestSetup, h.NextIndex(), node1))
@@ -7233,7 +7375,7 @@ func TestServiceSched_RunningWithNextAllocation(t *testing.T) {
 func TestServiceSched_CSIVolumesPerAlloc(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create some nodes, each running the CSI plugin
 	for i := 0; i < 5; i++ {
@@ -7400,7 +7542,7 @@ func TestServiceSched_CSIVolumesPerAlloc(t *testing.T) {
 
 func TestServiceSched_CSITopology(t *testing.T) {
 	ci.Parallel(t)
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	zones := []string{"zone-0", "zone-1", "zone-2", "zone-3"}
 
@@ -7507,7 +7649,7 @@ func TestServiceSched_Client_Disconnect_Creates_Updates_and_Evals(t *testing.T) 
 	for _, version := range jobVersions {
 		t.Run(version.name, func(t *testing.T) {
 
-			h := NewHarness(t)
+			h := tests.NewHarness(t)
 			count := 1
 			maxClientDisconnect := 10 * time.Minute
 
@@ -7585,7 +7727,7 @@ func TestServiceSched_Client_Disconnect_Creates_Updates_and_Evals(t *testing.T) 
 func TestServiceSched_ReservedCores_InPlace(t *testing.T) {
 	ci.Parallel(t)
 
-	h := NewHarness(t)
+	h := tests.NewHarness(t)
 
 	// Create a node
 	node := mock.Node()
@@ -7678,7 +7820,7 @@ func TestServiceSched_ReservedCores_InPlace(t *testing.T) {
 	h.AssertEvalStatus(t, structs.EvalStatusComplete)
 }
 
-func initNodeAndAllocs(t *testing.T, h *Harness, job *structs.Job,
+func initNodeAndAllocs(t *testing.T, h *tests.Harness, job *structs.Job,
 	nodeStatus, clientStatus string) (*structs.Node, *structs.Job, []*structs.Allocation) {
 	// Node, which is ready
 	node := mock.Node()

@@ -12,6 +12,68 @@ upgrade. However, specific versions of Nomad may have more details provided for
 their upgrades as a result of new features or changed behavior. This page is
 used to document those details separately from the standard upgrade flow.
 
+## Nomad 1.11.0
+
+#### Sysbatch jobs will no longer accept `reschedule` blocks
+
+In Nomad 1.11.0, submitting a sysbatch job with a `reschedule` block returns
+an error instead of being silently ignored, as it was in previous versions. The
+same behavior applies to system jobs.
+
+#### Eval broker metrics for dispatch and periodic jobs
+
+The leader records metrics for the eval broker. In Nomad 1.11.0 the `job` label
+on the `nomad.nomad.broker.wait_time`, `nomad.nomad.broker.process_time`,
+`nomad.nomad.broker.response_time`, and `nomad.nomad.broker.eval_waiting`
+metrics refers to the parent job ID for dispatch and periodic jobs. The
+`nomad.nomad.broker.eval_waiting` no longer has an `eval_id` label. For clusters
+running high volume dispatch workloads, this change significantly reduces
+metrics cardinality and memory usage on the leader.
+
+#### ACL policies no longer silently ignore duplicate or invalid keys
+
+Nomad 1.11.0 introduces stricter validation for ACL policies. Policy writes that
+include duplicate or invalid keys will be rejected with an error instead of
+being silently ignored. Any existing policies with duplicate or invalid keys
+will continue to work, but the source policy document will need to be updated
+to be valid before it can be written to Nomad.
+
+#### Maximum number of allocations per job is limited by default
+
+Nomad 1.11.0 limits the maximum number of allocations for a job to the value of
+the new [`job_max_count`](/nomad/docs/configuration/server#job_max_count) server
+configuration option, which defaults to 50000. The number of allocations is
+determined from the sum of the job's task group `count` fields. This limit is
+enforced at the time the job is submitted or scaled, and updating the value will
+not impact existing jobs.
+
+#### Deprecated resource fields on Node API
+
+The `Resources` and `Reserved` fields on the Go API's `Node` struct, as well as
+the equivalent fileds on the [Read Node](/nomad/api-docs/nodes#read-node) API,
+are deprecated. These fields are never populated. Use the `NodeResources` and
+`ReservedResources` fields instead.
+
+#### Enterprise product usage reporting <EnterpriseAlert inline />
+
+Nomad Enterprise 1.11.0 adds detailed product usage information to
+[automated license utilization reporting](/nomad/docs/enterprise/license/utilization-reporting).
+
+## Nomad 1.10.6
+
+#### ACL policies no longer silently ignore duplicate or invalid keys
+
+Nomad 1.10.6 introduces stricter validation for ACL policies. Policy writes that
+include duplicate or invalid keys will be rejected with an error instead of
+being silently ignored. Any existing policies with duplicate or invalid keys
+will continue to work, but the source policy document will need to be updated
+to be valid before it can be written to Nomad.
+
+#### Enterprise product usage reporting <EnterpriseAlert inline />
+
+Nomad Enterprise 1.10.6 adds detailed product usage information to
+[automated license utilization reporting](/nomad/docs/enterprise/license/utilization-reporting).
+
 ## Nomad 1.10.2
 
 #### Clients respect `telemetry.publish_allocation_metrics`
@@ -169,6 +231,21 @@ labels = [
   }
 ]
 ```
+
+## Nomad 1.8.18
+
+#### ACL policies no longer silently ignore duplicate or invalid keys
+
+Nomad 1.8.18 introduces stricter validation for ACL policies. Policy writes that
+include duplicate or invalid keys will be rejected with an error instead of
+being silently ignored. Any existing policies with duplicate or invalid keys
+will continue to work, but the source policy document will need to be updated
+to be valid before it can be written to Nomad.
+
+#### Enterprise product usage reporting <EnterpriseAlert inline />
+
+Nomad Enterprise 1.8.18 adds detailed product usage information to
+[automated license utilization reporting](/nomad/docs/enterprise/license/utilization-reporting).
 
 ## Nomad 1.8.4
 

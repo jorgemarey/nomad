@@ -159,7 +159,15 @@ var basicConfig = &Config{
 		LicensePath:        "/tmp/nomad.hclic",
 		JobDefaultPriority: pointer.Of(100),
 		JobMaxPriority:     pointer.Of(200),
+		JobMaxCount:        pointer.Of(1000),
 		StartTimeout:       "1m",
+		ClientIntroduction: &ClientIntroduction{
+			Enforcement:           "warn",
+			DefaultIdentityTTLHCL: "5m",
+			DefaultIdentityTTL:    5 * time.Minute,
+			MaxIdentityTTLHCL:     "30m",
+			MaxIdentityTTL:        30 * time.Minute,
+		},
 	},
 	ACL: &ACLConfig{
 		Enabled:                  true,
@@ -620,6 +628,9 @@ func (c *Config) addDefaults() {
 	if c.Server.PlanRejectionTracker == nil {
 		c.Server.PlanRejectionTracker = &PlanRejectionTracker{}
 	}
+	if c.Server.ClientIntroduction == nil {
+		c.Server.ClientIntroduction = &ClientIntroduction{}
+	}
 	if c.Reporting == nil {
 		c.Reporting = &config.ReportingConfig{
 			License: &config.LicenseReportingConfig{
@@ -712,6 +723,7 @@ var sample0 = &Config{
 			NodeWindow:    31 * time.Minute,
 			NodeWindowHCL: "31m",
 		},
+		ClientIntroduction: &ClientIntroduction{},
 	},
 	ACL: &ACLConfig{
 		Enabled: true,
@@ -821,6 +833,7 @@ var sample1 = &Config{
 			NodeWindow:    31 * time.Minute,
 			NodeWindowHCL: "31m",
 		},
+		ClientIntroduction: &ClientIntroduction{},
 	},
 	ACL: &ACLConfig{
 		Enabled: true,

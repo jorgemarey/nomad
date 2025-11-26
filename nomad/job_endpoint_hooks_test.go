@@ -16,6 +16,34 @@ import (
 	"github.com/shoenig/test/must"
 )
 
+func Test_jobValidate_Validate(t *testing.T) {
+	ci.Parallel(t)
+
+	t.Run("error if task group count exceeds job_max_count", func(t *testing.T) {
+		impl := jobValidate{srv: &Server{config: &Config{JobMaxCount: 10, JobMaxPriority: 100}}}
+		job := mock.Job()
+		job.TaskGroups[0].Count = 11
+		_, err := impl.Validate(job)
+		must.ErrorContains(t, err, "total count was greater than configured job_max_count: 11 > 10")
+	})
+
+	t.Run("no error if task group count equals job_max_count", func(t *testing.T) {
+		impl := jobValidate{srv: &Server{config: &Config{JobMaxCount: 10, JobMaxPriority: 100}}}
+		job := mock.Job()
+		job.TaskGroups[0].Count = 10
+		_, err := impl.Validate(job)
+		must.NoError(t, err)
+	})
+
+	t.Run("no error if job_max_count is zero (i.e. unlimited)", func(t *testing.T) {
+		impl := jobValidate{srv: &Server{config: &Config{JobMaxCount: 0, JobMaxPriority: 100}}}
+		job := mock.Job()
+		job.TaskGroups[0].Count = structs.JobDefaultMaxCount + 1
+		_, err := impl.Validate(job)
+		must.NoError(t, err)
+	})
+}
+
 func Test_jobValidate_Validate_consul_service(t *testing.T) {
 	ci.Parallel(t)
 
@@ -1279,6 +1307,122 @@ func Test_jobImpliedConstraints_Mutate(t *testing.T) {
 			},
 			expectedOutputWarnings: nil,
 			expectedOutputError:    nil,
+		},
+		{
+			name: "task with secret",
+			inputJob: &structs.Job{
+				Name: "example",
+				TaskGroups: []*structs.TaskGroup{
+					{
+						Name: "group-with-secret",
+						Tasks: []*structs.Task{
+							{
+								Name: "task-with-secret",
+								Secrets: []*structs.Secret{
+									{
+										Provider: "test",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedOutputJob: &structs.Job{
+				Name: "example",
+				TaskGroups: []*structs.TaskGroup{
+					{
+						Name: "group-with-secret",
+						Tasks: []*structs.Task{
+							{
+								Name: "task-with-secret",
+								Secrets: []*structs.Secret{
+									{
+										Provider: "test",
+									},
+								},
+							},
+						},
+						Constraints: []*structs.Constraint{
+							{
+								LTarget: "${attr.plugins.secrets.test.version}",
+								Operand: structs.ConstraintAttributeIsSet,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "tasks with overlapping secrets",
+			inputJob: &structs.Job{
+				Name: "example",
+				TaskGroups: []*structs.TaskGroup{
+					{
+						Name: "group-with-secret",
+						Tasks: []*structs.Task{
+							{
+								Name: "task-with-secret",
+								Secrets: []*structs.Secret{
+									{
+										Provider: "foo",
+									},
+								},
+							},
+							{
+								Name: "task-with-secret",
+								Secrets: []*structs.Secret{
+									{
+										Provider: "foo",
+									},
+									{
+										Provider: "bar",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedOutputJob: &structs.Job{
+				Name: "example",
+				TaskGroups: []*structs.TaskGroup{
+					{
+						Name: "group-with-secret",
+						Tasks: []*structs.Task{
+							{
+								Name: "task-with-secret",
+								Secrets: []*structs.Secret{
+									{
+										Provider: "foo",
+									},
+								},
+							},
+							{
+								Name: "task-with-secret",
+								Secrets: []*structs.Secret{
+									{
+										Provider: "foo",
+									},
+									{
+										Provider: "bar",
+									},
+								},
+							},
+						},
+						Constraints: []*structs.Constraint{
+							{
+								LTarget: "${attr.plugins.secrets.foo.version}",
+								Operand: structs.ConstraintAttributeIsSet,
+							},
+							{
+								LTarget: "${attr.plugins.secrets.bar.version}",
+								Operand: structs.ConstraintAttributeIsSet,
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 

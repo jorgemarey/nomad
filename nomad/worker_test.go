@@ -16,23 +16,23 @@ import (
 	"github.com/hashicorp/go-memdb"
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper"
-	"github.com/shoenig/test/must"
-	"github.com/stretchr/testify/require"
-
 	"github.com/hashicorp/nomad/helper/testlog"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/scheduler"
+	sstructs "github.com/hashicorp/nomad/scheduler/structs"
 	"github.com/hashicorp/nomad/testutil"
+	"github.com/shoenig/test/must"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type NoopScheduler struct {
-	state    scheduler.State
-	planner  scheduler.Planner
+	state    sstructs.State
+	planner  sstructs.Planner
 	eval     *structs.Evaluation
-	eventsCh chan<- interface{}
+	eventsCh chan<- any
 	err      error
 }
 
@@ -48,7 +48,9 @@ func (n *NoopScheduler) Process(eval *structs.Evaluation) error {
 }
 
 func init() {
-	scheduler.BuiltinSchedulers["noop"] = func(logger log.Logger, eventsCh chan<- interface{}, s scheduler.State, p scheduler.Planner) scheduler.Scheduler {
+	scheduler.BuiltinSchedulers["noop"] = func(
+		logger log.Logger, eventsCh chan<- any, s sstructs.State, p sstructs.Planner,
+	) sstructs.Scheduler {
 		n := &NoopScheduler{
 			state:   s,
 			planner: p,
@@ -520,6 +522,7 @@ func TestWorker_SubmitPlanNormalizedAllocations(t *testing.T) {
 	})
 	defer cleanupS1()
 	testutil.WaitForLeader(t, s1.RPC)
+	testutil.WaitForKeyring(t, s1.RPC, s1.Region())
 
 	// Register node
 	node := mock.Node()
@@ -572,6 +575,7 @@ func TestWorker_SubmitPlan_MissingNodeRefresh(t *testing.T) {
 	})
 	defer cleanupS1()
 	testutil.WaitForLeader(t, s1.RPC)
+	testutil.WaitForKeyring(t, s1.RPC, s1.Region())
 
 	// Register node
 	node := mock.Node()
@@ -646,6 +650,7 @@ func TestWorker_UpdateEval(t *testing.T) {
 	})
 	defer cleanupS1()
 	testutil.WaitForLeader(t, s1.RPC)
+	testutil.WaitForKeyring(t, s1.RPC, s1.Region())
 
 	// Register node
 	node := mock.Node()
@@ -697,6 +702,7 @@ func TestWorker_CreateEval(t *testing.T) {
 	})
 	defer cleanupS1()
 	testutil.WaitForLeader(t, s1.RPC)
+	testutil.WaitForKeyring(t, s1.RPC, s1.Region())
 
 	// Register node
 	node := mock.Node()

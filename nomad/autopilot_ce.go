@@ -10,6 +10,7 @@ import (
 	autopilot "github.com/hashicorp/raft-autopilot"
 	improvedAutopilot "github.com/jorgemarey/autopilot"
 
+	"github.com/hashicorp/nomad/nomad/peers"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
@@ -19,7 +20,7 @@ func (s *Server) autopilotPromoter() autopilot.Promoter {
 
 // autopilotServerExt returns the autopilot-enterprise.Server extensions needed
 // for ENT feature support, but this is the empty OSS implementation.
-func (s *Server) autopilotServerExt(parts *serverParts) interface{} {
+func (s *Server) autopilotServerExt(parts *peers.Parts) interface{} {
 	return improvedAutopilot.ExtraServerInfo{
 		NonVoter: parts.NonVoter,
 	}

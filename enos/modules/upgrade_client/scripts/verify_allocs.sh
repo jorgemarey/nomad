@@ -6,6 +6,9 @@ set -euo pipefail
 
 error_exit() {
     printf 'Error: %s' "${1}"
+    echo "Allocs on node ${client_id}:"
+    nomad alloc status -json | \
+        jq -r --arg client_id "$client_id" '[.[] | select(.NodeID == $client_id)]'
     exit 1
 }
 
@@ -48,15 +51,53 @@ done
 
 echo "Client $client_id at $CLIENT_IP is ready"
 
-# Quality: "nomad_alloc_reconect: A GET call to /v1/allocs will return the same IDs for running allocs before and after a client upgrade on each client"
+allocs_count=$(echo $ALLOCS | jq '[ .[] | select(.ClientStatus == "running")] | length')
+echo "$allocs_count allocs found before upgrade $ALLOCS"
+
+# Quality: "nomad_alloc_reconnect: A GET call to /v1/allocs will return the same IDs for running allocs before and after a client upgrade on each client"
+
+checkAllocsCount() {
+    running_allocs=$(nomad alloc status -json | jq -r --arg client_id "$client_id" '[.[] | select(.ClientStatus == "running" and .NodeID == $client_id)]') || {
+        last_error="Failed to check alloc status"
+        return 1
+    }
+    allocs_length=$(echo "$running_allocs" | jq 'length') \
+        || error_exit "Invalid alloc status -json output"
+
+    if [ "$allocs_length" -eq "$allocs_count" ]; then
+        return 0
+    fi
+
+    last_error="Some allocs are not running"
+    return 1
+}
+
 echo "Reading allocs for client at $CLIENT_IP"
+
+elapsed_time=0
+while true; do
+    checkAllocsCount && break
+
+    if [ "$elapsed_time" -ge "$MAX_WAIT_TIME" ]; then
+        error_exit "$last_error within $elapsed_time seconds."
+    fi
+
+    echo "Running allocs: $allocs_length, expected ${allocs_count}. Have been waiting for ${elapsed_time}. Retrying in $POLL_INTERVAL seconds..."
+    sleep $POLL_INTERVAL
+    elapsed_time=$((elapsed_time + POLL_INTERVAL))
+
+done
+
+echo "Correct number of allocs found running: $allocs_length"
 
 current_allocs=$(nomad alloc status -json | jq -r --arg client_id "$client_id" '[.[] | select(.ClientStatus == "running" and .NodeID == $client_id) | .ID] | join(" ")')
 if [ -z "$current_allocs" ]; then
     error_exit "Failed to read allocs for node: $client_id"
 fi
 
-IFS=' ' read -r -a INPUT_ARRAY <<< "${ALLOCS[*]}"
+IDs=$(echo $ALLOCS | jq -r '[ .[] | select(.ClientStatus == "running")] | [.[].ID] | join(" ")')
+
+IFS=' ' read -r -a INPUT_ARRAY <<< "${IDs[*]}"
 IFS=' ' read -r -a RUNNING_ARRAY <<< "$current_allocs"
 
 sorted_input=($(printf "%s\n" "${INPUT_ARRAY[@]}" | sort))
