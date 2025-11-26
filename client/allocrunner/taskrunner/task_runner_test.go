@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/golang/snappy"
 	consulapi "github.com/hashicorp/consul/api"
 	metrics "github.com/hashicorp/go-metrics/compat"

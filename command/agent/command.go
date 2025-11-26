@@ -680,6 +680,7 @@ func (c *Command) setupAgent(config *Config, logger hclog.InterceptLogger, logOu
 		version := config.Version.Version
 		if config.Version.VersionPrerelease != "" {
 			version += fmt.Sprintf("-%s", config.Version.VersionPrerelease)
+		}
 		updateParams := &checkpoint.CheckParams{
 			Product: "nomad",
 			Version: version,

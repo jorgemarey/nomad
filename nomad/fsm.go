@@ -73,14 +73,6 @@ const (
 	// Deprecated: Nomad no longer supports EventSink snapshots since 1.0
 	EventSinkSnapshot SnapshotType = 20
 
-	// TimeTableSnapshot
-	// Deprecated: Nomad no longer supports TimeTable snapshots since 1.9.2
-	TimeTableSnapshot SnapshotType = 5
-
-	// EventSinkSnapshot
-	// Deprecated: Nomad no longer supports EventSink snapshots since 1.0
-	EventSinkSnapshot SnapshotType = 20
-
 	// Namespace appliers were moved from enterprise and therefore start at 64
 	NamespaceSnapshot SnapshotType = 64
 )

@@ -313,7 +313,3 @@ func (h *Harness) AssertEvalStatus(t testing.TB, state string) {
 func (h *Harness) SetNoSubmit() {
 	h.noSubmit = true
 }
-
-func (h *Harness) SetNoSubmit() {
-	h.noSubmit = true
-}

@@ -232,7 +232,6 @@ type ServiceCheck struct {
 type Service struct {
 	Name              string            `hcl:"name,optional"`
 	Tags              []string          `hcl:"tags,optional"`
-	Kind              string            `hcl:"kind,optional"`
 	CanaryTags        []string          `mapstructure:"canary_tags" hcl:"canary_tags,optional"`
 	EnableTagOverride bool              `mapstructure:"enable_tag_override" hcl:"enable_tag_override,optional"`
 	PortLabel         string            `mapstructure:"port" hcl:"port,optional"`

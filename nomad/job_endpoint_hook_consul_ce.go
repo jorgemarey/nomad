@@ -53,20 +53,7 @@ func (h jobConsulHook) Validate(job *structs.Job) ([]error, error) {
 				}
 			}
 
-			if len(task.Templates) == 0 {
-				continue
-			}
-
-			var clusterIdentity *structs.WorkloadIdentity
-			taskCluster := task.GetConsulClusterName(group)
-			for _, identity := range task.Identities {
-				if identity.Name == "consul_"+taskCluster {
-					clusterIdentity = identity
-					break
-				}
-			}
-			requiresToken = clusterNeedsToken(
-				taskCluster, clusterIdentity) || requiresToken
+			// TODO: revisar si esto está bien
 		}
 	}
 

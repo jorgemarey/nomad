@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/hashicorp/consul/api"
 	metrics "github.com/hashicorp/go-metrics/compat"
 	multierror "github.com/hashicorp/go-multierror"
