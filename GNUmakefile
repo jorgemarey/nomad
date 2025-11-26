@@ -100,7 +100,7 @@ pkg/%/nomad: ## Build Nomad for GOOS_GOARCH, e.g. pkg/linux_amd64/nomad
 ifeq (,$(findstring $(THIS_OS),$(SUPPORTED_OSES)))
 	$(warning WARNING: Building Nomad is only supported on $(SUPPORTED_OSES); not $(THIS_OS))
 endif
-	@echo "==> Building $@ with tags $(GO_TAGS)..."
+	@echo "==> Building $@ with tags $(GO_TAGS) and flags $(GO_LDFLAGS)..."
 	@CGO_ENABLED=$(CGO_ENABLED) \
 		GOOS=$(firstword $(subst _, ,$*)) \
 		GOARCH=$(lastword $(subst _, ,$*)) \
