@@ -515,7 +515,7 @@ func (n *nomadFSM) applyStatusUpdate(msgType structs.MessageType, buf []byte, in
 
 		}
 		n.blockedEvals.Unblock(node.ComputedClass, index)
-		n.blockedEvals.UnblockNode(req.NodeID, index)
+		n.blockedEvals.UnblockNode(req.NodeID)
 	}
 
 	return nil
@@ -574,7 +574,7 @@ func (n *nomadFSM) applyNodeEligibilityUpdate(msgType structs.MessageType, buf [
 	if node != nil && node.SchedulingEligibility == structs.NodeSchedulingIneligible &&
 		req.Eligibility == structs.NodeSchedulingEligible {
 		n.blockedEvals.Unblock(node.ComputedClass, index)
-		n.blockedEvals.UnblockNode(req.NodeID, index)
+		n.blockedEvals.UnblockNode(req.NodeID)
 	}
 
 	return nil
@@ -990,7 +990,7 @@ func (n *nomadFSM) applyAllocClientUpdate(msgType structs.MessageType, buf []byt
 		return err
 	}
 
-	// Update any evals
+	// Update any evals that were added by the RPC handler
 	if len(req.Evals) > 0 {
 		if err := n.upsertEvals(msgType, index, req.Evals); err != nil {
 			n.logger.Error("applyAllocClientUpdate failed to update evaluations", "error", err)
@@ -1019,7 +1019,7 @@ func (n *nomadFSM) applyAllocClientUpdate(msgType structs.MessageType, buf []byt
 			}
 
 			n.blockedEvals.UnblockClassAndQuota(node.ComputedClass, quota, index)
-			n.blockedEvals.UnblockNode(node.ID, index)
+			n.blockedEvals.UnblockNode(node.ID)
 		}
 	}
 

@@ -118,14 +118,13 @@ func firstValidAuth(repo string, backends []authBackend) (*registrytypes.AuthCon
 func authFromTaskConfig(driverConfig *TaskConfig) authBackend {
 	return func(string) (*registrytypes.AuthConfig, error) {
 		// If all auth fields are empty, return
-		if len(driverConfig.Auth.Username) == 0 && len(driverConfig.Auth.Password) == 0 && len(driverConfig.Auth.Email) == 0 && len(driverConfig.Auth.ServerAddr) == 0 {
+		if len(driverConfig.Auth.Username) == 0 && len(driverConfig.Auth.Password) == 0 && len(driverConfig.Auth.ServerAddr) == 0 {
 			return nil, nil
 		}
 
 		authConfig := &registrytypes.AuthConfig{
 			Username:      driverConfig.Auth.Username,
 			Password:      driverConfig.Auth.Password,
-			Email:         driverConfig.Auth.Email,
 			ServerAddress: driverConfig.Auth.ServerAddr,
 		}
 
@@ -161,7 +160,6 @@ func authFromDockerConfig(file string) authBackend {
 				auth := &registrytypes.AuthConfig{
 					Username:      dockerAuthConfig.Username,
 					Password:      dockerAuthConfig.Password,
-					Email:         dockerAuthConfig.Email,
 					ServerAddress: dockerAuthConfig.ServerAddress,
 					IdentityToken: dockerAuthConfig.IdentityToken,
 					RegistryToken: dockerAuthConfig.RegistryToken,
@@ -251,7 +249,6 @@ func authIsEmpty(auth *registrytypes.AuthConfig) bool {
 	}
 	return auth.Username == "" &&
 		auth.Password == "" &&
-		auth.Email == "" &&
 		auth.ServerAddress == ""
 }
 
