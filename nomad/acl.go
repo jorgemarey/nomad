@@ -32,10 +32,6 @@ func (s *Server) VerifyClaim(token string) (*structs.IdentityClaims, error) {
 	return s.auth.VerifyClaim(token)
 }
 
-func (s *Server) ResolveToken(secretID string) (*acl.ACL, error) {
-	return s.auth.ResolveToken(secretID)
-}
-
 func (s *Server) ResolveSecretToken(secretID string) (*structs.ACLToken, error) {
 	return s.auth.ResolveSecretToken(secretID)
 }

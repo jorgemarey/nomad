@@ -15,7 +15,6 @@ import (
 	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/nomad/command/agent/event"
-	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/ryanuber/go-glob"
 )
@@ -274,11 +273,9 @@ func (s *HTTPServer) newAuditEventFromRequest(req *http.Request) (*AuditEvent, e
 	var secret string
 	s.parseToken(req, &secret)
 
-	var resolver func(secretID string) (*structs.ACLToken, error)
+	resolver := s.agent.Client().ResolveSecretToken
 	if server := s.agent.Server(); server != nil {
 		resolver = server.ResolveSecretToken
-	} else {
-		resolver = s.agent.Client().ResolveSecretToken
 	}
 
 	token, err := resolver(secret)
@@ -287,6 +284,7 @@ func (s *HTTPServer) newAuditEventFromRequest(req *http.Request) (*AuditEvent, e
 		// return nil, err
 	}
 	if token != nil {
+		// TODO: set also claims for when this is not a token
 		e.Auth = &AuthAuditEvent{
 			AccessorID: token.AccessorID,
 			Name:       token.Name,

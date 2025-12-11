@@ -36,9 +36,9 @@ func (s *Sentinel) UpsertPolicies(args *structs.SentinelPolicyUpsertRequest, rep
 	defer metrics.MeasureSince([]string{"nomad", "sentinel", "upsert_policies"}, time.Now())
 
 	// Check management level permissions
-	if sentinel, err := s.srv.ResolveToken(args.AuthToken); err != nil {
+	if aclObj, err := s.srv.ResolveACL(args); err != nil {
 		return err
-	} else if sentinel == nil || !sentinel.IsManagement() {
+	} else if aclObj == nil || !aclObj.IsManagement() {
 		return structs.ErrPermissionDenied
 	}
 
@@ -84,7 +84,7 @@ func (s *Sentinel) DeletePolicies(args *structs.SentinelPolicyDeleteRequest, rep
 	defer metrics.MeasureSince([]string{"nomad", "sentinel", "delete_policies"}, time.Now())
 
 	// Check management level permissions
-	if sentinel, err := s.srv.ResolveToken(args.AuthToken); err != nil {
+	if sentinel, err := s.srv.ResolveACL(args); err != nil {
 		return err
 	} else if sentinel == nil || !sentinel.IsManagement() {
 		return structs.ErrPermissionDenied
@@ -122,9 +122,9 @@ func (s *Sentinel) ListPolicies(args *structs.SentinelPolicyListRequest, reply *
 	defer metrics.MeasureSince([]string{"nomad", "sentinel", "list_policies"}, time.Now())
 
 	// Check management level permissions
-	if sentinel, err := s.srv.ResolveToken(args.AuthToken); err != nil {
+	if aclObj, err := s.srv.ResolveACL(args); err != nil {
 		return err
-	} else if sentinel == nil || !sentinel.IsManagement() {
+	} else if aclObj == nil || !aclObj.IsManagement() {
 		return structs.ErrPermissionDenied
 	}
 
@@ -189,9 +189,9 @@ func (s *Sentinel) GetPolicy(args *structs.SentinelPolicySpecificRequest, reply 
 	defer metrics.MeasureSince([]string{"nomad", "sentinel", "get_policy"}, time.Now())
 
 	// Check management level permissions
-	if sentinel, err := s.srv.ResolveToken(args.AuthToken); err != nil {
+	if aclObj, err := s.srv.ResolveACL(args); err != nil {
 		return err
-	} else if sentinel == nil || !sentinel.IsManagement() {
+	} else if aclObj == nil || !aclObj.IsManagement() {
 		return structs.ErrPermissionDenied
 	}
 
@@ -239,9 +239,9 @@ func (s *Sentinel) GetPolicies(args *structs.SentinelPolicySetRequest, reply *st
 	defer metrics.MeasureSince([]string{"nomad", "sentinel", "get_policies"}, time.Now())
 
 	// Check management level permissions
-	if sentinel, err := s.srv.ResolveToken(args.AuthToken); err != nil {
+	if aclObj, err := s.srv.ResolveACL(args); err != nil {
 		return err
-	} else if sentinel == nil || !sentinel.IsManagement() {
+	} else if aclObj == nil || !aclObj.IsManagement() {
 		return structs.ErrPermissionDenied
 	}
 
