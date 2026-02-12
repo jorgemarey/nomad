@@ -54,7 +54,7 @@ PROTO_COMPARE_TAG ?= v1.0.3$(if $(findstring ent,$(GO_TAGS)),+ent,)
 # or backport version, without the leading "v". main should have the latest
 # published release here, and release branches should point to the latest
 # published release in their X.Y release line.
-LAST_RELEASE ?= 1.11.0
+LAST_RELEASE ?= 1.11.1
 
 default: help
 
@@ -245,8 +245,7 @@ proto: ## Generate protobuf bindings
 	@buf --config tools/buf/buf.yaml --template tools/buf/buf.gen.yaml generate
 
 changelog: ## Generate changelog from entries
-	@changelog-build -last-release v$(LAST_RELEASE) -this-release HEAD \
-		-entries-dir .changelog/ -changelog-template ./.changelog/changelog.tmpl -note-template ./.changelog/note.tmpl
+	./scripts/release/update-changelog
 
 ## We skip the terraform directory as there are templated hcl configurations
 ## that do not successfully compile without rendering
@@ -291,6 +290,10 @@ dev: hclfmt ## Build for the current development platform
 	@cp $(PROJECT_ROOT)/$(DEV_TARGET) $(PROJECT_ROOT)/bin/
 	@cp $(PROJECT_ROOT)/$(DEV_TARGET) $(BIN)
 
+.PHONY: dev-static
+dev-static:
+	@$(MAKE) CGO_ENABLED=0 dev ## Build a dev binary with no CGO
+
 .PHONY: prerelease
 prerelease: GO_TAGS=ui codegen_generated release
 prerelease: generate-all ember-dist static-assets ## Generate all the static assets for a Nomad release
@@ -298,6 +301,13 @@ prerelease: generate-all ember-dist static-assets ## Generate all the static ass
 .PHONY: release
 release: GO_TAGS=ui codegen_generated release
 release: clean $(foreach t,$(ALL_TARGETS),pkg/$(t).zip) ## Build all release packages which can be built on this platform.
+	@echo "==> Results:"
+	@tree --dirsfirst $(PROJECT_ROOT)/pkg
+
+.PHONY: release-static
+release-static: GO_TAGS=ui codegen_generated release
+release-static: CGO_ENABLED=0
+release-static: clean $(foreach t,$(ALL_TARGETS),pkg/$(t).zip) ## Build all release packages which can be built on this platform.
 	@echo "==> Results:"
 	@tree --dirsfirst $(PROJECT_ROOT)/pkg
 

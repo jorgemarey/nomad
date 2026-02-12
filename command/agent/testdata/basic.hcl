@@ -1,4 +1,4 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2015, 2025
 # SPDX-License-Identifier: BUSL-1.1
 
 # This file was used to generate basic.json from https://www.hcl2json.com/
@@ -107,6 +107,12 @@ client {
   bridge_network_name        = "custom_bridge_name"
   bridge_network_subnet      = "custom_bridge_subnet"
   bridge_network_subnet_ipv6 = "custom_bridge_subnet_ipv6"
+
+  fingerprint "env_aws" {
+    retry_interval  = "1s"
+    retry_attempts  = 3
+    exit_on_failure = true
+  }
 }
 
 server {

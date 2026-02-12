@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
@@ -3561,7 +3561,8 @@ func (n *NodeDeviceResource) Equal(o *NodeDeviceResource) bool {
 		return false
 	}
 	for k, v := range n.Attributes {
-		if otherV, ok := o.Attributes[k]; !ok || v != otherV {
+		otherV, ok := o.Attributes[k]
+		if !ok || !v.Equal(otherV) {
 			return false
 		}
 	}
@@ -3619,7 +3620,7 @@ func (n *NodeDevice) Equal(o *NodeDevice) bool {
 		return false
 	}
 
-	return false
+	return true
 }
 
 func (n *NodeDevice) Copy() *NodeDevice {
@@ -7660,9 +7661,9 @@ func (tg *TaskGroup) Replace() bool {
 	return *tg.Disconnect.Replace
 }
 
-// GetDisconnectLostTimeout is a helper meant to simplify the logic for
+// GetDisconnectLostAfter is a helper meant to simplify the logic for
 // getting the Disconnect.LostAfter field of a task group.
-func (tg *TaskGroup) GetDisconnectLostTimeout() time.Duration {
+func (tg *TaskGroup) GetDisconnectLostAfter() time.Duration {
 	if tg.Disconnect != nil {
 		return tg.Disconnect.LostAfter
 	}
@@ -9993,9 +9994,17 @@ func (c *Constraint) Validate() error {
 		mErr.Errors = append(mErr.Errors, fmt.Errorf("Unknown constraint type %q", c.Operand))
 	}
 
-	// Ensure we have an LTarget for the constraints that need one
-	if requireLtarget && c.LTarget == "" {
-		mErr.Errors = append(mErr.Errors, fmt.Errorf("No LTarget provided but is required by constraint"))
+	// If the constraint must have a "LTarget" (attribute in the job spec), then
+	// ensure it is not an empty string and is valid.
+	if requireLtarget {
+		if c.LTarget == "" {
+			mErr.Errors = append(mErr.Errors, errors.New("no attribute provided but is required by operator"))
+		} else {
+			if err := validateConstraintAttribute(c.LTarget); err != nil {
+				mErr.Errors = append(mErr.Errors, err)
+			}
+		}
+
 	}
 
 	return mErr.ErrorOrNil()

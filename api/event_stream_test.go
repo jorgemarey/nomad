@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: MPL-2.0
 
 package api
@@ -6,11 +6,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/nomad/api/internal/testutil"
-	"github.com/mitchellh/mapstructure"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/shoenig/test/must"
 )
 
@@ -117,6 +119,41 @@ func TestEvent_Stream(t *testing.T) {
 		must.Eq(t, "Evaluation", string(event.Events[0].Topic))
 	case <-time.After(5 * time.Second):
 		must.Unreachable(t, must.Sprint("failed waiting for event stream event"))
+	}
+
+	// Stop the server to ensure EOF is returned
+	s.Stop()
+
+	for {
+		select {
+		case event, ok := <-streamCh:
+			if !ok {
+				must.Unreachable(t, must.Sprintf("chan closed before EOF received"))
+			}
+
+			if event.Err != nil && (errors.Is(event.Err, io.EOF)) {
+				// Succcess! Make sure chan gets closed
+				select {
+				case _, ok := <-streamCh:
+					if ok {
+						must.Unreachable(t, must.Sprintf("expected chan to close after EOF"))
+					}
+
+					// Success!
+					return
+				case <-time.After(5 * time.Second):
+					must.Unreachable(t, must.Sprint("failed waiting for event stream to close"))
+				}
+			}
+
+			if event.Err != nil {
+				must.Unreachable(t, must.Sprintf("unexpected %v (%T)", event.Err, event.Err))
+			}
+			must.Len(t, 1, event.Events)
+			must.Eq(t, "Evaluation", string(event.Events[0].Topic))
+		case <-time.After(5 * time.Second):
+			must.Unreachable(t, must.Sprint("failed waiting for event stream EOF"))
+		}
 	}
 }
 

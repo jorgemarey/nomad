@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package agent
@@ -1490,6 +1490,7 @@ func TestHTTPServer_ResolveToken(t *testing.T) {
 
 		alloc := mock.Alloc()
 		alloc.Job = job
+		alloc.JobID = job.ID
 		task := alloc.LookupTask("web")
 		identity := task.Identity
 		wih := task.IdentityHandle(identity)

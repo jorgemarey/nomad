@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package acl
@@ -323,6 +323,16 @@ func (a *ACL) AllowNsOpFunc(ops ...string) func(string) bool {
 	return func(ns string) bool {
 		return NamespaceValidator(ops...)(a, ns)
 	}
+}
+
+// AllowNsOpAnyOf checks if any of the given operations are allowed for a namespace.
+func (a *ACL) AllowNsOpAnyOf(ns string, ops ...string) bool {
+	for _, op := range ops {
+		if a.AllowNamespaceOperation(ns, op) {
+			return true
+		}
+	}
+	return false
 }
 
 // AllowNamespaceOperation checks if a given operation is allowed for a namespace.

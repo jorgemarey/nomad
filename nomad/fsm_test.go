@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package nomad
@@ -1440,9 +1440,11 @@ func TestFSM_UpdateAllocFromClient_Unblock(t *testing.T) {
 	alloc.NodeID = node.ID
 	alloc2 := mock.Alloc()
 	alloc2.NodeID = node.ID
-	state.UpsertJobSummary(8, mock.JobSummary(alloc.JobID))
-	state.UpsertJobSummary(9, mock.JobSummary(alloc2.JobID))
-	state.UpsertAllocs(structs.MsgTypeTestSetup, 10, []*structs.Allocation{alloc, alloc2})
+	must.NoError(t, state.UpsertJobSummary(8, mock.JobSummary(alloc.JobID)))
+	must.NoError(t, state.UpsertJobSummary(9, mock.JobSummary(alloc2.JobID)))
+	must.NoError(t, state.UpsertJob(structs.MsgTypeTestSetup, 8, nil, alloc.Job))
+	must.NoError(t, state.UpsertJob(structs.MsgTypeTestSetup, 9, nil, alloc2.Job))
+	must.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 10, []*structs.Allocation{alloc, alloc2}))
 
 	clientAlloc := new(structs.Allocation)
 	*clientAlloc = *alloc
@@ -1509,8 +1511,9 @@ func TestFSM_UpdateAllocFromClient(t *testing.T) {
 	require := require.New(t)
 
 	alloc := mock.Alloc()
-	state.UpsertJobSummary(9, mock.JobSummary(alloc.JobID))
-	state.UpsertAllocs(structs.MsgTypeTestSetup, 10, []*structs.Allocation{alloc})
+	must.NoError(t, state.UpsertJobSummary(9, mock.JobSummary(alloc.JobID)))
+	must.NoError(t, state.UpsertJob(structs.MsgTypeTestSetup, 9, nil, alloc.Job))
+	must.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 10, []*structs.Allocation{alloc}))
 
 	clientAlloc := new(structs.Allocation)
 	*clientAlloc = *alloc
@@ -1560,8 +1563,10 @@ func TestFSM_UpdateAllocDesiredTransition(t *testing.T) {
 	alloc2 := mock.Alloc()
 	alloc2.Job = alloc.Job
 	alloc2.JobID = alloc.JobID
-	state.UpsertJobSummary(9, mock.JobSummary(alloc.JobID))
-	state.UpsertAllocs(structs.MsgTypeTestSetup, 10, []*structs.Allocation{alloc, alloc2})
+	must.NoError(t, state.UpsertJobSummary(9, mock.JobSummary(alloc.JobID)))
+	must.NoError(t, state.UpsertJob(structs.MsgTypeTestSetup, 9, nil, alloc.Job))
+	must.NoError(t, state.UpsertJob(structs.MsgTypeTestSetup, 10, nil, alloc2.Job))
+	must.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 11, []*structs.Allocation{alloc, alloc2}))
 
 	t1 := &structs.DesiredTransition{
 		Migrate: pointer.Of(true),
@@ -1629,10 +1634,14 @@ func TestFSM_ApplyPlanResults(t *testing.T) {
 	fsm.State().UpsertEvals(structs.MsgTypeTestSetup, 1, []*structs.Evaluation{eval})
 
 	fsm.State().UpsertJobSummary(1, mock.JobSummary(alloc.JobID))
+	must.NoError(t, fsm.State().UpsertJob(structs.MsgTypeTestSetup, 1, nil, job))
 
 	// set up preempted jobs and allocs
 	job1 := mock.Job()
+	must.NoError(t, fsm.State().UpsertJob(structs.MsgTypeTestSetup, 1, nil, job1))
+
 	job2 := mock.Job()
+	must.NoError(t, fsm.State().UpsertJob(structs.MsgTypeTestSetup, 1, nil, job2))
 
 	alloc1 := mock.Alloc()
 	alloc1.Job = job1
@@ -1979,9 +1988,12 @@ func TestFSM_DeploymentAllocHealth(t *testing.T) {
 	a1.DeploymentID = d.ID
 	a2 := mock.Alloc()
 	a2.DeploymentID = d.ID
-	if err := state.UpsertAllocs(structs.MsgTypeTestSetup, 2, []*structs.Allocation{a1, a2}); err != nil {
-		t.Fatalf("bad: %v", err)
-	}
+	a2.Job = a1.Job
+	a2.JobID = a1.JobID
+
+	must.NoError(t, state.UpsertJob(structs.MsgTypeTestSetup, 2, nil, a1.Job))
+	must.NoError(t, state.UpsertJob(structs.MsgTypeTestSetup, 3, nil, a2.Job))
+	must.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 4, []*structs.Allocation{a1, a2}))
 
 	// Create a job to roll back to
 	j := mock.Job()
@@ -2414,8 +2426,10 @@ func TestFSM_SnapshotRestore_Allocs(t *testing.T) {
 	state := fsm.State()
 	alloc1 := mock.Alloc()
 	alloc2 := mock.Alloc()
-	state.UpsertJobSummary(998, mock.JobSummary(alloc1.JobID))
-	state.UpsertJobSummary(999, mock.JobSummary(alloc2.JobID))
+	must.NoError(t, state.UpsertJobSummary(996, mock.JobSummary(alloc1.JobID)))
+	must.NoError(t, state.UpsertJobSummary(997, mock.JobSummary(alloc2.JobID)))
+	must.NoError(t, state.UpsertJob(structs.MsgTypeTestSetup, 998, nil, alloc1.Job))
+	must.NoError(t, state.UpsertJob(structs.MsgTypeTestSetup, 999, nil, alloc2.Job))
 	state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc1})
 	state.UpsertAllocs(structs.MsgTypeTestSetup, 1001, []*structs.Allocation{alloc2})
 
@@ -2443,8 +2457,9 @@ func TestFSM_SnapshotRestore_Allocs_Canonicalize(t *testing.T) {
 	// remove old versions to force migration path
 	alloc.AllocatedResources = nil
 
-	state.UpsertJobSummary(998, mock.JobSummary(alloc.JobID))
-	state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc})
+	must.NoError(t, state.UpsertJobSummary(998, mock.JobSummary(alloc.JobID)))
+	must.NoError(t, state.UpsertJob(structs.MsgTypeTestSetup, 999, nil, alloc.Job))
+	must.NoError(t, state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc}))
 
 	// Verify the contents
 	fsm2 := testSnapshotRestore(t, fsm)
@@ -3783,4 +3798,81 @@ func TestFSM_DeleteACLBindingRules(t *testing.T) {
 	out, err = fsm.State().GetACLBindingRule(ws, aclBindingRule2.ID)
 	must.NoError(t, err)
 	must.Nil(t, out)
+}
+
+func TestFSM_ApplyJob_IdempotencyToken(t *testing.T) {
+	ci.Parallel(t)
+	fsm := testFSM(t)
+	store := fsm.State()
+
+	parent := mock.BatchJob()
+	parent.ParameterizedJob = &structs.ParameterizedJobConfig{
+		Payload:      "payload.txt",
+		MetaOptional: []string{"example"},
+	}
+	parent.ID = "parent"
+	index, _ := store.LatestIndex()
+
+	req := &structs.JobRegisterRequest{
+		Job:            parent,
+		JobModifyIndex: index,
+		Eval:           nil, // we'll fill this in later
+		WriteRequest: structs.WriteRequest{
+			IdempotencyToken: "",
+			Namespace:        parent.Namespace,
+		},
+	}
+
+	buf, err := structs.Encode(structs.JobRegisterRequestType, req)
+	must.NoError(t, err)
+	must.Nil(t, fsm.Apply(makeLog(buf)))
+
+	// no eval should be created for a parameterized batch job
+	iter, err := store.Evals(nil, state.SortDefault)
+	must.NoError(t, err)
+	must.Nil(t, iter.Next())
+
+	token := uuid.Generate()
+	dispatch1 := parent.Copy()
+	dispatch1.ParentID = parent.ID
+	dispatch1.ID = structs.DispatchedID(parent.ID, "", time.Now())
+	dispatch1.DispatchIdempotencyToken = token
+
+	eval := mock.Eval()
+	eval.JobID = dispatch1.ID
+	req.Job = dispatch1
+	req.Eval = eval
+	req.IdempotencyToken = token // required but redundant with field in dispatched job
+
+	buf, err = structs.Encode(structs.JobRegisterRequestType, req)
+	must.NoError(t, err)
+	must.Nil(t, fsm.Apply(makeLog(buf)))
+
+	dispatch1, err = store.JobByID(nil, dispatch1.Namespace, dispatch1.ID)
+	must.NoError(t, err)
+	must.NotNil(t, dispatch1)
+	iter, err = store.Evals(nil, state.SortDefault)
+	must.NoError(t, err)
+	must.Eq(t, 1, store.IterCount(iter))
+
+	dispatch2 := parent.Copy()
+	dispatch2.ParentID = parent.ID
+	dispatch2.ID = structs.DispatchedID(parent.ID, "", time.Now())
+	dispatch2.DispatchIdempotencyToken = token
+	eval = mock.Eval()
+	eval.JobID = dispatch2.ID
+	req.Job = dispatch2
+	req.Eval = eval
+
+	buf, err = structs.Encode(structs.JobRegisterRequestType, req)
+	must.NoError(t, err)
+	must.Nil(t, fsm.Apply(makeLog(buf)))
+
+	// no new dispatch or evals created
+	dispatch2, err = store.JobByID(nil, dispatch2.Namespace, dispatch2.ID)
+	must.NoError(t, err)
+	must.Nil(t, dispatch2)
+	iter, err = store.Evals(nil, state.SortDefault)
+	must.NoError(t, err)
+	must.Eq(t, 1, store.IterCount(iter))
 }

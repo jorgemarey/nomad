@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package scheduler
@@ -3638,7 +3638,8 @@ func TestServiceSched_JobDeregister_Purged(t *testing.T) {
 		allocs = append(allocs, alloc)
 	}
 	for _, alloc := range allocs {
-		h.State.UpsertJobSummary(h.NextIndex(), mock.JobSummary(alloc.JobID))
+		must.NoError(t, h.State.UpsertJobSummary(h.NextIndex(), mock.JobSummary(alloc.JobID)))
+		must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, alloc.Job))
 	}
 	must.NoError(t, h.State.UpsertAllocs(structs.MsgTypeTestSetup, h.NextIndex(), allocs))
 
@@ -3698,8 +3699,7 @@ func TestServiceSched_JobDeregister_Stopped(t *testing.T) {
 
 	// Generate a fake job with allocations
 	job := mock.Job()
-	job.Stop = true
-	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job))
+	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job.Copy()))
 
 	var allocs []*structs.Allocation
 	for i := 0; i < 10; i++ {
@@ -3709,6 +3709,9 @@ func TestServiceSched_JobDeregister_Stopped(t *testing.T) {
 		allocs = append(allocs, alloc)
 	}
 	must.NoError(t, h.State.UpsertAllocs(structs.MsgTypeTestSetup, h.NextIndex(), allocs))
+
+	job.Stop = true
+	must.NoError(t, h.State.UpsertJob(structs.MsgTypeTestSetup, h.NextIndex(), nil, job.Copy()))
 
 	// Create a summary where the queued allocs are set as we want to assert
 	// they get zeroed out.
@@ -5161,13 +5164,13 @@ func TestServiceSched_BlockedDisconnectReplace(t *testing.T) {
 	followupEval0 := h.CreateEvals[0]
 	followupEval1 := h.CreateEvals[1]
 
-	must.Eq(t, structs.EvalStatusBlocked, followupEval0.Status)
-	must.Eq(t, structs.EvalStatusPending, followupEval1.Status)
+	must.Eq(t, structs.EvalStatusPending, followupEval0.Status) // max-client-disconnect
+	must.Eq(t, structs.EvalStatusPending, followupEval1.Status) // alloc-reschedule
 
 	// TODO: the top-level scheduler calls its own time.Now not shared with the
 	// reconciler
 	//	must.Eq(t, now.Add(lostAfterDuration), followupEval1.WaitUntil)
-	must.True(t, followupEval1.WaitUntil.After(now.Add(lostAfterDuration)))
+	must.True(t, followupEval0.WaitUntil.After(now.Add(lostAfterDuration)))
 
 	must.NoError(t, h.State.UpsertEvals(structs.MsgTypeTestSetup,
 		h.NextIndex(), []*structs.Evaluation{followupEval0, followupEval1}))

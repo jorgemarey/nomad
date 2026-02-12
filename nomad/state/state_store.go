@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package state
@@ -1869,6 +1869,32 @@ func (s *StateStore) upsertJobImpl(index uint64, sub *structs.JobSubmission, job
 	return nil
 }
 
+// CheckIdempotencyToken finds all children of the parent job ID and checks to
+// make sure none of them were dispatched with the idempotency token passed as
+// an argument. Returns the child job found, if any.
+func (s *StateStore) CheckIdempotencyToken(ns, parentID, idempotencyToken string) (*structs.Job, error) {
+	iter, err := s.JobsByIDPrefix(nil, ns, parentID, SortDefault)
+	if err != nil {
+		return nil, errors.New("failed to retrieve jobs for idempotency check")
+	}
+
+	for {
+		raw := iter.Next()
+		if raw == nil {
+			break
+		}
+		existingDispatch := raw.(*structs.Job)
+		if existingDispatch.ParentID != parentID {
+			continue
+		}
+		if existingDispatch.DispatchIdempotencyToken == idempotencyToken {
+			return existingDispatch, nil
+		}
+	}
+
+	return nil, nil
+}
+
 // DeleteJob is used to deregister a job
 func (s *StateStore) DeleteJob(index uint64, namespace, jobID string) error {
 	txn := s.db.WriteTxn(index)
@@ -2829,13 +2855,13 @@ func (s *StateStore) CSIVolumeClaim(index uint64, now int64, namespace, id strin
 		return err
 	}
 
-	// in the case of a job deregistration, there will be no allocation ID
+	// In the case of a job deregistration, there will be no allocation ID
 	// for the claim but we still want to write an updated index to the volume
 	// so that volume reaping is triggered
 	if claim.AllocationID != "" {
 		err = volume.Claim(claim, alloc)
 		if err != nil {
-			return err
+			return fmt.Errorf("alloc %q failed to claim volume %q: %w", claim.AllocationID, volume.ID, err)
 		}
 	}
 
@@ -4191,6 +4217,27 @@ func (s *StateStore) upsertAllocsImpl(index uint64, allocs []*structs.Allocation
 			// should solve this issue.
 			if alloc.Job == nil {
 				return fmt.Errorf("attempting to upsert allocation %q without a job", alloc.ID)
+			}
+
+			// Read the job directly from state. This ensures we do not
+			// encounter an order of operations issue where the job was stopped
+			// after the worker started processing the evaluation but before the
+			// allocation was upserted.
+			existingJob, err := txn.First("jobs", indexID, alloc.Namespace, alloc.JobID)
+			if err != nil {
+				return fmt.Errorf("job lookup failed: %v", err)
+			}
+
+			existingJobReal, _ := existingJob.(*structs.Job)
+
+			// Do not return this check as an error. If we did, the scheduler
+			// would retry the scheduling process using the same state snapshot
+			// that showed the job as running. This would lead to a retry loop
+			// that would waste CPU time and scheduling worker time.
+			if existingJobReal == nil || existingJobReal.Stopped() {
+				s.logger.Info("attempted to create allocation for stopped or non-existent job",
+					"alloc_id", alloc.ID, "job_id", alloc.JobID, "namespace", alloc.Namespace)
+				continue
 			}
 
 			// Check if the alloc requires sticky volumes. If yes, find a node

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
@@ -303,6 +303,9 @@ func (d *DeploymentState) GoString() string {
 }
 
 func (d *DeploymentState) Copy() *DeploymentState {
+	if d == nil {
+		return nil
+	}
 	c := &DeploymentState{}
 	*c = *d
 	c.PlacedCanaries = slices.Clone(d.PlacedCanaries)

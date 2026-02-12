@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2015, 2025
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -150,6 +150,40 @@ module('Acceptance | job run', function (hooks) {
           {
             Name: newNamespace,
             Capabilities: ['scale-job', 'submit-job', 'read-job', 'list-jobs'],
+          },
+        ],
+      },
+    });
+
+    clientTokenWithPolicy.policyIds = [policy.id];
+    clientTokenWithPolicy.save();
+    window.localStorage.nomadTokenSecret = clientTokenWithPolicy.secretId;
+
+    await JobRun.visit({ namespace: newNamespace });
+    assert.equal(currentURL(), `/jobs/run?namespace=${newNamespace}`);
+  });
+
+  test('when using fine grained client token user can still go to job page if they have correct permissions', async function (assert) {
+    const clientTokenWithPolicy = server.create('token');
+    const newNamespace = 'second-namespace';
+
+    server.create('namespace', { id: newNamespace });
+    server.create('job', {
+      groupCount: 0,
+      createAllocations: false,
+      shallow: true,
+      noActiveDeployment: true,
+      namespaceId: newNamespace,
+    });
+
+    const policy = server.create('policy', {
+      id: 'something',
+      name: 'something',
+      rulesJSON: {
+        Namespaces: [
+          {
+            Name: newNamespace,
+            Capabilities: ['register-job', 'read-job', 'list-jobs'],
           },
         ],
       },

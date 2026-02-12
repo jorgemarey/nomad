@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package volumewatcher
@@ -83,6 +83,9 @@ func TestVolumeWatch_LeadershipTransition(t *testing.T) {
 	alloc := mock.Alloc()
 	alloc.ClientStatus = structs.AllocClientStatusRunning
 	vol := testVolume(plugin, alloc, node.ID)
+
+	index++
+	must.NoError(t, srv.State().UpsertJob(structs.MsgTypeTestSetup, index, nil, alloc.Job))
 
 	index++
 	err := srv.State().UpsertAllocs(structs.MsgTypeTestSetup, index,
@@ -192,10 +195,15 @@ func TestVolumeWatch_StartStop(t *testing.T) {
 	alloc1.ClientStatus = structs.AllocClientStatusRunning
 	alloc2 := mock.Alloc()
 	alloc2.Job = alloc1.Job
+	alloc2.JobID = alloc1.JobID
 	alloc2.ClientStatus = structs.AllocClientStatusRunning
 	index++
 	err := srv.State().UpsertJob(structs.MsgTypeTestSetup, index, nil, alloc1.Job)
 	must.NoError(t, err)
+
+	index++
+	must.NoError(t, srv.State().UpsertJob(structs.MsgTypeTestSetup, index, nil, alloc2.Job))
+
 	index++
 	err = srv.State().UpsertAllocs(structs.MsgTypeTestSetup, index, []*structs.Allocation{alloc1, alloc2})
 	must.NoError(t, err)

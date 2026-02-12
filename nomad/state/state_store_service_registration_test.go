@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package state
@@ -658,6 +658,12 @@ func TestAlloc_ServiceRegistrationLifecycle(t *testing.T) {
 
 	index++
 	must.NoError(t, store.UpsertNode(structs.MsgTypeTestSetup, index, node))
+
+	index++
+	must.NoError(t, store.UpsertJob(structs.MsgTypeTestSetup, index, nil, alloc0.Job))
+
+	index++
+	must.NoError(t, store.UpsertJob(structs.MsgTypeTestSetup, index, nil, alloc1.Job))
 
 	index++
 	must.NoError(t, store.UpsertAllocs(structs.MsgTypeTestSetup, index,

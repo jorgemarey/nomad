@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package command
@@ -216,7 +216,7 @@ func (j *JobScaleCommand) Run(args []string) int {
 	}
 
 	// Detach was not specified, so start monitoring.
-	mon := newMonitor(j.Ui, client, length)
+	mon := newMonitor(j.Meta, client, length)
 	return mon.monitor(resp.EvalID)
 }
 

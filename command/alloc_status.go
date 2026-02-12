@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package command
@@ -239,7 +239,7 @@ func (c *AllocStatusCommand) Run(args []string) int {
 	// Format the detailed status
 	if verbose {
 		c.Ui.Output(c.Colorize().Color("\n[bold]Placement Metrics[reset]"))
-		c.Ui.Output(formatAllocMetrics(alloc.Metrics, true, "  "))
+		c.Ui.Output(formatAllocMetrics(alloc.Metrics, c.Colorize(), true, "  "))
 	}
 
 	hint, _ := c.Meta.showUIPath(UIHintContext{

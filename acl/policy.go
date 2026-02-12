@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package acl
@@ -58,6 +58,29 @@ const (
 	NamespaceCapabilityReadJobScaling       = "read-job-scaling"
 	NamespaceCapabilityScaleJob             = "scale-job"
 	NamespaceCapabilitySubmitRecommendation = "submit-recommendation"
+
+	// Fine-grained job capabilities separated from submit-job
+	NamespaceCapabilityRegisterJob   = "register-job"
+	NamespaceCapabilityRevertJob     = "revert-job"
+	NamespaceCapabilityDeregisterJob = "deregister-job"
+	NamespaceCapabilityPurgeJob      = "purge-job"
+	NamespaceCapabilityEvaluateJob   = "evaluate-job"
+	NamespaceCapabilityPlanJob       = "plan-job"
+	NamespaceCapabilityTagJobVersion = "tag-job-version"
+	NamespaceCapabilityStableJob     = "stable-job"
+
+	NamespaceCapabilityFailDeployment           = "fail-deployment"
+	NamespaceCapabilityPauseDeployment          = "pause-deployment"
+	NamespaceCapabilityPromoteDeployment        = "promote-deployment"
+	NamespaceCapabilityUnblockDeployment        = "unblock-deployment"
+	NamespaceCapabilityCancelDeployment         = "cancel-deployment"
+	NamespaceCapabilitySetAllocHealthDeployment = "set-alloc-health-deployment"
+
+	NamespaceCapabilityGCAllocation    = "gc-allocation"
+	NamespaceCapabilityPauseAllocation = "pause-allocation"
+
+	NamespaceCapabilityForcePeriodicJob          = "force-periodic-job"
+	NamespaceCapabilityDeleteServiceRegistration = "delete-service-registration"
 )
 
 var (
@@ -227,12 +250,26 @@ func (p *PluginPolicy) isValid() bool {
 // isNamespaceCapabilityValid ensures the given capability is valid for a namespace policy
 func isNamespaceCapabilityValid(cap string) bool {
 	switch cap {
-	case NamespaceCapabilityDeny, NamespaceCapabilityParseJob, NamespaceCapabilityListJobs, NamespaceCapabilityReadJob,
-		NamespaceCapabilitySubmitJob, NamespaceCapabilityDispatchJob, NamespaceCapabilityReadLogs,
-		NamespaceCapabilityReadFS, NamespaceCapabilityAllocLifecycle,
-		NamespaceCapabilityAllocExec, NamespaceCapabilityAllocNodeExec,
-		NamespaceCapabilityCSIReadVolume, NamespaceCapabilityCSIWriteVolume, NamespaceCapabilityCSIListVolume, NamespaceCapabilityCSIMountVolume, NamespaceCapabilityCSIRegisterPlugin,
-		NamespaceCapabilityListScalingPolicies, NamespaceCapabilityReadScalingPolicy, NamespaceCapabilityReadJobScaling, NamespaceCapabilityScaleJob, NamespaceCapabilityHostVolumeCreate, NamespaceCapabilityHostVolumeRegister, NamespaceCapabilityHostVolumeWrite, NamespaceCapabilityHostVolumeRead:
+	case NamespaceCapabilityDeny, NamespaceCapabilityListJobs, NamespaceCapabilityParseJob,
+		NamespaceCapabilityReadJob, NamespaceCapabilitySubmitJob, NamespaceCapabilityDispatchJob,
+		NamespaceCapabilityReadLogs, NamespaceCapabilityReadFS, NamespaceCapabilityAllocExec,
+		NamespaceCapabilityAllocNodeExec, NamespaceCapabilityAllocLifecycle,
+		NamespaceCapabilityCSIRegisterPlugin, NamespaceCapabilityCSIWriteVolume,
+		NamespaceCapabilityCSIReadVolume, NamespaceCapabilityCSIListVolume,
+		NamespaceCapabilityCSIMountVolume, NamespaceCapabilityHostVolumeCreate,
+		NamespaceCapabilityHostVolumeRegister, NamespaceCapabilityHostVolumeRead,
+		NamespaceCapabilityHostVolumeWrite, NamespaceCapabilityHostVolumeDelete,
+		NamespaceCapabilityListScalingPolicies, NamespaceCapabilityReadScalingPolicy,
+		NamespaceCapabilityReadJobScaling, NamespaceCapabilityScaleJob,
+		NamespaceCapabilityRegisterJob, NamespaceCapabilityRevertJob,
+		NamespaceCapabilityDeregisterJob, NamespaceCapabilityPurgeJob,
+		NamespaceCapabilityEvaluateJob, NamespaceCapabilityPlanJob,
+		NamespaceCapabilityTagJobVersion, NamespaceCapabilityStableJob,
+		NamespaceCapabilityFailDeployment, NamespaceCapabilityPauseDeployment,
+		NamespaceCapabilityPromoteDeployment, NamespaceCapabilityUnblockDeployment,
+		NamespaceCapabilityCancelDeployment, NamespaceCapabilitySetAllocHealthDeployment,
+		NamespaceCapabilityGCAllocation, NamespaceCapabilityPauseAllocation,
+		NamespaceCapabilityForcePeriodicJob, NamespaceCapabilityDeleteServiceRegistration:
 		return true
 	// Separate the enterprise-only capabilities
 	case NamespaceCapabilitySentinelOverride, NamespaceCapabilitySubmitRecommendation:

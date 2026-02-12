@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2015, 2025
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
@@ -232,15 +232,6 @@ func (s *CSISecrets) String() string {
 
 func (s *CSISecrets) GoString() string {
 	return s.String()
-}
-
-// Sanitize returns a copy of the CSISecrets with sensitive data redacted
-func (s *CSISecrets) Sanitize() *CSISecrets {
-	redacted := CSISecrets{}
-	for k := range *s {
-		redacted[k] = "[REDACTED]"
-	}
-	return &redacted
 }
 
 type CSIVolumeClaim struct {
