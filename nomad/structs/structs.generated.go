@@ -85889,9 +85889,9 @@ func (x *JobEvent) CodecEncodeSelf(e *codec1978.Encoder) {
 			_, _ = yysep2, yy2arr2
 			const yyr2 bool = false // struct tag has 'toArray'
 			if yyr2 || yy2arr2 {
-				r.WriteArrayStart(1)
+				r.WriteArrayStart(2)
 			} else {
-				r.WriteMapStart(1)
+				r.WriteMapStart(2)
 			}
 			var yyn3 bool
 			if x.Job == nil {
@@ -85927,6 +85927,25 @@ func (x *JobEvent) CodecEncodeSelf(e *codec1978.Encoder) {
 					} else {
 						x.Job.CodecEncodeSelf(e)
 					}
+				}
+			}
+			if yyr2 || yy2arr2 {
+				r.WriteArrayElem()
+				if false {
+				} else {
+					r.EncodeBool(bool(x.Deleted))
+				}
+			} else {
+				r.WriteMapElemKey()
+				if z.IsJSONHandle() {
+					z.WriteStr("\"Deleted\"")
+				} else {
+					r.EncodeStringEnc(codecSelferCcUTF8100, `Deleted`)
+				}
+				r.WriteMapElemValue()
+				if false {
+				} else {
+					r.EncodeBool(bool(x.Deleted))
 				}
 			}
 			if yyr2 || yy2arr2 {
@@ -85998,6 +86017,12 @@ func (x *JobEvent) codecDecodeSelfFromMap(l int, d *codec1978.Decoder) {
 
 				x.Job.CodecDecodeSelf(d)
 			}
+		case "Deleted":
+			if r.TryDecodeAsNil() {
+				x.Deleted = false
+			} else {
+				x.Deleted = (bool)(r.DecodeBool())
+			}
 		default:
 			z.DecStructFieldNotFound(-1, yys3)
 		} // end switch yys3
@@ -86009,16 +86034,16 @@ func (x *JobEvent) codecDecodeSelfFromArray(l int, d *codec1978.Decoder) {
 	var h codecSelfer100
 	z, r := codec1978.GenHelperDecoder(d)
 	_, _, _ = h, z, r
-	var yyj5 int
-	var yyb5 bool
-	var yyhl5 bool = l >= 0
-	yyj5++
-	if yyhl5 {
-		yyb5 = yyj5 > l
+	var yyj6 int
+	var yyb6 bool
+	var yyhl6 bool = l >= 0
+	yyj6++
+	if yyhl6 {
+		yyb6 = yyj6 > l
 	} else {
-		yyb5 = r.CheckBreak()
+		yyb6 = r.CheckBreak()
 	}
-	if yyb5 {
+	if yyb6 {
 		r.ReadArrayEnd()
 		return
 	}
@@ -86034,18 +86059,34 @@ func (x *JobEvent) codecDecodeSelfFromArray(l int, d *codec1978.Decoder) {
 
 		x.Job.CodecDecodeSelf(d)
 	}
+	yyj6++
+	if yyhl6 {
+		yyb6 = yyj6 > l
+	} else {
+		yyb6 = r.CheckBreak()
+	}
+	if yyb6 {
+		r.ReadArrayEnd()
+		return
+	}
+	r.ReadArrayElem()
+	if r.TryDecodeAsNil() {
+		x.Deleted = false
+	} else {
+		x.Deleted = (bool)(r.DecodeBool())
+	}
 	for {
-		yyj5++
-		if yyhl5 {
-			yyb5 = yyj5 > l
+		yyj6++
+		if yyhl6 {
+			yyb6 = yyj6 > l
 		} else {
-			yyb5 = r.CheckBreak()
+			yyb6 = r.CheckBreak()
 		}
-		if yyb5 {
+		if yyb6 {
 			break
 		}
 		r.ReadArrayElem()
-		z.DecStructFieldNotFound(yyj5-1, "")
+		z.DecStructFieldNotFound(yyj6-1, "")
 	}
 	r.ReadArrayEnd()
 }

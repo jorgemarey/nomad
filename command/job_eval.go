@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/hashicorp/nomad/api"
-	"github.com/hashicorp/nomad/api/contexts"
 	"github.com/posener/complete"
 )
 
@@ -67,18 +66,7 @@ func (c *JobEvalCommand) AutocompleteFlags() complete.Flags {
 }
 
 func (c *JobEvalCommand) AutocompleteArgs() complete.Predictor {
-	return complete.PredictFunc(func(a complete.Args) []string {
-		client, err := c.Meta.Client()
-		if err != nil {
-			return nil
-		}
-
-		resp, _, err := client.Search().PrefixSearch(a.Last, contexts.Jobs, nil)
-		if err != nil {
-			return []string{}
-		}
-		return resp.Matches[contexts.Jobs]
-	})
+	return JobPredictor(c.Meta.Client)
 }
 
 func (c *JobEvalCommand) Name() string { return "job eval" }
@@ -119,7 +107,7 @@ func (c *JobEvalCommand) Run(args []string) int {
 
 	// Check if the job exists
 	jobIDPrefix := strings.TrimSpace(args[0])
-	jobID, namespace, err := c.JobIDByPrefix(client, jobIDPrefix, nil)
+	jobID, namespace, err := c.JobIDByPrefix(client, jobIDPrefix, "")
 	if err != nil {
 		c.Ui.Error(err.Error())
 		return 1

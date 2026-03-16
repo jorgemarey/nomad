@@ -381,7 +381,15 @@ var basicConfig = &Config{
 			Active:   true,
 			Config: map[string]string{
 				"region":     "us-east-1",
-				"kms_key_id": "alias/kms-nomad-keyring",
+				"kms_key_id": "alias/kms-nomad-keyring-us",
+			},
+		},
+		{
+			Provider: "awskms",
+			Active:   true,
+			Config: map[string]string{
+				"region":     "eu-west-2",
+				"kms_key_id": "alias/kms-nomad-keyring-eu",
 			},
 		},
 	},
@@ -1285,4 +1293,21 @@ func TestConfig_Fingerprint(t *testing.T) {
 			must.Nil(t, doConfig.ExitOnFailure)
 		})
 	}
+}
+
+func TestConfig_ParseConsulEnv(t *testing.T) {
+	t.Setenv("CONSUL_HTTP_TOKEN_other", "other-consul-cluster-token")
+	cfg := DefaultConfig()
+	fc, err := LoadConfig("testdata/extra-consul.hcl")
+	must.NoError(t, err)
+	cfg = cfg.Merge(fc)
+
+	found := false
+	for _, cc := range cfg.Consuls {
+		if cc.Name == "other" {
+			must.Eq(t, cc.Token, "other-consul-cluster-token")
+			found = true
+		}
+	}
+	must.True(t, found)
 }

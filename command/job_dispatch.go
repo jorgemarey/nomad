@@ -4,6 +4,7 @@
 package command
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -83,11 +84,13 @@ func (c *JobDispatchCommand) Synopsis() string {
 func (c *JobDispatchCommand) AutocompleteFlags() complete.Flags {
 	return mergeAutocompleteFlags(c.Meta.AutocompleteFlags(FlagSetClient),
 		complete.Flags{
-			"-meta":              complete.PredictAnything,
-			"-detach":            complete.PredictNothing,
-			"-idempotency-token": complete.PredictAnything,
-			"-verbose":           complete.PredictNothing,
-			"-ui":                complete.PredictNothing,
+			"-meta":               complete.PredictAnything,
+			"-detach":             complete.PredictNothing,
+			"-idempotency-token":  complete.PredictAnything,
+			"-verbose":            complete.PredictNothing,
+			"-ui":                 complete.PredictNothing,
+			"-id-prefix-template": complete.PredictAnything,
+			"-priority":           complete.PredictAnything,
 		})
 }
 
@@ -187,12 +190,14 @@ func (c *JobDispatchCommand) Run(args []string) int {
 		return 1
 	}
 
-	// Check if the job exists
 	jobIDPrefix := strings.TrimSpace(args[0])
-	jobID, namespace, err := c.JobIDByPrefix(client, jobIDPrefix, func(j *api.JobListStub) bool {
-		return j.ParameterizedJob
-	})
+	jobID, namespace, err := c.JobIDByPrefix(client, jobIDPrefix,
+		`ParentID == "" and ParameterizedJob is not nil`)
 	if err != nil {
+		var noPrefixErr *NoJobWithPrefixError
+		if errors.As(err, &noPrefixErr) {
+			err = fmt.Errorf("No parameterized job(s) with prefix or ID %q found", jobIDPrefix)
+		}
 		c.Ui.Error(err.Error())
 		return 1
 	}

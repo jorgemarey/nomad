@@ -216,6 +216,7 @@ func DefaultConsulConfig() *ConsulConfig {
 		VerifySSL: pointer.Of(!def.TLSConfig.InsecureSkipVerify),
 		CAFile:    def.TLSConfig.CAFile,
 		Namespace: def.Namespace,
+		Token:     def.Token,
 	}
 }
 

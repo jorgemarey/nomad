@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -204,8 +205,16 @@ func ParseConfigFile(path string) (*Config, error) {
 		},
 	}
 
-	// Parse durations for Consul and Vault config blocks if provided.
+	// Parse durations and env tokens for Consul config blocks if provided
 	for _, consulConfig := range c.Consuls {
+
+		if consulConfig.Token == "" {
+			// The default consul config looks for "CONSUL_HTTP_TOKEN". Here we allow for cluster
+			// specific tokens by looking for a consul token env with the cluster name as a suffix.
+			if token := os.Getenv(fmt.Sprintf("CONSUL_HTTP_TOKEN_%s", consulConfig.Name)); token != "" {
+				consulConfig.Token = token
+			}
+		}
 
 		if consulConfig.ServiceIdentity != nil {
 			tds = append(tds, durationConversionMap{
@@ -226,6 +235,7 @@ func ParseConfigFile(path string) (*Config, error) {
 		}
 	}
 
+	// Parse durations for Vault config blocks if provided.
 	for _, vaultConfig := range c.Vaults {
 
 		if vaultConfig.DefaultIdentity != nil {
@@ -367,7 +377,11 @@ func extraKeys(c *Config) error {
 		helper.RemoveEqualFold(&c.ExtraKeysHCL, "telemetry")
 	}
 
-	helper.RemoveEqualFold(&c.ExtraKeysHCL, "keyring")
+	// The `keyring` blocks are parsed separately from the Decode method, as we
+	// support multiple entries. The decoder will put the "keyring" key in the
+	// ExtraKeysHCL slice, so we need to remove it here.
+	c.ExtraKeysHCL = slices.DeleteFunc(c.ExtraKeysHCL, func(s string) bool { return strings.EqualFold(s, "keyring") })
+
 	for _, provider := range c.KEKProviders {
 		helper.RemoveEqualFold(&c.ExtraKeysHCL, provider.Provider.String())
 	}
@@ -379,6 +393,12 @@ func extraKeys(c *Config) error {
 	// will incorrectly report them as extra keys, of which there may be multiple
 	c.ExtraKeysHCL = slices.DeleteFunc(c.ExtraKeysHCL, func(s string) bool { return s == "vault" })
 	c.ExtraKeysHCL = slices.DeleteFunc(c.ExtraKeysHCL, func(s string) bool { return s == "consul" })
+
+	// When using JSON object format (vs array format) for consul/vault blocks,
+	// HCL1 also leaks the sub-block keys to the top-level ExtraKeysHCL.
+	for _, k := range []string{"service_identity", "task_identity", "default_identity"} {
+		helper.RemoveEqualFold(&c.ExtraKeysHCL, k)
+	}
 
 	// The fingerprinter labels will be added to the ExtraKeysHCL slice by
 	// hcl.Decode, so we need to remove them here.

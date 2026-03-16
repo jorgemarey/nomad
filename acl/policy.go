@@ -132,6 +132,28 @@ const (
 	VariablesCapabilityDeny    = "deny"
 )
 
+const (
+	// The following are the fine-grained capabilities that can be granted for
+	// operator-level operations. Deny takes precedence and overwrites all other
+	// capabilities.
+	OperatorCapabilityDeny          = "deny"
+	OperatorCapabilitySnapshotSave  = "snapshot-save"
+	OperatorCapabilityLicenseRead   = "license-read"
+	OperatorCapabilityKeyringRotate = "keyring-rotate"
+	OperatorCapabilityKeyringRead   = "keyring-read"
+	OperatorCapabilityKeyringDelete = "keyring-delete"
+)
+
+const (
+	// The following are the fine-grained capabilities that can be granted for
+	// Sentinel CRUD operations. Deny takes precedence and overwrites all other
+	// capabilities.
+	SentinelCapabilityDeny   = "deny"
+	SentinelCapabilityRead   = "sentinel-read"
+	SentinelCapabilitySubmit = "sentinel-submit"
+	SentinelCapabilityDelete = "sentinel-delete"
+)
+
 // Policy represents a parsed HCL or JSON policy.
 type Policy struct {
 	Namespaces  []*NamespacePolicy  `hcl:"namespace,expand"`
@@ -140,6 +162,7 @@ type Policy struct {
 	Agent       *AgentPolicy        `hcl:"agent"`
 	Node        *NodePolicy         `hcl:"node"`
 	Operator    *OperatorPolicy     `hcl:"operator"`
+	Sentinel    *SentinelPolicy     `hcl:"sentinel"`
 	Quota       *QuotaPolicy        `hcl:"quota"`
 	Plugin      *PluginPolicy       `hcl:"plugin"`
 	Raw         string              `hcl:"-"`
@@ -165,6 +188,7 @@ func (p *Policy) IsEmpty() bool {
 		p.Agent == nil &&
 		p.Node == nil &&
 		p.Operator == nil &&
+		p.Sentinel == nil &&
 		p.Quota == nil &&
 		p.Plugin == nil
 }
@@ -217,7 +241,13 @@ type NodePolicy struct {
 }
 
 type OperatorPolicy struct {
-	Policy string
+	Policy       string
+	Capabilities []string
+}
+
+type SentinelPolicy struct {
+	Policy       string
+	Capabilities []string
 }
 
 type QuotaPolicy struct {
@@ -380,6 +410,29 @@ func isNodePoolCapabilityValid(cap string) bool {
 	}
 }
 
+// isOperatorCapabilityValid ensures the given capability is valid for an operator policy
+func isOperatorCapabilityValid(cap string) bool {
+	switch cap {
+	case OperatorCapabilityDeny, OperatorCapabilitySnapshotSave, OperatorCapabilityKeyringRotate,
+		OperatorCapabilityKeyringRead, OperatorCapabilityKeyringDelete,
+		OperatorCapabilityLicenseRead:
+		return true
+	default:
+		return false
+	}
+}
+
+// isSentinelCapabilityValid ensures the given capability is valid for a sentinel policy
+func isSentinelCapabilityValid(cap string) bool {
+	switch cap {
+	case SentinelCapabilityDeny, SentinelCapabilityRead,
+		SentinelCapabilitySubmit, SentinelCapabilityDelete:
+		return true
+	default:
+		return false
+	}
+}
+
 func expandNodePoolPolicy(policy string) []string {
 	switch policy {
 	case PolicyDeny:
@@ -392,6 +445,39 @@ func expandNodePoolPolicy(policy string) []string {
 			NodePoolCapabilityRead,
 			NodePoolCapabilityWrite,
 		}
+	default:
+		return nil
+	}
+}
+
+// expandOperatorPolicy provides the equivalent set of capabilities for
+// an operator policy
+func expandOperatorPolicy(policy string) []string {
+	switch policy {
+	case PolicyDeny:
+		return []string{OperatorCapabilityDeny}
+	case PolicyRead:
+		return []string{OperatorCapabilityLicenseRead, OperatorCapabilityKeyringRead}
+	case PolicyWrite:
+		return []string{
+			OperatorCapabilitySnapshotSave, OperatorCapabilityLicenseRead,
+			OperatorCapabilityKeyringRotate, OperatorCapabilityKeyringRead,
+			OperatorCapabilityKeyringDelete}
+	default:
+		return nil
+	}
+}
+
+// expandSentinelPolicy provides the equivalent set of capabilities for
+// a sentinel policy
+func expandSentinelPolicy(policy string) []string {
+	switch policy {
+	case PolicyDeny:
+		return []string{SentinelCapabilityDeny}
+	case PolicyRead:
+		return []string{SentinelCapabilityRead}
+	case PolicyWrite:
+		return []string{SentinelCapabilityRead, SentinelCapabilitySubmit, SentinelCapabilityDelete}
 	default:
 		return nil
 	}
@@ -597,8 +683,40 @@ func Parse(rules string, strict bool) (*Policy, error) {
 		return nil, fmt.Errorf("Invalid node policy: %#v", p.Node)
 	}
 
-	if p.Operator != nil && !isPolicyValid(p.Operator.Policy) {
-		return nil, fmt.Errorf("Invalid operator policy: %#v", p.Operator)
+	if p.Operator != nil {
+		if p.Operator.Policy != "" && !isPolicyValid(p.Operator.Policy) {
+			return nil, fmt.Errorf("Invalid operator policy: %#v", p.Operator)
+		}
+		for _, cap := range p.Operator.Capabilities {
+			if !isOperatorCapabilityValid(cap) {
+				return nil, fmt.Errorf("Invalid operator capability '%s'", cap)
+			}
+		}
+
+		// Expand the short hand policy to the capabilities and
+		// add to any existing capabilities
+		if p.Operator.Policy != "" {
+			extraCap := expandOperatorPolicy(p.Operator.Policy)
+			p.Operator.Capabilities = append(p.Operator.Capabilities, extraCap...)
+		}
+	}
+
+	if p.Sentinel != nil {
+		if p.Sentinel.Policy != "" && !isPolicyValid(p.Sentinel.Policy) {
+			return nil, fmt.Errorf("Invalid sentinel policy: %#v", p.Sentinel)
+		}
+		for _, cap := range p.Sentinel.Capabilities {
+			if !isSentinelCapabilityValid(cap) {
+				return nil, fmt.Errorf("Invalid sentinel capability '%s'", cap)
+			}
+		}
+
+		// Expand the short hand policy to the capabilities and
+		// add to any existing capabilities
+		if p.Sentinel.Policy != "" {
+			extraCap := expandSentinelPolicy(p.Sentinel.Policy)
+			p.Sentinel.Capabilities = append(p.Sentinel.Capabilities, extraCap...)
+		}
 	}
 
 	if p.Quota != nil && !isPolicyValid(p.Quota.Policy) {
