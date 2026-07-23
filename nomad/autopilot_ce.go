@@ -8,19 +8,22 @@ package nomad
 
 import (
 	autopilot "github.com/hashicorp/raft-autopilot"
+	improvedAutopilot "github.com/jorgemarey/autopilot"
 
 	"github.com/hashicorp/nomad/nomad/peers"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
 func (s *Server) autopilotPromoter() autopilot.Promoter {
-	return autopilot.DefaultPromoter()
+	return improvedAutopilot.New(improvedAutopilot.WithLogger(s.logger))
 }
 
 // autopilotServerExt returns the autopilot-enterprise.Server extensions needed
 // for ENT feature support, but this is the empty OSS implementation.
-func (s *Server) autopilotServerExt(_ *peers.Parts) interface{} {
-	return nil
+func (s *Server) autopilotServerExt(parts *peers.Parts) interface{} {
+	return improvedAutopilot.ExtraServerInfo{
+		NonVoter: parts.NonVoter,
+	}
 }
 
 func (s *Server) autopilotStateExt(_ *autopilot.State, _ *structs.OperatorHealthReply) error {
@@ -29,6 +32,10 @@ func (s *Server) autopilotStateExt(_ *autopilot.State, _ *structs.OperatorHealth
 
 // autopilotConfigExt returns the autopilot-enterprise.Config extensions needed
 // for ENT feature support, but this is the empty OSS implementation.
-func autopilotConfigExt(_ *structs.AutopilotConfig) interface{} {
-	return nil
+func autopilotConfigExt(c *structs.AutopilotConfig) interface{} {
+	return improvedAutopilot.ExtraConfig{
+		RedundancyZoneTag:       AutopilotRZTag,
+		UpgradeVersionTag:       AutopilotVersionTag,
+		DisableUpgradeMigration: c.DisableUpgradeMigration,
+	}
 }

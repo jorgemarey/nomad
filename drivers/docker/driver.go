@@ -342,6 +342,14 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 
 	driverConfig.Image = strings.TrimPrefix(driverConfig.Image, "https://")
 
+	if driverConfig.LoadImage == "" {
+		image, err := applyDefaultRegistry(driverConfig.Image, d.config.DefaultRegistry)
+		if err != nil {
+			d.logger.Warn("failed to apply default registry", "image", driverConfig.Image, "error", err)
+		} else {
+			driverConfig.Image = image
+		}
+	}
 	driverConfig.ImagePullTimeout = getValue(driverConfig.ImagePullTimeout, d.config.ImagePullTimeout)
 
 	handle := drivers.NewTaskHandle(taskHandleVersion)
@@ -1235,11 +1243,19 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		})
 	}
 
+	var hasHostsMount bool
+	for _, b := range binds {
+		hasHostsMount = strings.Contains(b, ":/etc/hosts") || hasHostsMount
+	}
+
 	// Setup mounts
 	for _, m := range driverConfig.Mounts {
 		hm, err := d.toDockerMount(&m, task)
 		if err != nil {
 			return c, err
+		}
+		if hm.Target == "/etc/hosts" {
+			hasHostsMount = true
 		}
 		hostConfig.Mounts = append(hostConfig.Mounts, *hm)
 	}
@@ -1247,6 +1263,9 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 		hm, err := d.toDockerMount(&m, task)
 		if err != nil {
 			return c, err
+		}
+		if hm.Target == "/etc/hosts" {
+			hasHostsMount = true
 		}
 		hostConfig.Mounts = append(hostConfig.Mounts, *hm)
 	}
@@ -1256,7 +1275,7 @@ func (d *Driver) createContainerConfig(task *drivers.TaskConfig, driverConfig *T
 	// the Nomad-owned network (if in use), so we need to generate an
 	// /etc/hosts file that matches the network rather than the default one
 	// that comes from the pause container
-	if task.NetworkIsolation != nil && driverConfig.NetworkMode == "" {
+	if !hasHostsMount && task.NetworkIsolation != nil && driverConfig.NetworkMode == "" {
 		etcHostMount, err := hostnames.GenerateEtcHostsMount(
 			task.AllocDir, task.NetworkIsolation, driverConfig.ExtraHosts)
 		if err != nil {

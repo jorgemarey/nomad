@@ -7,7 +7,7 @@
 package nomad
 
 import (
-	"errors"
+	"fmt"
 
 	"github.com/hashicorp/nomad/nomad/structs"
 )
@@ -59,14 +59,29 @@ func (h jobConsulHook) Validate(job *structs.Job) ([]error, error) {
 }
 
 func (h jobConsulHook) validateCluster(name string) error {
-	if name != structs.ConsulDefaultCluster {
-		return errors.New("non-default Consul cluster requires Nomad Enterprise")
+	// TODO: here we should also check namespace configuration
+	// example  (j jobNodePoolValidatingHook) enterpriseValidation
+
+	config := h.srv.config.ConsulConfigs[name]
+	if config == nil {
+		return fmt.Errorf("consul cluster %s not found", name)
 	}
 	return nil
 }
 
 // Mutate ensures that the job's Consul cluster has been configured to be the
 // default Consul cluster if unset
-func (h jobConsulHook) Mutate(job *structs.Job) (*structs.Job, []error, error) {
-	return h.mutateImpl(job, structs.ConsulDefaultCluster), nil, nil
+func (j jobConsulHook) Mutate(job *structs.Job) (*structs.Job, []error, error) {
+	defaultCluster := structs.ConsulDefaultCluster
+	ns, err := j.srv.State().NamespaceByName(nil, job.Namespace)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ns == nil {
+		return nil, nil, fmt.Errorf("namespace %s not found", job.Namespace)
+	}
+	if ns.ConsulConfiguration != nil && ns.ConsulConfiguration.Default != "" {
+		defaultCluster = ns.ConsulConfiguration.Default
+	}
+	return j.mutateImpl(job, defaultCluster), nil, nil
 }

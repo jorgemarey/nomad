@@ -16,12 +16,45 @@ import (
 type EnterpriseAgent struct{}
 
 func (a *Agent) setupEnterpriseAgent(log hclog.Logger) error {
-	// configure eventer
-	a.auditor = &noOpAuditor{}
+	eventer, err := newEventerAuditor(a.config.Audit, log)
+	if err != nil {
+		return err
+	}
+	a.auditor = eventer
 
 	return nil
 }
 
+// currently this doesn't work unless we change the logLevel or something like that.
+// See Agent.ShouldReload method
 func (a *Agent) entReloadEventer(cfg *config.AuditConfig) error {
+	var previous bool
+	if enabled := a.config.Audit.Enabled; enabled != nil {
+		previous = *enabled
+	}
+
+	var current bool
+	if enabled := cfg.Enabled; enabled != nil {
+		current = *enabled
+	}
+
+	auditor := a.auditor.(*eventerAuditor)
+	if previous != current {
+		if current {
+			if err := auditor.configureBroker(cfg); err != nil {
+				return err
+			}
+		}
+		auditor.SetEnabled(current)
+	}
+	// both are equal, only do somthing if enabled
+	// TODO: check deepequal to not change if nothing changes?
+	if current {
+		auditor.SetEnabled(false)
+		if err := auditor.configureBroker(cfg); err != nil {
+			return err
+		}
+		auditor.SetEnabled(true)
+	}
 	return nil
 }

@@ -710,10 +710,13 @@ func (s *Service) Canonicalize(job, taskGroup, task, jobNamespace string) {
 	}
 
 	s.Name = args.ReplaceEnv(s.Name, map[string]string{
-		"JOB":       job,
-		"TASKGROUP": taskGroup,
-		"TASK":      task,
-		"BASE":      fmt.Sprintf("%s-%s-%s", job, taskGroup, task),
+		"JOB":              job,
+		"NOMAD_JOB_NAME":   job,
+		"TASKGROUP":        taskGroup,
+		"NOMAD_GROUP_NAME": taskGroup,
+		"TASK":             task,
+		"NOMAD_TASK_NAME":  task,
+		"BASE":             fmt.Sprintf("%s-%s-%s", job, taskGroup, task),
 	})
 
 	for _, check := range s.Checks {
@@ -2545,7 +2548,8 @@ func (e *ConsulIngressConfigEntry) Validate() error {
 	}
 
 	if len(e.Listeners) == 0 {
-		return fmt.Errorf("Consul Ingress Gateway requires at least one listener")
+		return nil
+		// return fmt.Errorf("Consul Ingress Gateway requires at least one listener")
 	}
 
 	for _, listener := range e.Listeners {
@@ -2673,7 +2677,8 @@ func (e *ConsulTerminatingConfigEntry) Validate() error {
 	}
 
 	if len(e.Services) == 0 {
-		return fmt.Errorf("Consul Terminating Gateway requires at least one service")
+		return nil
+		// return fmt.Errorf("Consul Terminating Gateway requires at least one service")
 	}
 
 	for _, service := range e.Services {

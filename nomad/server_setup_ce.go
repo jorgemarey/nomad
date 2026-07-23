@@ -7,9 +7,12 @@ package nomad
 
 import (
 	autopilot "github.com/hashicorp/raft-autopilot"
+	"github.com/jorgemarey/sentinel"
 )
 
-type EnterpriseState struct{}
+type EnterpriseState struct {
+	sentinel *sentinel.Sentinel
+}
 
 func (es *EnterpriseState) Features() uint64 {
 	return 0
@@ -32,6 +35,7 @@ func (s *Server) setupEnterprise(config *Config) error {
 		autopilot.WithPromoter(s.autopilotPromoter()),
 	)
 
+	s.sentinel = sentinel.New(nil)
 	return nil
 }
 func (s *Server) startEnterpriseBackground() {}

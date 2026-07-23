@@ -4,6 +4,7 @@
 package nomad
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -1123,6 +1124,18 @@ func (n *nomadFSM) applyReconcileSummaries(buf []byte, index uint64) interface{}
 
 // applyUpsertNodeEvent tracks the given node events.
 func (n *nomadFSM) applyUpsertNodeEvent(msgType structs.MessageType, buf []byte, index uint64) interface{} {
+	// We do this here because previously we had the MessageType ID for this on the request
+	// corresponding to applyNamespaceDelete. So here we use a struct that has a field that fails if this
+	// is corresponding to a previous request. In that case it gets forwarded.
+	// TODO: we should try to remove this as soon as posible
+	// BEGIN
+	var caseReq struct{ Namespaces bool }
+	if err := structs.Decode(buf, &caseReq); err != nil {
+		// if decode fails this is an old request that must be forwarded to applyNamespace
+		n.logger.Warn("applyUpsertNodeEvent decode failed, this is a legacy request")
+		return n.applyNamespaceDelete(buf, index)
+	}
+	// END
 	defer metrics.MeasureSince([]string{"nomad", "fsm", "upsert_node_events"}, time.Now())
 	var req structs.EmitNodeEventsRequest
 	if err := structs.Decode(buf, &req); err != nil {
@@ -1377,6 +1390,15 @@ func (n *nomadFSM) applyOneTimeTokenExpire(msgType structs.MessageType, buf []by
 }
 
 func (n *nomadFSM) applyAutopilotUpdate(buf []byte, index uint64) interface{} {
+	// We do this here because previously we had the MessageType ID for this on the request
+	// corresponding to applyNamespaceDelete. So here we use a struct that has a field that fails if this
+	// is corresponding to a previous request. In that case it gets forwarded.
+	var caseReq struct{ Namespaces bool }
+	if err := structs.Decode(buf, &caseReq); err != nil {
+		// if decode fails this is an old request that must be forwarded to applyNamespace
+		n.logger.Warn("applyAutopilotUpdate decode failed, this is a legacy request")
+		return n.applyNamespaceUpsert(buf, index)
+	}
 	var req structs.AutopilotSetConfigRequest
 	if err := structs.Decode(buf, &req); err != nil {
 		panic(fmt.Errorf("failed to decode request: %v", err))
@@ -1497,7 +1519,13 @@ func (n *nomadFSM) applyNamespaceUpsert(buf []byte, index uint64) interface{} {
 	defer metrics.MeasureSince([]string{"nomad", "fsm", "apply_namespace_upsert"}, time.Now())
 	var req structs.NamespaceUpsertRequest
 	if err := structs.Decode(buf, &req); err != nil {
-		panic(fmt.Errorf("failed to decode request: %v", err))
+		n.logger.Error("failed to decode V1 request", "error", err)
+		// Try to decode with previous configuration
+		var oldReq structs.NamespaceUpsertRequestv0
+		if err := structs.Decode(buf, &oldReq); err != nil {
+			panic(fmt.Errorf("failed to decode request: %v", err))
+		}
+		req.Namespaces = []*structs.Namespace{oldReq.Namespace}
 	}
 
 	var trigger []string
@@ -1771,6 +1799,22 @@ func (n *nomadFSM) restoreImpl(old io.ReadCloser, filter *FSMFilter) error {
 			}
 
 		case SchedulerConfigSnapshot:
+			// MEIGAS: here we could receive a NamespaceSnapshot because previously it had that SnapshotType
+			var buf bytes.Buffer
+			tee := io.TeeReader(old, &buf)
+			dec.Reset(tee)
+			var caseReq struct{ Name bool }
+			if err := dec.Decode(&caseReq); err != nil {
+				// if decode fails this is an old request that must be forwarded to restoreNamespace
+				n.logger.Warn("SchedulerConfigSnapshot decode failed, using namespaceRestore, this is a legacy request")
+				dec.Reset(io.MultiReader(&buf, old))
+				if err := restoreNamespace(restore, dec); err != nil {
+					return err
+				}
+				continue
+			}
+			// If the previous does not fail, we reset the buffer.
+			dec.Reset(io.MultiReader(&buf, old))
 			schedConfig := new(structs.SchedulerConfiguration)
 			if err := dec.Decode(schedConfig); err != nil {
 				return err
@@ -1779,6 +1823,8 @@ func (n *nomadFSM) restoreImpl(old io.ReadCloser, filter *FSMFilter) error {
 			if err := restore.SchedulerConfigRestore(schedConfig); err != nil {
 				return err
 			}
+			// Use the previous reader
+			dec.Reset(old)
 
 		case ClusterMetadataSnapshot:
 			meta := new(structs.ClusterMetadata)
@@ -3395,6 +3441,15 @@ func (s SnapshotType) String() string {
 		return v
 	}
 	return fmt.Sprintf("Unknown(%d)", s)
+}
+
+// restoreNamespace is used to restore a namespace snapshot
+func restoreNamespace(restore *state.StateRestore, dec *codec.Decoder) error {
+	namespace := new(structs.Namespace)
+	if err := dec.Decode(namespace); err != nil {
+		return err
+	}
+	return restore.NamespaceRestore(namespace)
 }
 
 // TimeTableEntry was used to track a time and index, but has been removed. We

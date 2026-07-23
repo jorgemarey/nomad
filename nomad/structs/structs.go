@@ -137,12 +137,21 @@ const (
 
 	// NOTE: MessageTypes are shared between CE and ENT. If you need to add a
 	// new type, check that ENT is not already using that value.
+	// MEIGAS: When we made the initial code we set them (namespace request types) at 24 and 25
 	//
 	// NOTE: Adding a new MessageType above? You need to have a version check
 	// for the feature to avoid panics during upgrades.
 )
 
 const (
+	SentinelPolicyUpsertRequestType MessageType = 66
+	SentinelPolicyDeleteRequestType MessageType = 67
+	// Quota1                              // 68
+	// Quota2                              // 69
+	// ??                                  // 70
+	// ??                                  // 71
+	// ??                                  // 72
+	// nomad_nomad_fsm_apply_tmp_license_meta_upsert -> this is a new fsm operation
 
 	// SystemInitializationType is used for messages that initialize parts of
 	// the system, such as the state store. These messages are not included in
@@ -5106,6 +5115,28 @@ func (j *Job) IsMultiregion() bool {
 	return j.Multiregion != nil && j.Multiregion.Regions != nil && len(j.Multiregion.Regions) > 0
 }
 
+func (j *Job) IsMultiregionStarter() bool {
+	if !j.IsMultiregion() {
+		return true
+	}
+	if j.Type == "system" || j.Type == "batch" {
+		return true
+	}
+	if j.Multiregion.Strategy == nil || j.Multiregion.Strategy.MaxParallel == 0 {
+		return true
+	}
+	for i, region := range j.Multiregion.Regions {
+		if j.Region == region.Name {
+			if i < j.Multiregion.Strategy.MaxParallel {
+				return true
+			} else {
+				break
+			}
+		}
+	}
+	return false
+}
+
 // IsPlugin returns whether a job implements a plugin (currently just CSI)
 func (j *Job) IsPlugin() bool {
 	for _, tg := range j.TaskGroups {
@@ -5858,6 +5889,13 @@ type NamespaceDeleteRequest struct {
 // NamespaceUpsertRequest is used to upsert a set of namespaces
 type NamespaceUpsertRequest struct {
 	Namespaces []*Namespace
+	WriteRequest
+}
+
+// NamespaceUpsertRequestv0 is used to upsert a set of namespaces
+// Here only for backcompat
+type NamespaceUpsertRequestv0 struct {
+	Namespace *Namespace
 	WriteRequest
 }
 

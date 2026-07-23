@@ -5,7 +5,7 @@
 LINUX_BASE_BOX = "bento/ubuntu-18.04"
 FREEBSD_BASE_BOX = "freebsd/FreeBSD-11.3-STABLE"
 
-LINUX_IP_ADDRESS = "192.168.56.200"
+LINUX_IP_ADDRESS = "10.199.0.200"
 
 Vagrant.configure(2) do |config|
 	# Compilation and development boxes
@@ -52,9 +52,9 @@ Vagrant.configure(2) do |config|
 		vmCfg.vm.network :forwarded_port, guest: 4646, host: 4646, auto_correct: true
 		vmCfg.vm.network :forwarded_port, guest: 8500, host: 8500, auto_correct: true
 
-		# Expose Ember ports to the host (one for the site, one for livereload)
-		vmCfg.vm.network :forwarded_port, guest: 4201, host: 4201, auto_correct: true
-		vmCfg.vm.network :forwarded_port, guest: 49153, host: 49153, auto_correct: true
+        # Expose Ember ports to the host (one for the site, one for livereload)
+        # vmCfg.vm.network :forwarded_port, guest: 4201, host: 4201, auto_correct: true
+        # vmCfg.vm.network :forwarded_port, guest: 49153, host: 49153, auto_correct: true
 	end
 
 	config.vm.define "freebsd", autostart: false, primary: false do |vmCfg|
@@ -82,8 +82,8 @@ Vagrant.configure(2) do |config|
 	1.upto(3) do |n|
 		serverName = "nomad-server%02d" % [n]
 		clientName = "nomad-client%02d" % [n]
-		serverIP = "192.168.56.%d" % [10 + n]
-		clientIP = "192.168.56.%d" % [20 + n]
+		serverIP = "10.199.0.%d" % [10 + n]
+		clientIP = "10.199.0.%d" % [20 + n]
 
 		config.vm.define serverName, autostart: false, primary: false do |vmCfg|
 			vmCfg.vm.box = LINUX_BASE_BOX

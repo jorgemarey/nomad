@@ -13,36 +13,81 @@ import (
 	multierror "github.com/hashicorp/go-multierror"
 )
 
-func (n *Namespace) Canonicalize() {}
+func (n *Namespace) Canonicalize() {
+	if n.NodePoolConfiguration == nil {
+		n.NodePoolConfiguration = &NamespaceNodePoolConfiguration{}
+	}
+	n.NodePoolConfiguration.Canonicalize()
+}
 
-func (n *NamespaceNodePoolConfiguration) Canonicalize() {}
+func (n *NamespaceNodePoolConfiguration) Canonicalize() {
+	if n == nil {
+		return
+	}
+	if n.Default == "" {
+		n.Default = NodePoolDefault
+	}
+}
 
 func (n *NamespaceNodePoolConfiguration) Validate() error {
-	if n != nil {
-		return errors.New("Node Pools Governance is unlicensed.")
+	if n == nil {
+		return nil
 	}
+
+	if n.Allowed != nil && n.Denied != nil {
+		return errors.New("only one of 'Allowed', 'Denied' can be set")
+	}
+
+	// TODO: check for allowed to be a valid string?
 	return nil
 }
 
-func (n *NamespaceVaultConfiguration) Canonicalize() {}
+func (n *NamespaceVaultConfiguration) Canonicalize() {
+	if n == nil {
+		return
+	}
+	if n.Default == "" {
+		n.Default = VaultDefaultCluster
+	}
+}
 
 func (n *NamespaceVaultConfiguration) Validate() error {
-	if n != nil {
-		return errors.New("Multi-Cluster Vault is unlicensed.")
+	if n == nil {
+		return nil
 	}
+
+	if n.Allowed != nil && n.Denied != nil {
+		return errors.New("only one of 'Allowed', 'Denied' can be set")
+	}
+
+	// TODO: check for allowed to be a valid string?
 	return nil
 }
 
-func (n *NamespaceConsulConfiguration) Canonicalize() {}
+func (n *NamespaceConsulConfiguration) Canonicalize() {
+	if n == nil {
+		return
+	}
+	if n.Default == "" {
+		n.Default = ConsulDefaultCluster
+	}
+}
 
 func (n *NamespaceConsulConfiguration) Validate() error {
-	if n != nil {
-		return errors.New("Multi-Cluster Consul is unlicensed.")
+	if n == nil {
+		return nil
 	}
+
+	if n.Allowed != nil && n.Denied != nil {
+		return errors.New("only one of 'Allowed', 'Denied' can be set")
+	}
+
+	// TODO: check for allowed to be a valid string?
 	return nil
 }
 
 func (m *Multiregion) Validate(jobType string, jobDatacenters []string) error {
+	// TODO
 	if m != nil {
 		return errors.New("Multiregion jobs are unlicensed.")
 	}

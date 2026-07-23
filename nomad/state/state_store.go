@@ -7013,7 +7013,7 @@ func (s *StateStore) Namespaces(ws memdb.WatchSet) (memdb.ResultIterator, error)
 	// Walk the entire namespace table
 	iter, err := txn.Get(TableNamespaces, "id")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("namespace lookup failed: %v", err)
 	}
 	ws.Add(iter.WatchCh())
 	return iter, nil

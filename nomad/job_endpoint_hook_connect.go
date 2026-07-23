@@ -389,6 +389,9 @@ func groupConnectHook(job *structs.Job, g *structs.TaskGroup) error {
 
 				task.Canonicalize(job, g)
 			}
+		default:
+			// MEIGAS: add replace env to group level
+			service.Name = env.ReplaceEnv(service.Name)
 		}
 	}
 

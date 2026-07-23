@@ -17,9 +17,9 @@ func (c *Config) GetVaultConfigs(logger hclog.Logger) map[string]*structsc.Vault
 		return nil
 	}
 
-	if len(c.VaultConfigs) > 1 {
-		logger.Warn("multiple Vault configurations are only supported in Nomad Enterprise")
-	}
+	// if len(c.VaultConfigs) > 1 {
+	// 	logger.Warn("multiple Vault configurations are only supported in Nomad Enterprise")
+	// }
 	return c.VaultConfigs
 }
 
@@ -30,9 +30,8 @@ func (c *Config) GetConsulConfigs(logger hclog.Logger) map[string]*structsc.Cons
 		return nil
 	}
 
-	if len(c.ConsulConfigs) > 1 {
-		logger.Warn("multiple Consul configurations are only supported in Nomad Enterprise")
-	}
-
+	// if len(c.ConsulConfigs) > 1 {
+	// 	logger.Warn("multiple Consul configurations are only supported in Nomad Enterprise")
+	// }
 	return c.ConsulConfigs
 }

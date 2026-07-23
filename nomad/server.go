@@ -1062,6 +1062,7 @@ func (s *Server) setupBootstrapHandler() error {
 				AllowStale: true,
 				Datacenter: dc,
 				Near:       "_agent",
+				Peer:       s.config.GetDefaultConsul().ServerPeerName,
 				WaitTime:   consul.DefaultQueryWaitDuration,
 			}
 			consulServices, _, err := s.consulCatalog.Service(nomadServerServiceName, consul.ServiceTagSerf, consulOpts)

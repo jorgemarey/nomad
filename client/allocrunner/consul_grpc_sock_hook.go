@@ -123,7 +123,7 @@ func (h *consulGRPCSocketHook) shouldRun() bool {
 	}
 
 	for _, s := range tg.Services {
-		if s.Connect.HasSidecar() || s.Connect.IsGateway() {
+		if s.Connect.HasSidecar() || s.Connect.IsGateway() || s.Kind == "api-gateway" {
 			return true
 		}
 	}

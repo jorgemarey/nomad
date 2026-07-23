@@ -705,6 +705,7 @@ type DriverConfig struct {
 	OOMScoreAdj                        int                `codec:"oom_score_adj"`
 	WindowsAllowInsecureContainerAdmin bool               `codec:"windows_allow_insecure_container_admin"`
 	ExtraLabels                        []string           `codec:"extra_labels"`
+	DefaultRegistry                    string             `codec:"default_registry"`
 	Logging                            LoggingConfig      `codec:"logging"`
 	AllowedModes                       AllowedModesConfig `codec:"allowed_modes"`
 
@@ -775,6 +776,13 @@ func (d *Driver) SetConfig(c *base.Config) error {
 	d.compute = c.AgentConfig.Compute()
 	d.config = &config
 	d.config.InfraImage = strings.TrimPrefix(d.config.InfraImage, "https://")
+
+	image, err := applyDefaultRegistry(d.config.InfraImage, d.config.DefaultRegistry)
+	if err != nil {
+		return fmt.Errorf("failed to apply default registry to 'infra_image': %v", err)
+	} else {
+		d.config.InfraImage = image
+	}
 
 	if len(d.config.GC.ImageDelay) > 0 {
 		dur, err := time.ParseDuration(d.config.GC.ImageDelay)

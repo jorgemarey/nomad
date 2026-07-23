@@ -53,10 +53,13 @@ PROTO_COMPARE_TAG ?= v1.0.3$(if $(findstring ent,$(GO_TAGS)),+ent,)
 default: help
 
 ifeq (Linux,$(THIS_OS))
-ALL_TARGETS = linux_amd64 \
+# ALL_TARGETS = linux_386 \
+	linux_amd64 \
+	linux_arm \
 	linux_arm64 \
-	linux_s390x \
-	windows_amd64
+	windows_amd64 \
+	darwin_amd64
+ALL_TARGETS = linux_amd64
 endif
 
 ifeq (s390x,$(THIS_ARCH))
@@ -65,7 +68,8 @@ endif
 
 ifeq (Darwin,$(THIS_OS))
 ALL_TARGETS = darwin_amd64 \
-	darwin_arm64
+	darwin_arm64 \
+	linux_amd64
 endif
 
 ifeq (FreeBSD,$(THIS_OS))
@@ -90,7 +94,7 @@ pkg/%/nomad: ## Build Nomad for GOOS_GOARCH, e.g. pkg/linux_amd64/nomad
 ifeq (,$(findstring $(THIS_OS),$(SUPPORTED_OSES)))
 	$(warning WARNING: Building Nomad is only supported on $(SUPPORTED_OSES); not $(THIS_OS))
 endif
-	@echo "==> Building $@ with tags $(GO_TAGS)..."
+	@echo "==> Building $@ with tags $(GO_TAGS) and flags $(GO_LDFLAGS)..."
 	@CGO_ENABLED=$(CGO_ENABLED) \
 		GOOS=$(firstword $(subst _, ,$*)) \
 		GOARCH=$(lastword $(subst _, ,$*)) \

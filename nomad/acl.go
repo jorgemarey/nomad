@@ -51,6 +51,10 @@ func (s *Server) VerifyClaim(token string) (*structs.IdentityClaims, error) {
 	return s.auth.VerifyClaim(token)
 }
 
+func (s *Server) ResolveSecretToken(secretID string) (*structs.ACLToken, error) {
+	return s.auth.ResolveSecretToken(secretID)
+}
+
 func (s *Server) ResolvePoliciesForClaims(claims *structs.IdentityClaims) ([]*structs.ACLPolicy, error) {
 	return s.auth.ResolvePoliciesForClaims(claims)
 }

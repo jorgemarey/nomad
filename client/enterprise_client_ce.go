@@ -6,7 +6,9 @@
 
 package client
 
-import hclog "github.com/hashicorp/go-hclog"
+import (
+	hclog "github.com/hashicorp/go-hclog"
+)
 
 // EnterpriseClient holds information and methods for enterprise functionality
 type EnterpriseClient struct{}

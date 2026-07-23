@@ -3164,6 +3164,7 @@ DISCOLOOP:
 			AllowStale: true,
 			Datacenter: dc,
 			Near:       "_agent",
+			Peer:       c.GetConfig().GetDefaultConsul().ServerPeerName,
 			WaitTime:   consul.DefaultQueryWaitDuration,
 		}
 		consulServices, _, err := c.consulCatalog.Service(serviceName, consul.ServiceTagRPC, consulOpts)

@@ -33,6 +33,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/elazarl/go-bindata-assetfs v1.0.1
 	github.com/fatih/color v1.19.0
+	github.com/felixge/httpsnoop v1.1.0
 	github.com/go-jose/go-jose/v3 v3.0.5
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -49,6 +50,7 @@ require (
 	github.com/hashicorp/consul/api v1.34.3
 	github.com/hashicorp/consul/sdk v0.18.1
 	github.com/hashicorp/cronexpr v1.1.3
+	github.com/hashicorp/eventlogger v0.2.11
 	github.com/hashicorp/go-bexpr v0.1.16
 	github.com/hashicorp/go-checkpoint v0.5.0
 	github.com/hashicorp/go-cleanhttp v0.5.2
@@ -91,6 +93,8 @@ require (
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/hashicorp/yamux v0.1.2
 	github.com/hpcloud/tail v1.0.1-0.20170814160653-37f427138745
+	github.com/jorgemarey/autopilot v0.4.5
+	github.com/jorgemarey/sentinel v0.1.3
 	github.com/klauspost/cpuid/v2 v2.3.0
 	github.com/kr/pretty v0.3.1
 	github.com/kr/text v0.2.0
@@ -237,7 +241,6 @@ require (
 	github.com/docker/docker-credential-helpers v0.7.0 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0 // indirect
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
-	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

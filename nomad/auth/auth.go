@@ -955,3 +955,9 @@ func (s *Authenticator) ResolvePoliciesForClaims(claims *structs.IdentityClaims)
 
 	return policies, nil
 }
+
+// ResolveSecretToken is used to translate an ACL Token Secret ID into
+// an ACLToken object, nil if ACLs are disabled, or an error.
+func (s *Authenticator) ResolveSecretToken(secretID string) (*structs.ACLToken, error) {
+	return s.resolveSecretToken(secretID)
+}
