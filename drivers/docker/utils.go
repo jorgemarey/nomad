@@ -54,6 +54,20 @@ func parseDockerImage(image string) (string, string, error) {
 	return repo, tag, nil
 }
 
+func applyDefaultRegistry(image, defaultRegistry string) (string, error) {
+	if defaultRegistry == "" {
+		return image, nil
+	}
+	ref, err := reference.ParseNormalizedNamed(image)
+	if err != nil {
+		return image, fmt.Errorf("failed to parse image: %v", err)
+	}
+	if domain := reference.Domain(ref); domain == "docker.io" {
+		return strings.Replace(ref.String(), "docker.io", defaultRegistry, 1), nil
+	}
+	return image, nil
+}
+
 func dockerImageRef(repo string, tag string) string {
 	if tag == "" {
 		return repo

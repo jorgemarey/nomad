@@ -64,6 +64,14 @@ func (c *Client) ResolveToken(bearerToken string) (*acl.ACL, error) {
 	return a, err
 }
 
+func (c *Client) ResolveSecretToken(secretID string) (*structs.ACLToken, error) {
+	t, err := c.resolveTokenValue(secretID)
+	if err != nil {
+		return nil, err
+	}
+	return t.ACLToken, nil
+}
+
 func (c *Client) resolveTokenAndACL(bearerToken string) (*acl.ACL, *structs.AuthenticatedIdentity, error) {
 	// Fast-path if ACLs are disabled
 	if !c.GetConfig().ACLEnabled {

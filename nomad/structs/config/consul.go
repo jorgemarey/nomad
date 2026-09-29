@@ -55,6 +55,9 @@ type ConsulConfig struct {
 	// server health check is marked as a warning
 	ServerFailuresBeforeWarning int `mapstructure:"server_failures_before_warning"`
 
+	// ServerPeerName is the name of the peer where the nomad servers are registered
+	ServerPeerName string `mapstructure:"server_peer_name"`
+
 	// ClientServiceName is the name of the service that Nomad uses to register
 	// clients with Consul
 	ClientServiceName string `mapstructure:"client_service_name"`
@@ -241,6 +244,9 @@ func (c *ConsulConfig) Merge(b *ConsulConfig) *ConsulConfig {
 	if b.ServerFailuresBeforeWarning != 0 {
 		result.ServerFailuresBeforeWarning = b.ServerFailuresBeforeWarning
 	}
+	if b.ServerPeerName != "" {
+		result.ServerPeerName = b.ServerPeerName
+	}
 	if b.ClientServiceName != "" {
 		result.ClientServiceName = b.ClientServiceName
 	}
@@ -408,6 +414,7 @@ func (c *ConsulConfig) Copy() *ConsulConfig {
 		ServerRPCCheckName:           c.ServerRPCCheckName,
 		ServerFailuresBeforeCritical: c.ServerFailuresBeforeCritical,
 		ServerFailuresBeforeWarning:  c.ServerFailuresBeforeWarning,
+		ServerPeerName:               c.ServerPeerName,
 		ClientServiceName:            c.ClientServiceName,
 		ClientHTTPCheckName:          c.ClientHTTPCheckName,
 		ClientFailuresBeforeCritical: c.ClientFailuresBeforeCritical,

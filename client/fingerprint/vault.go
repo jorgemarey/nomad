@@ -124,7 +124,7 @@ func (f *VaultFingerprint) fingerprintImpl(cfg *config.VaultConfig, resp *Finger
 	if err != nil {
 		// Print a message indicating that Vault is not available anymore
 		if state.isAvailable {
-			logger.Info("Vault is unavailable")
+			logger.Info("Vault is unavailable", "error", err)
 		}
 		state.isAvailable = false
 		return nil

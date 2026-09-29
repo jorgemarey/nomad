@@ -5,6 +5,15 @@
 
 package nomad
 
+const (
+	// "Enterprise" values
+	SentinelPolicySnapshot SnapshotType = 65
+)
+
+var snapshotEntTypeStrings = map[SnapshotType]string{
+	SentinelPolicySnapshot: "Sentinel",
+}
+
 // allocQuota returns the quota object associated with the allocation. In
 // anything but Premium this will always be empty
 func (n *nomadFSM) allocQuota(_ string) (string, error) {
@@ -13,5 +22,6 @@ func (n *nomadFSM) allocQuota(_ string) (string, error) {
 
 // enterpriseSnapshotType is a no-op for community edition.
 func enterpriseSnapshotType(s SnapshotType) (string, bool) {
-	return "", false
+	str, ok := snapshotEntTypeStrings[s]
+	return str, ok
 }

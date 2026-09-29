@@ -205,6 +205,11 @@ func (h *groupServiceHook) Update(req *interfaces.RunnerUpdateRequest) error {
 		return nil
 	}
 
+	if h.deregistered {
+		h.logger.Warn("update called after service deregistered", "allocID", h.allocID, "group", h.group)
+		return nil
+	}
+
 	h.setCheckIDs(newWorkloadServices)
 	return h.serviceRegWrapper.UpdateWorkload(oldWorkloadServices, newWorkloadServices)
 }

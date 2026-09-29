@@ -183,13 +183,19 @@ func (a *AllocGarbageCollector) destroyAllocRunner(allocID string, ar interfaces
 	}
 
 	ar.Destroy()
+	timeout := false
 
 	select {
 	case <-ar.DestroyCh():
 	case <-a.shutdownCh:
+	case <-time.After(10 * time.Minute):
+		a.logger.Warn("timeout garbage collecting allocation", "alloc_id", allocID)
+		timeout = true
 	}
 
-	a.logger.Debug("alloc garbage collected", "alloc_id", allocID)
+	if !timeout {
+		a.logger.Info("alloc garbage collected", "alloc_id", allocID)
+	}
 
 	// Release the lock
 	<-a.destroyCh

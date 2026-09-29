@@ -6,7 +6,6 @@
 package nomad
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -24,10 +23,14 @@ func (jobVaultHook) validateNamespaces(blocks map[string]map[string]*structs.Vau
 }
 
 func (h jobVaultHook) validateClustersForNamespace(_ *structs.Job, blocks map[string]map[string]*structs.Vault) error {
+	// TODO: here we should also check namespace configuration
+	// example  (j jobNodePoolValidatingHook) enterpriseValidation
+
 	for _, tg := range blocks {
 		for _, vault := range tg {
-			if vault.Cluster != "default" {
-				return errors.New("non-default Vault cluster requires Nomad Enterprise")
+			config := h.srv.config.VaultConfigs[vault.Cluster]
+			if config == nil {
+				return fmt.Errorf("vault cluster %s not found", vault.Cluster)
 			}
 		}
 	}
@@ -35,13 +38,25 @@ func (h jobVaultHook) validateClustersForNamespace(_ *structs.Job, blocks map[st
 	return nil
 }
 
-func (h jobVaultHook) Mutate(job *structs.Job) (*structs.Job, []error, error) {
+func (j jobVaultHook) Mutate(job *structs.Job) (*structs.Job, []error, error) {
+	defaultCluster := structs.VaultDefaultCluster
+	ns, err := j.srv.State().NamespaceByName(nil, job.Namespace)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ns == nil {
+		return nil, nil, fmt.Errorf("namespace %s not found", job.Namespace)
+	}
+	if ns.VaultConfiguration != nil && ns.VaultConfiguration.Default != "" {
+		defaultCluster = ns.VaultConfiguration.Default
+	}
+
 	for _, tg := range job.TaskGroups {
 		for _, task := range tg.Tasks {
 			if task.Vault == nil || task.Vault.Cluster != "" {
 				continue
 			}
-			task.Vault.Cluster = "default"
+			task.Vault.Cluster = defaultCluster
 		}
 	}
 
