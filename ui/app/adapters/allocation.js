@@ -11,6 +11,13 @@ import classic from 'ember-classic-decorator';
 export default class AllocationAdapter extends Watchable {
   stop = adapterAction('/stop');
 
+  // The allocation list feeds store-wide consumers (clients list counts, exec
+  // fallback) and the serializer culls local records missing from a findAll
+  // response, so always query all namespaces, like jobs/statuses does.
+  urlForFindAll(modelName) {
+    return `${super.urlForFindAll(modelName)}?namespace=*`;
+  }
+
   restart(allocation, taskName) {
     const prefix = `${this.host || '/'}${this.urlPrefix()}`;
     const url = `${prefix}/client/allocation/${allocation.id}/restart`;
